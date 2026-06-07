@@ -9,10 +9,9 @@ app = Flask(__name__)
 client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
 
-def build_prompt(data):
+def build_listing_prompt(data):
     features = data.get("features", "").strip()
     feature_line = f"\n- Additional features: {features}" if features else ""
-
     return f"""You are an expert real estate copywriter. Generate compelling, professional content for this property listing.
 
 PROPERTY DETAILS:
@@ -49,30 +48,67 @@ def index():
 @app.route("/generate", methods=["POST"])
 def generate():
     data = request.get_json()
-
     required = ["address", "price", "beds", "baths", "sqft"]
     missing = [f for f in required if not data.get(f)]
     if missing:
         return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
-
     try:
         message = client.messages.create(
             model="claude-opus-4-6",
             max_tokens=1500,
-            messages=[{"role": "user", "content": build_prompt(data)}],
+            messages=[{"role": "user", "content": build_listing_prompt(data)}],
         )
         raw = message.content[0].text
-
         listing = _extract_section(raw, "LISTING DESCRIPTION", "SOCIAL POSTS")
         social = _extract_section(raw, "SOCIAL POSTS", "PROSPECT EMAIL")
         email = _extract_section(raw, "PROSPECT EMAIL", None)
+        return jsonify({"listing": listing.strip(), "social": social.strip(), "email": email.strip()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-        return jsonify({
-            "listing": listing.strip(),
-            "social": social.strip(),
-            "email": email.strip(),
-        })
 
+def build_script_prompt(data):
+    return f"""You are an expert real estate sales coach. Generate a professional cold call script for a real estate agent.
+
+DETAILS:
+- Target area: {data.get("area", "N/A")}
+- Property type: {data.get("property_type", "Single Family")}
+- Seller situation: {data.get("situation", "General Farming")}
+- Agent name: {data.get("agent_name", "your agent")}
+- Key benefit to mention: {data.get("key_benefit", "top market prices and fast closings")}
+
+Generate exactly three sections, clearly labeled:
+
+---OPENING SCRIPT---
+Write a natural, confident cold call opening (about 100 words). Include a strong hook, quick value proposition, and a soft question to engage the seller. Sound human, not robotic.
+
+---OBJECTION HANDLERS---
+Write responses to these 3 common objections:
+1. "I'm not interested."
+2. "I already have an agent." (or "I'm listed.")
+3. "What's my home worth?"
+Each response should be 2-4 sentences, confident but not pushy.
+
+---VOICEMAIL SCRIPT---
+Write a 20-second voicemail script that sounds natural and gets a callback. Include agent name and a specific reason to call back."""
+
+
+@app.route("/generate-script", methods=["POST"])
+def generate_script():
+    data = request.get_json()
+    if not data.get("area"):
+        return jsonify({"error": "Target area is required"}), 400
+    try:
+        message = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=1200,
+            messages=[{"role": "user", "content": build_script_prompt(data)}],
+        )
+        raw = message.content[0].text
+        opening = _extract_section(raw, "OPENING SCRIPT", "OBJECTION HANDLERS")
+        objections = _extract_section(raw, "OBJECTION HANDLERS", "VOICEMAIL SCRIPT")
+        voicemail = _extract_section(raw, "VOICEMAIL SCRIPT", None)
+        return jsonify({"opening": opening.strip(), "objections": objections.strip(), "voicemail": voicemail.strip()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -90,9 +126,8 @@ def _extract_section(text, start_marker, end_marker):
 
 if __name__ == "__main__":
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("\n⚠️  ERROR: ANTHROPIC_API_KEY not set.")
-        print("Create a .env file with: ANTHROPIC_API_KEY=your-key-here\n")
+        print("\n ERROR: ANTHROPIC_API_KEY not set.\n")
     else:
-        port = int(os.environ.get("PORT", 5000))
-        print(f"\n✅ ListingAI is running → http://localhost:{port}\n")
+        port = int(os.environ.get("PORT", 8080))
+        print(f"\n TopAI Real Estate Tools running -> http://localhost:{port}\n")
         app.run(host="0.0.0.0", debug=False, port=port)

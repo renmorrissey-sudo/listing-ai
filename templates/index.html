@@ -3,382 +3,250 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ListingAI — Real Estate Content Generator</title>
+  <title>TopAI Real Estate Tools</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #f4f6f9;
-      color: #1a1a2e;
-      min-height: 100vh;
-    }
-
-    header {
-      background: #1a1a2e;
-      color: white;
-      padding: 18px 32px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-    header .logo { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; min-height: 100vh; }
+    header { background: #1a1a2e; color: white; padding: 16px 32px; }
+    header .logo { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
     header .logo span { color: #4f8ef7; }
-    header .tagline { font-size: 13px; color: #8899aa; margin-top: 2px; }
-
-    main {
-      max-width: 960px;
-      margin: 32px auto;
-      padding: 0 20px;
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 24px;
-    }
-
+    header .tagline { font-size: 12px; color: #8899aa; margin-top: 2px; }
+    .tool-nav { background: #232344; display: flex; padding: 0 32px; gap: 4px; }
+    .tool-nav-btn { padding: 12px 20px; font-size: 13px; font-weight: 600; color: #8899bb; background: none; border: none; cursor: pointer; border-bottom: 3px solid transparent; transition: all 0.15s; }
+    .tool-nav-btn:hover { color: #ccd; }
+    .tool-nav-btn.active { color: #4f8ef7; border-bottom-color: #4f8ef7; }
+    .tool-page { display: none; }
+    .tool-page.active { display: block; }
+    main { max-width: 960px; margin: 32px auto; padding: 0 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
     @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
-
-    .card {
-      background: white;
-      border-radius: 12px;
-      padding: 28px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-    }
-
-    .card h2 {
-      font-size: 16px;
-      font-weight: 600;
-      margin-bottom: 20px;
-      color: #1a1a2e;
-    }
-
+    .card { background: white; border-radius: 12px; padding: 28px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+    .card h2 { font-size: 16px; font-weight: 600; margin-bottom: 20px; color: #1a1a2e; }
     .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .form-group { margin-bottom: 14px; }
-    .form-group label {
-      display: block;
-      font-size: 12px;
-      font-weight: 600;
-      color: #556;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 5px;
-    }
-    .form-group input,
-    .form-group select,
-    .form-group textarea {
-      width: 100%;
-      padding: 9px 12px;
-      border: 1.5px solid #e0e4ed;
-      border-radius: 7px;
-      font-size: 14px;
-      color: #1a1a2e;
-      background: #fafbfc;
-      transition: border-color 0.15s;
-      outline: none;
-    }
-    .form-group input:focus,
-    .form-group select:focus,
-    .form-group textarea:focus { border-color: #4f8ef7; background: white; }
+    .form-group label { display: block; font-size: 12px; font-weight: 600; color: #556; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
+    .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 9px 12px; border: 1.5px solid #e0e4ed; border-radius: 7px; font-size: 14px; color: #1a1a2e; background: #fafbfc; transition: border-color 0.15s; outline: none; }
+    .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: #4f8ef7; background: white; }
     .form-group textarea { resize: vertical; min-height: 72px; }
-
-    .btn-generate {
-      width: 100%;
-      padding: 13px;
-      background: #4f8ef7;
-      color: white;
-      border: none;
-      border-radius: 8px;
-      font-size: 15px;
-      font-weight: 600;
-      cursor: pointer;
-      margin-top: 6px;
-      transition: background 0.15s, transform 0.1s;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-    }
+    .btn-generate { width: 100%; padding: 13px; background: #4f8ef7; color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 6px; transition: background 0.15s, transform 0.1s; display: flex; align-items: center; justify-content: center; gap: 8px; }
     .btn-generate:hover { background: #3a7de0; }
     .btn-generate:active { transform: scale(0.99); }
     .btn-generate:disabled { background: #b0c4e8; cursor: not-allowed; }
-
-    .spinner {
-      width: 18px; height: 18px;
-      border: 2.5px solid rgba(255,255,255,0.4);
-      border-top-color: white;
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-      display: none;
-    }
+    .spinner { width: 18px; height: 18px; border: 2.5px solid rgba(255,255,255,0.4); border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite; display: none; }
     @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* Results panel */
-    .results-panel { display: flex; flex-direction: column; gap: 0; }
-
-    .tabs {
-      display: flex;
-      border-bottom: 2px solid #e0e4ed;
-      margin-bottom: 0;
-    }
-    .tab {
-      padding: 10px 18px;
-      font-size: 13px;
-      font-weight: 600;
-      color: #778;
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      margin-bottom: -2px;
-      transition: color 0.15s;
-    }
+    .results-panel { display: flex; flex-direction: column; }
+    .tabs { display: flex; border-bottom: 2px solid #e0e4ed; }
+    .tab { padding: 10px 18px; font-size: 13px; font-weight: 600; color: #778; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: color 0.15s; }
     .tab.active { color: #4f8ef7; border-bottom-color: #4f8ef7; }
     .tab:hover:not(.active) { color: #445; }
-
     .tab-content { display: none; padding-top: 20px; }
     .tab-content.active { display: block; }
-
-    .output-box {
-      background: #f8fafc;
-      border: 1.5px solid #e0e4ed;
-      border-radius: 8px;
-      padding: 16px;
-      font-size: 14px;
-      line-height: 1.65;
-      white-space: pre-wrap;
-      min-height: 200px;
-      color: #2a2a3e;
-    }
-
-    .copy-btn {
-      margin-top: 10px;
-      padding: 7px 16px;
-      background: white;
-      border: 1.5px solid #e0e4ed;
-      border-radius: 6px;
-      font-size: 12px;
-      font-weight: 600;
-      color: #445;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
+    .output-box { background: #f8fafc; border: 1.5px solid #e0e4ed; border-radius: 8px; padding: 16px; font-size: 14px; line-height: 1.65; white-space: pre-wrap; min-height: 200px; color: #2a2a3e; }
+    .copy-btn { margin-top: 10px; padding: 7px 16px; background: white; border: 1.5px solid #e0e4ed; border-radius: 6px; font-size: 12px; font-weight: 600; color: #445; cursor: pointer; transition: all 0.15s; }
     .copy-btn:hover { border-color: #4f8ef7; color: #4f8ef7; }
     .copy-btn.copied { border-color: #22c55e; color: #22c55e; }
-
-    .placeholder {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 280px;
-      color: #aab;
-      text-align: center;
-      gap: 12px;
-    }
+    .placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 280px; color: #aab; text-align: center; gap: 12px; }
     .placeholder svg { opacity: 0.35; }
     .placeholder p { font-size: 14px; }
-
-    .error-msg {
-      background: #fff5f5;
-      border: 1.5px solid #fca5a5;
-      color: #dc2626;
-      border-radius: 8px;
-      padding: 12px 16px;
-      font-size: 13px;
-      margin-top: 12px;
-      display: none;
-    }
+    .error-msg { background: #fff5f5; border: 1.5px solid #fca5a5; color: #dc2626; border-radius: 8px; padding: 12px 16px; font-size: 13px; margin-top: 12px; display: none; }
   </style>
 </head>
 <body>
-
 <header>
-  <div>
-    <div class="logo">Listing<span>AI</span></div>
-    <div class="tagline">Real estate content in seconds</div>
-  </div>
+  <div class="logo">TopAI <span>Real Estate Tools</span></div>
+  <div class="tagline">AI-powered content for real estate agents</div>
 </header>
+<nav class="tool-nav">
+  <button class="tool-nav-btn active" onclick="switchTool('listing', this)">&#128221; Listing Generator</button>
+  <button class="tool-nav-btn" onclick="switchTool('coldcall', this)">&#128222; Cold Call Scripts</button>
+</nav>
 
-<main>
-  <!-- LEFT: Input form -->
-  <div class="card">
-    <h2>Property Details</h2>
-    <form id="listing-form">
-      <div class="form-group">
-        <label>Address *</label>
-        <input type="text" name="address" placeholder="123 Maple Street, Austin, TX 78701" required />
-      </div>
-
-      <div class="form-row">
-        <div class="form-group">
-          <label>Price *</label>
-          <input type="text" name="price" placeholder="485,000" required />
+<!-- LISTING GENERATOR -->
+<div id="tool-listing" class="tool-page active">
+  <main>
+    <div class="card">
+      <h2>Property Details</h2>
+      <form id="listing-form">
+        <div class="form-group"><label>Address *</label><input type="text" name="address" placeholder="123 Maple Street, Austin, TX 78701" required /></div>
+        <div class="form-row">
+          <div class="form-group"><label>Price *</label><input type="text" name="price" placeholder="485,000" required /></div>
+          <div class="form-group"><label>Year Built</label><input type="text" name="year_built" placeholder="2005" /></div>
         </div>
-        <div class="form-group">
-          <label>Year Built</label>
-          <input type="text" name="year_built" placeholder="2005" />
+        <div class="form-row">
+          <div class="form-group"><label>Beds *</label><input type="number" name="beds" placeholder="4" min="0" required /></div>
+          <div class="form-group"><label>Baths *</label><input type="number" name="baths" placeholder="2.5" step="0.5" min="0" required /></div>
         </div>
-      </div>
-
-      <div class="form-row">
-        <div class="form-group">
-          <label>Beds *</label>
-          <input type="number" name="beds" placeholder="4" min="0" required />
+        <div class="form-row">
+          <div class="form-group"><label>Sq Ft *</label><input type="text" name="sqft" placeholder="2,200" required /></div>
+          <div class="form-group"><label>Garage</label>
+            <select name="garage">
+              <option value="None">None</option>
+              <option value="1-car garage">1-car garage</option>
+              <option value="2-car garage">2-car garage</option>
+              <option value="3-car garage">3-car garage</option>
+              <option value="Carport">Carport</option>
+            </select>
+          </div>
         </div>
-        <div class="form-group">
-          <label>Baths *</label>
-          <input type="number" name="baths" placeholder="2.5" step="0.5" min="0" required />
+        <div class="form-row">
+          <div class="form-group"><label>Pool</label>
+            <select name="pool">
+              <option value="No">No</option>
+              <option value="Yes - private pool">Yes - private pool</option>
+              <option value="Yes - community pool">Yes - community pool</option>
+            </select>
+          </div>
         </div>
-      </div>
-
-      <div class="form-row">
-        <div class="form-group">
-          <label>Sq Ft *</label>
-          <input type="text" name="sqft" placeholder="2,200" required />
-        </div>
-        <div class="form-group">
-          <label>Garage</label>
-          <select name="garage">
-            <option value="None">None</option>
-            <option value="1-car garage">1-car garage</option>
-            <option value="2-car garage">2-car garage</option>
-            <option value="3-car garage">3-car garage</option>
-            <option value="Carport">Carport</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="form-row">
-        <div class="form-group">
-          <label>Pool</label>
-          <select name="pool">
-            <option value="No">No</option>
-            <option value="Yes – private pool">Yes – private pool</option>
-            <option value="Yes – community pool">Yes – community pool</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label>Key Features</label>
-        <textarea name="features" placeholder="e.g. renovated kitchen, hardwood floors, open floor plan, large backyard, new roof 2022…"></textarea>
-      </div>
-
-      <div class="form-group">
-        <label>Neighborhood Highlights</label>
-        <textarea name="neighborhood" placeholder="e.g. walkable to downtown, top-rated schools, quiet cul-de-sac, minutes from highway 35…"></textarea>
-      </div>
-
-      <div class="error-msg" id="error-msg"></div>
-
-      <button type="submit" class="btn-generate" id="gen-btn">
-        <div class="spinner" id="spinner"></div>
-        <span id="btn-label">Generate Content</span>
-      </button>
-    </form>
-  </div>
-
-  <!-- RIGHT: Output panel -->
-  <div class="card results-panel" id="results-panel">
-    <div class="placeholder" id="placeholder">
-      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-        <path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/>
-      </svg>
-      <p>Fill in the property details<br/>and click Generate Content</p>
+        <div class="form-group"><label>Key Features</label><textarea name="features" placeholder="e.g. renovated kitchen, hardwood floors, open floor plan"></textarea></div>
+        <div class="form-group"><label>Neighborhood Highlights</label><textarea name="neighborhood" placeholder="e.g. walkable to downtown, top-rated schools"></textarea></div>
+        <div class="error-msg" id="listing-error"></div>
+        <button type="submit" class="btn-generate" id="listing-btn">
+          <div class="spinner" id="listing-spinner"></div>
+          <span id="listing-btn-label">Generate Content</span>
+        </button>
+      </form>
     </div>
-
-    <div id="output-area" style="display:none;">
-      <div class="tabs">
-        <div class="tab active" data-tab="listing">Listing</div>
-        <div class="tab" data-tab="social">Social Posts</div>
-        <div class="tab" data-tab="email">Email</div>
+    <div class="card results-panel">
+      <div class="placeholder" id="listing-placeholder">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        <p>Fill in the property details<br/>and click Generate Content</p>
       </div>
-
-      <div class="tab-content active" id="tab-listing">
-        <div class="output-box" id="out-listing"></div>
-        <button class="copy-btn" data-target="out-listing">Copy</button>
-      </div>
-      <div class="tab-content" id="tab-social">
-        <div class="output-box" id="out-social"></div>
-        <button class="copy-btn" data-target="out-social">Copy</button>
-      </div>
-      <div class="tab-content" id="tab-email">
-        <div class="output-box" id="out-email"></div>
-        <button class="copy-btn" data-target="out-email">Copy</button>
+      <div id="listing-output" style="display:none;">
+        <div class="tabs">
+          <div class="tab active" data-group="listing" data-tab="ldesc">Listing</div>
+          <div class="tab" data-group="listing" data-tab="lsocial">Social Posts</div>
+          <div class="tab" data-group="listing" data-tab="lemail">Email</div>
+        </div>
+        <div class="tab-content active" id="tab-ldesc"><div class="output-box" id="out-listing"></div><button class="copy-btn" data-target="out-listing">Copy</button></div>
+        <div class="tab-content" id="tab-lsocial"><div class="output-box" id="out-social"></div><button class="copy-btn" data-target="out-social">Copy</button></div>
+        <div class="tab-content" id="tab-lemail"><div class="output-box" id="out-email"></div><button class="copy-btn" data-target="out-email">Copy</button></div>
       </div>
     </div>
-  </div>
-</main>
+  </main>
+</div>
+
+<!-- COLD CALL SCRIPTS -->
+<div id="tool-coldcall" class="tool-page">
+  <main>
+    <div class="card">
+      <h2>Call Details</h2>
+      <form id="script-form">
+        <div class="form-group"><label>Target Area / Neighborhood *</label><input type="text" name="area" placeholder="e.g. Westlake Hills, Austin TX" required /></div>
+        <div class="form-row">
+          <div class="form-group"><label>Property Type</label>
+            <select name="property_type">
+              <option>Single Family</option>
+              <option>Condo / Townhome</option>
+              <option>Multi-Family</option>
+              <option>Luxury Home</option>
+              <option>Land / Lot</option>
+            </select>
+          </div>
+          <div class="form-group"><label>Seller Situation</label>
+            <select name="situation">
+              <option>General Farming</option>
+              <option>Expired Listing</option>
+              <option>FSBO (For Sale By Owner)</option>
+              <option>Absentee Owner</option>
+              <option>Just Sold Nearby</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group"><label>Your Name</label><input type="text" name="agent_name" placeholder="e.g. Ren Morrissey" /></div>
+        <div class="form-group"><label>Key Benefit to Mention</label><textarea name="key_benefit" placeholder="e.g. I sold 3 homes in your neighborhood this year at above asking price"></textarea></div>
+        <div class="error-msg" id="script-error"></div>
+        <button type="submit" class="btn-generate" id="script-btn">
+          <div class="spinner" id="script-spinner"></div>
+          <span id="script-btn-label">Generate Scripts</span>
+        </button>
+      </form>
+    </div>
+    <div class="card results-panel">
+      <div class="placeholder" id="script-placeholder">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.82 19.79 19.79 0 011 1.18 2 2 0 013 1h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L7.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+        <p>Fill in the call details<br/>and click Generate Scripts</p>
+      </div>
+      <div id="script-output" style="display:none;">
+        <div class="tabs">
+          <div class="tab active" data-group="script" data-tab="sopening">Opening</div>
+          <div class="tab" data-group="script" data-tab="sobjections">Objections</div>
+          <div class="tab" data-group="script" data-tab="svoicemail">Voicemail</div>
+        </div>
+        <div class="tab-content active" id="tab-sopening"><div class="output-box" id="out-opening"></div><button class="copy-btn" data-target="out-opening">Copy</button></div>
+        <div class="tab-content" id="tab-sobjections"><div class="output-box" id="out-objections"></div><button class="copy-btn" data-target="out-objections">Copy</button></div>
+        <div class="tab-content" id="tab-svoicemail"><div class="output-box" id="out-voicemail"></div><button class="copy-btn" data-target="out-voicemail">Copy</button></div>
+      </div>
+    </div>
+  </main>
+</div>
 
 <script>
-  const form = document.getElementById("listing-form");
-  const genBtn = document.getElementById("gen-btn");
-  const btnLabel = document.getElementById("btn-label");
-  const spinner = document.getElementById("spinner");
-  const errorMsg = document.getElementById("error-msg");
-  const placeholder = document.getElementById("placeholder");
-  const outputArea = document.getElementById("output-area");
+  function switchTool(name, btn) {
+    document.querySelectorAll(".tool-page").forEach(p => p.classList.remove("active"));
+    document.querySelectorAll(".tool-nav-btn").forEach(b => b.classList.remove("active"));
+    document.getElementById("tool-" + name).classList.add("active");
+    btn.classList.add("active");
+  }
 
-  form.addEventListener("submit", async (e) => {
+  document.getElementById("listing-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    setLoading(true);
-    errorMsg.style.display = "none";
-
-    const formData = Object.fromEntries(new FormData(form).entries());
-
+    const btn = document.getElementById("listing-btn");
+    const label = document.getElementById("listing-btn-label");
+    const spinner = document.getElementById("listing-spinner");
+    const errEl = document.getElementById("listing-error");
+    btn.disabled = true; spinner.style.display = "block";
+    label.textContent = "Generating..."; errEl.style.display = "none";
+    const data = Object.fromEntries(new FormData(e.target).entries());
     try {
-      const res = await fetch("/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
-      });
-      const data = await res.json();
-
-      if (!res.ok || data.error) {
-        showError(data.error || "Something went wrong. Please try again.");
-        return;
-      }
-
-      document.getElementById("out-listing").textContent = data.listing;
-      document.getElementById("out-social").textContent = data.social;
-      document.getElementById("out-email").textContent = data.email;
-
-      placeholder.style.display = "none";
-      outputArea.style.display = "block";
-      activateTab("listing");
-
-    } catch (err) {
-      showError("Network error — is the server running?");
-    } finally {
-      setLoading(false);
-    }
+      const res = await fetch("/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+      const result = await res.json();
+      if (!res.ok || result.error) { showError(errEl, result.error); return; }
+      document.getElementById("out-listing").textContent = result.listing;
+      document.getElementById("out-social").textContent = result.social;
+      document.getElementById("out-email").textContent = result.email;
+      document.getElementById("listing-placeholder").style.display = "none";
+      document.getElementById("listing-output").style.display = "block";
+      activateTab("listing", "ldesc");
+    } catch { showError(errEl, "Network error - is the server running?"); }
+    finally { btn.disabled = false; spinner.style.display = "none"; label.textContent = "Generate Content"; }
   });
 
-  function setLoading(on) {
-    genBtn.disabled = on;
-    spinner.style.display = on ? "block" : "none";
-    btnLabel.textContent = on ? "Generating…" : "Generate Content";
-  }
-
-  function showError(msg) {
-    errorMsg.textContent = msg;
-    errorMsg.style.display = "block";
-  }
-
-  // Tabs
-  document.querySelectorAll(".tab").forEach(tab => {
-    tab.addEventListener("click", () => activateTab(tab.dataset.tab));
+  document.getElementById("script-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById("script-btn");
+    const label = document.getElementById("script-btn-label");
+    const spinner = document.getElementById("script-spinner");
+    const errEl = document.getElementById("script-error");
+    btn.disabled = true; spinner.style.display = "block";
+    label.textContent = "Generating..."; errEl.style.display = "none";
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      const res = await fetch("/generate-script", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+      const result = await res.json();
+      if (!res.ok || result.error) { showError(errEl, result.error); return; }
+      document.getElementById("out-opening").textContent = result.opening;
+      document.getElementById("out-objections").textContent = result.objections;
+      document.getElementById("out-voicemail").textContent = result.voicemail;
+      document.getElementById("script-placeholder").style.display = "none";
+      document.getElementById("script-output").style.display = "block";
+      activateTab("script", "sopening");
+    } catch { showError(errEl, "Network error - is the server running?"); }
+    finally { btn.disabled = false; spinner.style.display = "none"; label.textContent = "Generate Scripts"; }
   });
 
-  function activateTab(name) {
-    document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
-    document.querySelectorAll(".tab-content").forEach(c => c.classList.toggle("active", c.id === `tab-${name}`));
+  function showError(el, msg) { el.textContent = msg || "Something went wrong."; el.style.display = "block"; }
+
+  function activateTab(group, tabId) {
+    document.querySelectorAll('[data-group="' + group + '"]').forEach(t => t.classList.toggle("active", t.dataset.tab === tabId));
+    document.querySelectorAll(".tab-content").forEach(c => { if (c.id.startsWith("tab-" + tabId[0])) c.classList.toggle("active", c.id === "tab-" + tabId); });
   }
 
-  // Copy buttons
+  document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => activateTab(tab.dataset.group, tab.dataset.tab)));
+
   document.querySelectorAll(".copy-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       const text = document.getElementById(btn.dataset.target).textContent;
       navigator.clipboard.writeText(text).then(() => {
-        btn.textContent = "Copied!";
-        btn.classList.add("copied");
+        btn.textContent = "Copied!"; btn.classList.add("copied");
         setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 2000);
       });
     });
