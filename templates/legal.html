@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }} — TopAI Real Estate Tools</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; max-width: 720px; margin: 40px auto; padding: 0 20px; line-height: 1.6; }
+    h1 { margin-bottom: 16px; }
+    h2 { margin: 24px 0 8px; font-size: 18px; }
+    a { color: #4f8ef7; }
+    .back { display: inline-block; margin-bottom: 24px; }
+  </style>
+</head>
+<body>
+  <a class="back" href="/login">&larr; Back</a>
+  <h1>{{ title }}</h1>
+  {% if doc == "terms" %}
+  <p>Last updated: June 2026</p>
+  <h2>Service</h2>
+  <p>TopAI Real Estate Tools provides AI-generated listing copy and sales scripts for licensed real estate professionals. Content is a draft and must be reviewed before publication.</p>
+  <h2>Billing</h2>
+  <p>Subscriptions renew monthly until canceled through the Stripe customer portal. Fees are non-refundable except where required by law.</p>
+  <h2>Acceptable use</h2>
+  <p>You may not abuse the service, attempt to bypass access controls, or use generated content for unlawful purposes.</p>
+  {% else %}
+  <p>Last updated: June 2026</p>
+  <h2>Data we collect</h2>
+  <p>Account email, subscription status, and property details you submit for generation. Payment data is processed by Stripe.</p>
+  <h2>How we use data</h2>
+  <p>To provide the service, manage billing, and improve reliability. We send property details to Anthropic's API to generate content.</p>
+  <h2>Retention</h2>
+  <p>Account data is kept while your account is active. Contact support to request deletion.</p>
+  {% endif %}
+</body>
+</html>

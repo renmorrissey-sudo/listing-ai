@@ -13,6 +13,10 @@
     header .tagline { font-size: 12px; color: #8899aa; margin-top: 2px; }
     .subscribe-btn { background: #4f8ef7; color: white; border: none; border-radius: 7px; padding: 9px 18px; font-size: 13px; font-weight: 600; cursor: pointer; text-decoration: none; white-space: nowrap; transition: background 0.15s; }
     .subscribe-btn:hover { background: #3a7de0; }
+    .subscriber-info { display: flex; align-items: center; gap: 10px; }
+    .subscriber-email { font-size: 12px; color: #22c55e; font-weight: 600; }
+    .logout-btn { background: none; border: 1.5px solid #445; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #aab; cursor: pointer; transition: all 0.15s; }
+    .logout-btn:hover { border-color: #aab; color: white; }
     .tool-nav { background: #232344; display: flex; padding: 0 32px; gap: 4px; }
     .tool-nav-btn { padding: 12px 20px; font-size: 13px; font-weight: 600; color: #8899bb; background: none; border: none; cursor: pointer; border-bottom: 3px solid transparent; transition: all 0.15s; }
     .tool-nav-btn:hover { color: #ccd; }
@@ -50,22 +54,56 @@
     .placeholder svg { opacity: 0.35; }
     .placeholder p { font-size: 14px; }
     .error-msg { background: #fff5f5; border: 1.5px solid #fca5a5; color: #dc2626; border-radius: 8px; padding: 12px 16px; font-size: 13px; margin-top: 12px; display: none; }
+    .gate-overlay { position: fixed; inset: 0; background: rgba(20,20,40,0.97); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+    .gate-overlay.hidden { display: none; }
+    .gate-card { background: white; border-radius: 16px; padding: 44px 40px 36px; max-width: 420px; width: 92%; text-align: center; box-shadow: 0 24px 64px rgba(0,0,0,0.4); }
+    .gate-logo { font-size: 22px; font-weight: 700; color: #1a1a2e; margin-bottom: 6px; }
+    .gate-logo span { color: #4f8ef7; }
+    .gate-tagline { font-size: 12px; color: #8899aa; margin-bottom: 28px; }
+    .gate-card h2 { font-size: 17px; font-weight: 600; color: #1a1a2e; margin-bottom: 8px; }
+    .gate-card p { font-size: 14px; color: #667; margin-bottom: 20px; line-height: 1.5; }
+    .gate-input { width: 100%; padding: 11px 14px; border: 1.5px solid #e0e4ed; border-radius: 8px; font-size: 14px; color: #1a1a2e; background: #fafbfc; outline: none; margin-bottom: 6px; transition: border-color 0.15s; }
+    .gate-input:focus { border-color: #4f8ef7; background: white; }
+    .gate-error { color: #dc2626; font-size: 13px; min-height: 20px; margin-bottom: 8px; text-align: left; }
+    .gate-btn { width: 100%; padding: 12px; background: #4f8ef7; color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+    .gate-btn:hover { background: #3a7de0; }
+    .gate-btn:disabled { background: #b0c4e8; cursor: not-allowed; }
+    .gate-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; color: #bbc; font-size: 12px; }
+    .gate-divider::before, .gate-divider::after { content: ''; flex: 1; height: 1px; background: #e0e4ed; }
+    .gate-subscribe-link { display: block; width: 100%; padding: 11px; background: white; border: 1.5px solid #4f8ef7; border-radius: 8px; font-size: 14px; font-weight: 600; color: #4f8ef7; text-decoration: none; transition: all 0.15s; }
+    .gate-subscribe-link:hover { background: #f0f5ff; }
   </style>
 </head>
 <body>
+
+<div id="gate" class="gate-overlay">
+  <div class="gate-card">
+    <div class="gate-logo">TopAI <span>Real Estate Tools</span></div>
+    <div class="gate-tagline">AI-powered content for real estate agents</div>
+    <h2>Subscriber Access</h2>
+    <p>Enter the email address you used to subscribe.</p>
+    <input type="email" class="gate-input" id="gate-email" placeholder="you@email.com" autocomplete="email" />
+    <div class="gate-error" id="gate-error"></div>
+    <button class="gate-btn" id="gate-submit">Access Tools</button>
+    <div class="gate-divider">don't have a subscription?</div>
+    <a class="gate-subscribe-link" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00" target="_blank">Subscribe &mdash; $49/mo &rArr;</a>
+  </div>
+</div>
+
 <header>
   <div>
     <div class="logo">TopAI <span>Real Estate Tools</span></div>
     <div class="tagline">AI-powered content for real estate agents</div>
   </div>
-  <a class="subscribe-btn" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00" target="_blank">Subscribe — $49/mo</a>
+  <div id="header-right">
+    <a class="subscribe-btn" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00" target="_blank">Subscribe &mdash; $49/mo</a>
+  </div>
 </header>
 <nav class="tool-nav">
   <button class="tool-nav-btn active" onclick="switchTool('listing', this)">&#128221; Listing Generator</button>
   <button class="tool-nav-btn" onclick="switchTool('coldcall', this)">&#128222; Cold Call Scripts</button>
 </nav>
 
-<!-- LISTING GENERATOR -->
 <div id="tool-listing" class="tool-page active">
   <main>
     <div class="card">
@@ -82,54 +120,21 @@
         </div>
         <div class="form-row">
           <div class="form-group"><label>Sq Ft *</label><input type="text" name="sqft" placeholder="2,200" required /></div>
-          <div class="form-group"><label>Garage</label>
-            <select name="garage">
-              <option value="None">None</option>
-              <option value="1-car garage">1-car garage</option>
-              <option value="2-car garage">2-car garage</option>
-              <option value="3-car garage">3-car garage</option>
-              <option value="Carport">Carport</option>
-            </select>
-          </div>
+          <div class="form-group"><label>Garage</label><select name="garage"><option value="None">None</option><option value="1-car garage">1-car garage</option><option value="2-car garage">2-car garage</option><option value="3-car garage">3-car garage</option><option value="Carport">Carport</option></select></div>
         </div>
-        <div class="form-row">
-          <div class="form-group"><label>Pool</label>
-            <select name="pool">
-              <option value="No">No</option>
-              <option value="Yes - private pool">Yes - private pool</option>
-              <option value="Yes - community pool">Yes - community pool</option>
-            </select>
-          </div>
-        </div>
-        <div class="form-group"><label>Key Features</label><textarea name="features" placeholder="e.g. renovated kitchen, hardwood floors, open floor plan"></textarea></div>
-        <div class="form-group"><label>Neighborhood Highlights</label><textarea name="neighborhood" placeholder="e.g. walkable to downtown, top-rated schools"></textarea></div>
+        <div class="form-row"><div class="form-group"><label>Pool</label><select name="pool"><option value="No">No</option><option value="Yes - private pool">Yes - private pool</option><option value="Yes - community pool">Yes - community pool</option></select></div></div>
+        <div class="form-group"><label>Key Features</label><textarea name="features" placeholder="e.g. renovated kitchen"></textarea></div>
+        <div class="form-group"><label>Neighborhood Highlights</label><textarea name="neighborhood" placeholder="e.g. walkable to downtown"></textarea></div>
         <div class="error-msg" id="listing-error"></div>
-        <button type="submit" class="btn-generate" id="listing-btn">
-          <div class="spinner" id="listing-spinner"></div>
-          <span id="listing-btn-label">Generate Content</span>
-        </button>
+        <button type="submit" class="btn-generate" id="listing-btn"><div class="spinner" id="listing-spinner"></div><span id="listing-btn-label">Generate Content</span></button>
       </form>
     </div>
-    <div class="card results-panel">
-      <div class="placeholder" id="listing-placeholder">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-        <p>Fill in the property details<br/>and click Generate Content</p>
-      </div>
-      <div id="listing-output" style="display:none;">
-        <div class="tabs">
-          <div class="tab active" data-group="listing" data-tab="ldesc">Listing</div>
-          <div class="tab" data-group="listing" data-tab="lsocial">Social Posts</div>
-          <div class="tab" data-group="listing" data-tab="lemail">Email</div>
-        </div>
-        <div class="tab-content active" id="tab-ldesc"><div class="output-box" id="out-listing"></div><button class="copy-btn" data-target="out-listing">Copy</button></div>
-        <div class="tab-content" id="tab-lsocial"><div class="output-box" id="out-social"></div><button class="copy-btn" data-target="out-social">Copy</button></div>
-        <div class="tab-content" id="tab-lemail"><div class="output-box" id="out-email"></div><button class="copy-btn" data-target="out-email">Copy</button></div>
-      </div>
-    </div>
+    <div class="card results-panel"><div class="placeholder" id="listing-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg><p>Fill in the property details<br/>and click Generate Content</p></div><div id="listing-output" style="display:none;"><div class="tabs"><div class="tab active" data-group="listing" data-tab="ldesc">Listing</div><div class="tab" data-group="listing" data-tab="lsocial">Social Posts</div><div class="tab" data-group="listing" data-tab="lemail">Email</div></div><div class="tab-content active" id="tab-ldesc"><div class="output-box" id="out-listing"></div><button class="copy-btn" data-target="out-listing">Copy</button></div><div class="tab-content" id="tab-lsocial"><div class="output-box" id="out-social"></div><button class="copy-btn" data-target="out-social">Copy</button></div><div class="tab-content" id="tab-lemail"><div class="output-box" id="out-email"></div><button class="copy-btn" data-target="out-email">Copy</button></div></div></div>
+  </main>
+</div>er" id="listing-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg><p>Fill in the property details<br/>and click Generate Content</p></div><div id="listing-output" style="display:none;"><div class="tabs"><div class="tab active" data-group="listing" data-tab="ldesc">Listing</div><div class="tab" data-group="listing" data-tab="lsocial">Social Posts</div><div class="tab" data-group="listing" data-tab="lemail">Email</div></div><div class="tab-content active" id="tab-ldesc"><div class="output-box" id="out-listing"></div><button class="copy-btn" data-target="out-listing">Copy</button></div><div class="tab-content" id="tab-lsocial"><div class="output-box" id="out-social"></div><button class="copy-btn" data-target="out-social">Copy</button></div><div class="tab-content" id="tab-lemail"><div class="output-box" id="out-email"></div><button class="copy-btn" data-target="out-email">Copy</button></div></div></div>
   </main>
 </div>
 
-<!-- COLD CALL SCRIPTS -->
 <div id="tool-coldcall" class="tool-page">
   <main>
     <div class="card">
@@ -137,125 +142,151 @@
       <form id="script-form">
         <div class="form-group"><label>Target Area / Neighborhood *</label><input type="text" name="area" placeholder="e.g. Westlake Hills, Austin TX" required /></div>
         <div class="form-row">
-          <div class="form-group"><label>Property Type</label>
-            <select name="property_type">
-              <option>Single Family</option>
-              <option>Condo / Townhome</option>
-              <option>Multi-Family</option>
-              <option>Luxury Home</option>
-              <option>Land / Lot</option>
-            </select>
-          </div>
-          <div class="form-group"><label>Seller Situation</label>
-            <select name="situation">
-              <option>General Farming</option>
-              <option>Expired Listing</option>
-              <option>FSBO (For Sale By Owner)</option>
-              <option>Absentee Owner</option>
-              <option>Just Sold Nearby</option>
-            </select>
-          </div>
+          <div class="form-group"><label>Property Type</label><select name="property_type"><option>Single Family</option><option>Condo / Townhome</option><option>Multi-Family</option><option>Luxury Home</option><option>Land / Lot</option></select></div>
+          <div class="form-group"><label>Seller Situation</label><select name="situation"><option>General Farming</option><option>Expired Listing</option><option>FSBO (For Sale By Owner)</option><option>Absentee Owner</option><option>Just Sold Nearby</option></select></div>
         </div>
         <div class="form-group"><label>Your Name</label><input type="text" name="agent_name" placeholder="e.g. Ren Morrissey" /></div>
         <div class="form-group"><label>Key Benefit to Mention</label><textarea name="key_benefit" placeholder="e.g. I sold 3 homes in your neighborhood this year at above asking price"></textarea></div>
         <div class="error-msg" id="script-error"></div>
-        <button type="submit" class="btn-generate" id="script-btn">
-          <div class="spinner" id="script-spinner"></div>
-          <span id="script-btn-label">Generate Scripts</span>
-        </button>
+        <button type="submit" class="btn-generate" id="script-btn"><div class="spinner" id="script-spinner"></div><span id="script-btn-label">Generate Scripts</span></button>
       </form>
     </div>
-    <div class="card results-panel">
-      <div class="placeholder" id="script-placeholder">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.82 19.79 19.79 0 011 1.18 2 2 0 013 1h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L7.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
-        <p>Fill in the call details<br/>and click Generate Scripts</p>
-      </div>
-      <div id="script-output" style="display:none;">
-        <div class="tabs">
-          <div class="tab active" data-group="script" data-tab="sopening">Opening</div>
-          <div class="tab" data-group="script" data-tab="sobjections">Objections</div>
-          <div class="tab" data-group="script" data-tab="svoicemail">Voicemail</div>
-        </div>
-        <div class="tab-content active" id="tab-sopening"><div class="output-box" id="out-opening"></div><button class="copy-btn" data-target="out-opening">Copy</button></div>
-        <div class="tab-content" id="tab-sobjections"><div class="output-box" id="out-objections"></div><button class="copy-btn" data-target="out-objections">Copy</button></div>
-        <div class="tab-content" id="tab-svoicemail"><div class="output-box" id="out-voicemail"></div><button class="copy-btn" data-target="out-voicemail">Copy</button></div>
-      </div>
-    </div>
+    <div class="card results-panel"><div class="placeholder" id="script-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.82 19.79 19.79 0 011 1.18 2 2 0 013 1h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L7.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg><p>Fill in the call details<br/>and click Generate Scripts</p></div><div id="script-output" style="display:none;"><div class="tabs"><div class="tab active" data-group="script" data-tab="sopening">Opening</div><div class="tab" data-group="script" data-tab="sobjections">Objections</div><div class="tab" data-group="script" data-tab="svoicemail">Voicemail</div></div><div class="tab-content active" id="tab-sopening"><div class="output-box" id="out-opening"></div><button class="copy-btn" data-target="out-opening">Copy</button></div><div class="tab-content" id="tab-sobjections"><div class="output-box" id="out-objections"></div><button class="copy-btn" data-target="out-objections">Copy</button></div><div class="tab-content" id="tab-svoicemail"><div class="output-box" id="out-voicemail"></div><button class="copy-btn" data-target="out-voicemail">Copy</button></div></div></div>
   </main>
 </div>
 
 <script>
-  function switchTool(name, btn) {
-    document.querySelectorAll(".tool-page").forEach(p => p.classList.remove("active"));
-    document.querySelectorAll(".tool-nav-btn").forEach(b => b.classList.remove("active"));
-    document.getElementById("tool-" + name).classList.add("active");
-    btn.classList.add("active");
+  async function checkSession() {
+    try {
+      const res = await fetch('/session-status');
+      const data = await res.json();
+      if (data.logged_in) { showLoggedIn(data.email); }
+      else { document.getElementById('gate').classList.remove('hidden'); }
+    } catch { document.getElementById('gate').classList.remove('hidden'); }
   }
 
-  document.getElementById("listing-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const btn = document.getElementById("listing-btn");
-    const label = document.getElementById("listing-btn-label");
-    const spinner = document.getElementById("listing-spinner");
-    const errEl = document.getElementById("listing-error");
-    btn.disabled = true; spinner.style.display = "block";
-    label.textContent = "Generating..."; errEl.style.display = "none";
-    const data = Object.fromEntries(new FormData(e.target).entries());
-    try {
-      const res = await fetch("/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
-      const result = await res.json();
-      if (!res.ok || result.error) { showError(errEl, result.error); return; }
-      document.getElementById("out-listing").textContent = result.listing;
-      document.getElementById("out-social").textContent = result.social;
-      document.getElementById("out-email").textContent = result.email;
-      document.getElementById("listing-placeholder").style.display = "none";
-      document.getElementById("listing-output").style.display = "block";
-      activateTab("listing", "ldesc");
-    } catch { showError(errEl, "Network error - is the server running?"); }
-    finally { btn.disabled = false; spinner.style.display = "none"; label.textContent = "Generate Content"; }
-  });
-
-  document.getElementById("script-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const btn = document.getElementById("script-btn");
-    const label = document.getElementById("script-btn-label");
-    const spinner = document.getElementById("script-spinner");
-    const errEl = document.getElementById("script-error");
-    btn.disabled = true; spinner.style.display = "block";
-    label.textContent = "Generating..."; errEl.style.display = "none";
-    const data = Object.fromEntries(new FormData(e.target).entries());
-    try {
-      const res = await fetch("/generate-script", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
-      const result = await res.json();
-      if (!res.ok || result.error) { showError(errEl, result.error); return; }
-      document.getElementById("out-opening").textContent = result.opening;
-      document.getElementById("out-objections").textContent = result.objections;
-      document.getElementById("out-voicemail").textContent = result.voicemail;
-      document.getElementById("script-placeholder").style.display = "none";
-      document.getElementById("script-output").style.display = "block";
-      activateTab("script", "sopening");
-    } catch { showError(errEl, "Network error - is the server running?"); }
-    finally { btn.disabled = false; spinner.style.display = "none"; label.textContent = "Generate Scripts"; }
-  });
-
-  function showError(el, msg) { el.textContent = msg || "Something went wrong."; el.style.display = "block"; }
-
-  function activateTab(group, tabId) {
-    document.querySelectorAll('[data-group="' + group + '"]').forEach(t => t.classList.toggle("active", t.dataset.tab === tabId));
-    document.querySelectorAll(".tab-content").forEach(c => { if (c.id.startsWith("tab-" + tabId[0])) c.classList.toggle("active", c.id === "tab-" + tabId); });
+  function showLoggedIn(email) {
+    document.getElementById('gate').classList.add('hidden');
+    document.getElementById('header-right').innerHTML =
+      `<div class="subscriber-info"><span class="subscriber-email">&#10003; ${email}</span><button class="logout-btn" onclick="doLogout()">Sign out</button></div>`;
   }
 
-  document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => activateTab(tab.dataset.group, tab.dataset.tab)));
+  function handle401() {
+    document.getElementById('gate').classList.remove('hidden');
+    document.getElementById('gate-error').textContent = 'Session expired. Please verify again.';
+  }
 
-  document.querySelectorAll(".copy-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const text = document.getElementById(btn.dataset.target).textContent;
-      navigator.clipboard.writeText(text).then(() => {
-        btn.textContent = "Copied!"; btn.classList.add("copied");
-        setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 2000);
+  document.getElementById('gate-submit').addEventListener('click', async () => {
+    const emailEl = document.getElementById('gate-email');
+    const errEl = document.getElementById('gate-error');
+    const btn = document.getElementById('gate-submit');
+    const email = emailEl.value.trim();
+    if (!email) { errEl.textContent = 'Please enter your email.'; return; }
+    errEl.textContent = '';
+    btn.disabled = true;
+    btn.textContent = 'Checking...';
+    try {
+      const res = await fetch('/verify', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
+      const data = await res.json();
+      if (res.ok) { showLoggedIn(data.email); }
+      else { errEl.textContent = data.error || 'Verification failed.'; }
+    } catch { errEl.textContent = 'Network error. Please try again.'; }
+    btn.disabled = false;
+    btn.textContent = 'Access Tools';
+  });
+
+  document.getElementById('gate-email').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('gate-submit').click();
+  });
+
+  async function doLogout() {
+    await fetch('/logout', {method:'POST'});
+    document.getElementById('header-right').innerHTML =
+      `<a class="subscribe-btn" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00" target="_blank">Subscribe &mdash; $49/mo</a>`;
+    document.getElementById('gate').classList.remove('hidden');
+    document.getElementById('gate-error').textContent = '';
+    document.getElementById('gate-email').value = '';
+  }
+
+  function switchTool(tool, btn) {
+    document.querySelectorAll('.tool-page').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tool-nav-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('tool-' + tool).classList.add('active');
+    btn.classList.add('active');
+  }
+
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const group = tab.dataset.group;
+      const target = tab.dataset.tab;
+      const allTabs = group === 'listing' ? ['ldesc','lsocial','lemail'] : ['sopening','sobjections','svoicemail'];
+      document.querySelectorAll(`.tab[data-group="${group}"]`).forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      allTabs.forEach(id => { const el = document.getElementById('tab-' + id); if (el) el.classList.toggle('active', id === target); });
+    });
+  });
+
+  document.querySelectorAll('.copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const target = document.getElementById(btn.dataset.target);
+      navigator.clipboard.writeText(target.textContent).then(() => {
+        btn.textContent = 'Copied!'; btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
       });
     });
   });
+
+  document.getElementById('listing-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = document.getElementById('listing-btn');
+    const spinner = document.getElementById('listing-spinner');
+    const label = document.getElementById('listing-btn-label');
+    const errEl = document.getElementById('listing-error');
+    errEl.style.display = 'none';
+    btn.disabled = true; spinner.style.display = 'block'; label.textContent = 'Generating...';
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      const res = await fetch('/generate', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      if (res.status === 401) { handle401(); return; }
+      const result = await res.json();
+      if (!res.ok) { errEl.textContent = result.error; errEl.style.display = 'block'; }
+      else {
+        document.getElementById('out-listing').textContent = result.listing;
+        document.getElementById('out-social').textContent = result.social;
+        document.getElementById('out-email').textContent = result.email;
+        document.getElementById('listing-placeholder').style.display = 'none';
+        document.getElementById('listing-output').style.display = 'block';
+      }
+    } catch { errEl.textContent = 'Network error.'; errEl.style.display = 'block'; }
+    btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Generate Content';
+  });
+
+  document.getElementById('script-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = document.getElementById('script-btn');
+    const spinner = document.getElementById('script-spinner');
+    const label = document.getElementById('script-btn-label');
+    const errEl = document.getElementById('script-error');
+    errEl.style.display = 'none';
+    btn.disabled = true; spinner.style.display = 'block'; label.textContent = 'Generating...';
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      const res = await fetch('/generate-script', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      if (res.status === 401) { handle401(); return; }
+      const result = await res.json();
+      if (!res.ok) { errEl.textContent = result.error; errEl.style.display = 'block'; }
+      else {
+        document.getElementById('out-opening').textContent = result.opening;
+        document.getElementById('out-objections').textContent = result.objections;
+        document.getElementById('out-voicemail').textContent = result.voicemail;
+        document.getElementById('script-placeholder').style.display = 'none';
+        document.getElementById('script-output').style.display = 'block';
+      }
+    } catch { errEl.textContent = 'Network error.'; errEl.style.display = 'block'; }
+    btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Generate Scripts';
+  });
+
+  checkSession();
 </script>
 </body>
 </html>
