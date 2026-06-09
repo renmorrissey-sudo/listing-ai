@@ -86,7 +86,7 @@
     <div class="gate-error" id="gate-error"></div>
     <button class="gate-btn" id="gate-submit">Access Tools</button>
     <div class="gate-divider">don't have a subscription?</div>
-    <a class="gate-subscribe-link" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00" target="_blank">Subscribe &mdash; $49/mo &rArr;</a>
+    <a class="gate-subscribe-link" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00?prefilled_promo_code=TRIAL50" target="_blank">Start trial &mdash; 50% off &rArr;</a>
   </div>
 </div>
 
@@ -96,7 +96,7 @@
     <div class="tagline">AI-powered content for real estate agents</div>
   </div>
   <div id="header-right">
-    <a class="subscribe-btn" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00" target="_blank">Subscribe &mdash; $49/mo</a>
+    <a class="subscribe-btn" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00?prefilled_promo_code=TRIAL50" target="_blank">Start trial &mdash; 50% off</a>
   </div>
 </header>
 <nav class="tool-nav">
@@ -202,7 +202,7 @@
   async function doLogout() {
     await fetch('/logout', {method:'POST'});
     document.getElementById('header-right').innerHTML =
-      `<a class="subscribe-btn" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00" target="_blank">Subscribe &mdash; $49/mo</a>`;
+      `<a class="subscribe-btn" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00?prefilled_promo_code=TRIAL50" target="_blank">Start trial &mdash; 50% off</a>`;
     document.getElementById('gate').classList.remove('hidden');
     document.getElementById('gate-error').textContent = '';
     document.getElementById('gate-email').value = '';
