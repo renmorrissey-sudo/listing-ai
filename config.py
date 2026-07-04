@@ -27,6 +27,14 @@ CONTACT_EMAIL = _env("CONTACT_EMAIL", "ren.morrissey@gmail.com")
 SUBSCRIPTION_PRICE = _env("SUBSCRIPTION_PRICE", "$49/month")
 TRIAL_OFFER = _env("TRIAL_OFFER", "50% off first month with promo code TRIAL50")
 
+
+def _email_list(name):
+    raw = _env(name, "")
+    return {email.strip().lower() for email in raw.split(",") if email.strip()}
+
+
+FREE_ACCESS_EMAILS = _email_list("FREE_ACCESS_EMAILS")
+
 # Skip subscription checks locally when Stripe is not configured.
 SUBSCRIPTION_REQUIRED = _env("SUBSCRIPTION_REQUIRED", "true").lower() == "true"
 if not STRIPE_SECRET_KEY and not IS_PRODUCTION:

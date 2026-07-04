@@ -221,7 +221,9 @@ def verify():
     if not email or "@" not in email:
         return jsonify({"error": "Enter a valid email address."}), 400
 
-    if config.SUBSCRIPTION_REQUIRED:
+    has_free_access = auth.email_has_free_access(email)
+
+    if config.SUBSCRIPTION_REQUIRED and not has_free_access:
         if not config.STRIPE_SECRET_KEY:
             return jsonify({"error": "Billing is not configured yet."}), 503
         try:

@@ -34,10 +34,17 @@ def get_current_user():
     return db.get_user_by_id(user_id)
 
 
+def email_has_free_access(email):
+    return email and email.lower().strip() in config.FREE_ACCESS_EMAILS
+
+
 def user_has_active_subscription(user):
     if not config.SUBSCRIPTION_REQUIRED:
         return True
-    return user and user.get("subscription_status") == "active"
+    return user and (
+        user.get("subscription_status") == "active"
+        or email_has_free_access(user.get("email"))
+    )
 
 
 def login_required(view):
