@@ -209,7 +209,11 @@ def index():
 def session_status():
     user = auth.get_current_user()
     if user and auth.user_has_active_subscription(user):
-        return jsonify({"logged_in": True, "email": user["email"]})
+        return jsonify({
+            "logged_in": True,
+            "email": user["email"],
+            "has_billing_portal": bool(user.get("stripe_customer_id")),
+        })
     return jsonify({"logged_in": False})
 
 
@@ -249,7 +253,10 @@ def verify():
         return jsonify({"error": "No active subscription found for this email."}), 403
 
     auth.login_user(user["id"])
-    return jsonify({"email": user["email"]})
+    return jsonify({
+        "email": user["email"],
+        "has_billing_portal": bool(user.get("stripe_customer_id")),
+    })
 
 
 @app.route("/login", methods=["GET", "POST"])
