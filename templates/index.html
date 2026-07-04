@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TopAI Real Estate Tools</title>
+  <meta name="description" content="AI-powered real estate SaaS tools for listing copy, social posts, prospect emails, and cold call scripts." />
+  <title>TopAI Real Estate Tools - AI Real Estate SaaS by TOPAIRE REAL ESTATE</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; min-height: 100vh; }
@@ -84,6 +85,13 @@
 }
 .gate-subscribe-link { display: block; width: 100%; padding: 11px; background: white; border: 1.5px solid #4f8ef7; border-radius: 8px; font-size: 14px; font-weight: 600; color: #4f8ef7; text-decoration: none; transition: all 0.15s; }
     .gate-subscribe-link:hover { background: #f0f5ff; }
+    .gate-links { margin-top: 18px; font-size: 12px; color: #889; line-height: 1.8; }
+    .gate-links a { color: #667; text-decoration: none; margin: 0 4px; }
+    .gate-links a:hover { color: #4f8ef7; text-decoration: underline; }
+    .business-note { font-size: 12px; color: #8899aa; margin-top: 4px; }
+    .public-nav { background: #eef2f7; border-bottom: 1px solid #dde4f0; padding: 9px 32px; font-size: 13px; }
+    .public-nav a { color: #445; text-decoration: none; margin-right: 18px; font-weight: 600; }
+    .public-nav a:hover { color: #4f8ef7; }
   </style>
 </head>
 <body>
@@ -99,6 +107,14 @@
     <button class="gate-btn" id="gate-submit">Access Tools</button>
     <div class="gate-divider">don't have a subscription?</div>
     <a class="gate-subscribe-link" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00?prefilled_promo_code=TRIAL50" target="_blank">Start trial &mdash; 50% off &rArr;</a>
+    <div class="gate-links">
+      <div>Sold by {{ business_name }}</div>
+      <a href="/pricing">Pricing</a>
+      <a href="/terms">Terms</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/refund-policy">Refunds</a>
+      <a href="/contact">Contact</a>
+    </div>
   </div>
 </div>
 
@@ -106,11 +122,19 @@
   <div>
     <div class="logo">TopAI <span>Real Estate Tools</span></div>
     <div class="tagline">AI-powered content for real estate agents</div>
+    <div class="business-note">Operated by {{ business_name }}</div>
   </div>
   <div id="header-right">
     <a class="subscribe-btn" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00?prefilled_promo_code=TRIAL50" target="_blank">Start trial &mdash; 50% off</a>
   </div>
 </header>
+<div class="public-nav">
+  <a href="/pricing">Pricing</a>
+  <a href="/terms">Terms</a>
+  <a href="/privacy">Privacy</a>
+  <a href="/refund-policy">Refund Policy</a>
+  <a href="/contact">Contact</a>
+</div>
 <nav class="tool-nav">
   <button class="tool-nav-btn active" onclick="switchTool('listing', this)">&#128221; Listing Generator</button>
   <button class="tool-nav-btn" onclick="switchTool('coldcall', this)">&#128222; Cold Call Scripts</button>
@@ -142,8 +166,6 @@
       </form>
     </div>
     <div class="card results-panel"><div class="placeholder" id="listing-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg><p>Fill in the property details<br/>and click Generate Content</p></div><div id="listing-output" style="display:none;"><div class="tabs"><div class="tab active" data-group="listing" data-tab="ldesc">Listing</div><div class="tab" data-group="listing" data-tab="lsocial">Social Posts</div><div class="tab" data-group="listing" data-tab="lemail">Email</div></div><div class="tab-content active" id="tab-ldesc"><div class="output-box" id="out-listing"></div><button class="copy-btn" data-target="out-listing">Copy</button></div><div class="tab-content" id="tab-lsocial"><div class="output-box" id="out-social"></div><button class="copy-btn" data-target="out-social">Copy</button></div><div class="tab-content" id="tab-lemail"><div class="output-box" id="out-email"></div><button class="copy-btn" data-target="out-email">Copy</button></div></div></div>
-  </main>
-</div>er" id="listing-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg><p>Fill in the property details<br/>and click Generate Content</p></div><div id="listing-output" style="display:none;"><div class="tabs"><div class="tab active" data-group="listing" data-tab="ldesc">Listing</div><div class="tab" data-group="listing" data-tab="lsocial">Social Posts</div><div class="tab" data-group="listing" data-tab="lemail">Email</div></div><div class="tab-content active" id="tab-ldesc"><div class="output-box" id="out-listing"></div><button class="copy-btn" data-target="out-listing">Copy</button></div><div class="tab-content" id="tab-lsocial"><div class="output-box" id="out-social"></div><button class="copy-btn" data-target="out-social">Copy</button></div><div class="tab-content" id="tab-lemail"><div class="output-box" id="out-email"></div><button class="copy-btn" data-target="out-email">Copy</button></div></div></div>
   </main>
 </div>
 

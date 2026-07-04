@@ -21,6 +21,11 @@ STRIPE_SECRET_KEY = _env("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = _env("STRIPE_WEBHOOK_SECRET")
 STRIPE_PRICE_ID = _env("STRIPE_PRICE_ID")
 APP_URL = _env("APP_URL", "http://localhost:8080")
+BUSINESS_NAME = _env("BUSINESS_NAME", "TOPAIRE REAL ESTATE")
+PRODUCT_NAME = _env("PRODUCT_NAME", "TopAI Real Estate Tools")
+CONTACT_EMAIL = _env("CONTACT_EMAIL", "ren.morrissey@gmail.com")
+SUBSCRIPTION_PRICE = _env("SUBSCRIPTION_PRICE", "$49/month")
+TRIAL_OFFER = _env("TRIAL_OFFER", "50% off first month with promo code TRIAL50")
 
 # Skip subscription checks locally when Stripe is not configured.
 SUBSCRIPTION_REQUIRED = _env("SUBSCRIPTION_REQUIRED", "true").lower() == "true"

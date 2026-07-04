@@ -3,34 +3,77 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{{ title }} — TopAI Real Estate Tools</title>
+  <title>{{ title }} - {{ product_name }}</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; max-width: 720px; margin: 40px auto; padding: 0 20px; line-height: 1.6; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; max-width: 760px; margin: 40px auto; padding: 0 20px; line-height: 1.6; }
     h1 { margin-bottom: 16px; }
     h2 { margin: 24px 0 8px; font-size: 18px; }
     a { color: #4f8ef7; }
     .back { display: inline-block; margin-bottom: 24px; }
+    .muted { color: #667; }
+    footer { margin-top: 36px; padding-top: 18px; border-top: 1px solid #dde3ee; color: #667; font-size: 14px; }
   </style>
 </head>
 <body>
-  <a class="back" href="/login">&larr; Back</a>
+  <a class="back" href="/">&larr; Back to {{ product_name }}</a>
   <h1>{{ title }}</h1>
   {% if doc == "terms" %}
-  <p>Last updated: June 2026</p>
+  <p class="muted">Last updated: July 2026</p>
+  <p>{{ product_name }} is operated by {{ business_name }}. These terms explain how customers may use the subscription software service.</p>
   <h2>Service</h2>
-  <p>TopAI Real Estate Tools provides AI-generated listing copy and sales scripts for licensed real estate professionals. Content is a draft and must be reviewed before publication.</p>
+  <p>{{ product_name }} provides AI-assisted real estate marketing tools for agents and real estate professionals. The software helps generate listing descriptions, social media posts, prospect emails, cold call scripts, objection handlers, and voicemail scripts based on information entered by the user.</p>
+  <p>Generated content is a draft for convenience and must be reviewed by the customer before publication, distribution, or use with prospects. Customers are responsible for ensuring that their use of generated content complies with applicable real estate advertising rules, MLS rules, fair housing laws, brokerage policies, and local regulations.</p>
   <h2>Billing</h2>
-  <p>Subscriptions renew monthly until canceled through the Stripe customer portal. Fees are non-refundable except where required by law.</p>
+  <p>The service is sold as a recurring SaaS subscription at {{ subscription_price }} unless another price or promotion is shown at checkout. Promotional offers, including {{ trial_offer }}, are applied through Stripe checkout when eligible.</p>
+  <p>Subscriptions renew monthly until canceled. Customers may cancel through the Stripe customer portal or by contacting {{ contact_email }}.</p>
   <h2>Acceptable use</h2>
-  <p>You may not abuse the service, attempt to bypass access controls, or use generated content for unlawful purposes.</p>
+  <p>You may not abuse the service, attempt to bypass access controls, resell access without permission, overload the AI generation endpoints, or use generated content for unlawful, deceptive, discriminatory, or misleading purposes.</p>
+  <h2>Account access</h2>
+  <p>Access is tied to the email address used for subscription checkout. Customers must keep their account information accurate and may not share subscriber access with unauthorized users.</p>
+  <h2>Refunds</h2>
+  <p>Refunds are handled according to the Refund Policy available at <a href="/refund-policy">/refund-policy</a>.</p>
+  <h2>Contact</h2>
+  <p>Questions about these terms can be sent to <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.</p>
+  {% elif doc == "refund" %}
+  <p class="muted">Last updated: July 2026</p>
+  <p>This Refund Policy applies to {{ product_name }}, operated by {{ business_name }}.</p>
+  <h2>Subscription cancellations</h2>
+  <p>Customers can cancel their subscription at any time through the Stripe customer portal or by emailing <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>. Canceling stops future renewals but does not automatically refund previous payments.</p>
+  <h2>Refund window</h2>
+  <p>If you believe you were charged in error, contact us within 7 days of the charge. We review refund requests case by case, including duplicate charges, accidental subscriptions, billing errors, or inability to access the software after payment.</p>
+  <h2>Non-refundable usage</h2>
+  <p>Because {{ product_name }} provides immediate access to AI software and generation features, completed subscription periods are generally non-refundable once the service has been accessed, except where required by law or where we determine a billing error occurred.</p>
+  <h2>How to request a refund</h2>
+  <p>Email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a> with the subscriber email, charge date, and reason for the request. Refunds, when approved, are returned to the original payment method through Stripe.</p>
+  {% elif doc == "contact" %}
+  <p>{{ product_name }} is a SaaS product operated by {{ business_name }}.</p>
+  <h2>Support email</h2>
+  <p>For billing, account access, cancellations, refund questions, or product support, email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.</p>
+  <h2>What we sell</h2>
+  <p>We sell subscription access to AI-powered real estate content tools. Customers use the web app to generate property listing copy, social posts, prospect emails, and real estate call scripts.</p>
+  <h2>Billing descriptor</h2>
+  <p>Charges are processed by Stripe for {{ business_name }}. The business name on the website is intended to match the Stripe account reviewing and processing payments.</p>
   {% else %}
-  <p>Last updated: June 2026</p>
+  <p class="muted">Last updated: July 2026</p>
+  <p>This Privacy Policy explains how {{ business_name }} handles information for {{ product_name }}.</p>
   <h2>Data we collect</h2>
-  <p>Account email, subscription status, and property details you submit for generation. Payment data is processed by Stripe.</p>
+  <p>We collect the email address used for subscription access, subscription status, and the property or prospecting details you submit to generate AI content. Payment details are collected and processed by Stripe; we do not store full card numbers.</p>
   <h2>How we use data</h2>
-  <p>To provide the service, manage billing, and improve reliability. We send property details to Anthropic's API to generate content.</p>
+  <p>We use submitted information to provide the software, verify subscriber access, manage billing, troubleshoot issues, prevent abuse, and generate requested AI outputs.</p>
+  <h2>AI processing</h2>
+  <p>Property details, listing features, neighborhood notes, and call-script inputs may be sent to Anthropic's API to generate content. Do not enter confidential information that you are not authorized to process.</p>
+  <h2>Payments</h2>
+  <p>Stripe processes subscription payments, invoices, and payment method details. Stripe's own privacy and security policies apply to payment processing.</p>
   <h2>Retention</h2>
-  <p>Account data is kept while your account is active. Contact support to request deletion.</p>
+  <p>Account and subscription records are kept while your subscription is active and as needed for billing, support, accounting, fraud prevention, and legal obligations. Contact us to request deletion where applicable.</p>
+  <h2>Contact</h2>
+  <p>Privacy questions can be sent to <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.</p>
   {% endif %}
+  <footer>
+    <strong>{{ business_name }}</strong><br />
+    {{ product_name }}<br />
+    Contact: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a><br />
+    <a href="/pricing">Pricing</a> | <a href="/terms">Terms</a> | <a href="/privacy">Privacy</a> | <a href="/refund-policy">Refund Policy</a> | <a href="/contact">Contact</a>
+  </footer>
 </body>
 </html>

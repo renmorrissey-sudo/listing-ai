@@ -39,6 +39,17 @@ limiter = Limiter(
 )
 
 
+@app.context_processor
+def inject_business_context():
+    return {
+        "business_name": config.BUSINESS_NAME,
+        "product_name": config.PRODUCT_NAME,
+        "contact_email": config.CONTACT_EMAIL,
+        "subscription_price": config.SUBSCRIPTION_PRICE,
+        "trial_offer": config.TRIAL_OFFER,
+    }
+
+
 def _user_rate_limit_key():
     user = auth.get_current_user()
     if user:
@@ -411,6 +422,21 @@ def terms():
 @app.route("/privacy")
 def privacy():
     return render_template("legal.html", title="Privacy Policy", doc="privacy")
+
+
+@app.route("/pricing")
+def pricing():
+    return render_template("pricing.html")
+
+
+@app.route("/refund-policy")
+def refund_policy():
+    return render_template("legal.html", title="Refund Policy", doc="refund")
+
+
+@app.route("/contact")
+def contact():
+    return render_template("legal.html", title="Contact", doc="contact")
 
 
 @app.route("/generate", methods=["POST"])

@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pricing - {{ product_name }}</title>
+  <meta name="description" content="{{ product_name }} pricing and included AI real estate tools." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; line-height: 1.6; }
+    header { background: #1a1a2e; color: white; padding: 18px 32px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    .logo { font-size: 20px; font-weight: 700; }
+    .logo span { color: #4f8ef7; }
+    .business { color: #aab; font-size: 13px; margin-top: 2px; }
+    .nav a { color: #dce6ff; margin-left: 16px; text-decoration: none; font-size: 14px; }
+    main { max-width: 980px; margin: 36px auto; padding: 0 20px; }
+    .hero { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 24px; align-items: stretch; }
+    @media (max-width: 760px) { .hero { grid-template-columns: 1fr; } .nav a { margin-left: 0; margin-right: 12px; } }
+    .card { background: white; border-radius: 14px; padding: 28px; box-shadow: 0 1px 5px rgba(0,0,0,0.08); }
+    h1 { font-size: 34px; line-height: 1.15; margin: 0 0 12px; }
+    h2 { font-size: 20px; margin: 0 0 14px; }
+    h3 { font-size: 16px; margin: 0 0 6px; }
+    .muted { color: #667; }
+    .price { font-size: 44px; font-weight: 800; margin: 12px 0 0; }
+    .price span { font-size: 16px; font-weight: 500; color: #667; }
+    .promo { background: #eef5ff; color: #1d4ed8; border: 1px solid #cfe0ff; border-radius: 10px; padding: 10px 12px; font-size: 14px; margin: 16px 0; }
+    .btn { display: inline-block; width: 100%; text-align: center; background: #4f8ef7; color: white; border-radius: 9px; padding: 13px 16px; font-weight: 700; text-decoration: none; }
+    .fine { font-size: 13px; color: #667; margin-top: 12px; }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 24px; }
+    @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+    .tool { background: white; border-radius: 12px; padding: 20px; border: 1px solid #dde4f0; }
+    ul { padding-left: 20px; }
+    footer { max-width: 980px; margin: 24px auto 36px; padding: 0 20px; color: #667; font-size: 14px; }
+    footer a { color: #4f8ef7; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="logo">TopAI <span>Real Estate Tools</span></div>
+      <div class="business">Operated by {{ business_name }}</div>
+    </div>
+    <nav class="nav">
+      <a href="/">App</a>
+      <a href="/pricing">Pricing</a>
+      <a href="/terms">Terms</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/contact">Contact</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="card">
+        <h1>AI real estate content tools for agents.</h1>
+        <p class="muted">{{ product_name }} is a subscription software app that helps real estate professionals generate listing copy, social posts, prospect emails, and call scripts from property and prospecting details they provide.</p>
+        <p class="muted">The service is designed for working agents who need faster first drafts for marketing and outreach. All AI-generated content should be reviewed before use.</p>
+      </div>
+      <aside class="card">
+        <h2>Monthly subscription</h2>
+        <div class="price">$49 <span>/ month</span></div>
+        <div class="promo">{{ trial_offer }}</div>
+        <a class="btn" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00?prefilled_promo_code=TRIAL50" target="_blank" rel="noopener">Start trial - 50% off</a>
+        <p class="fine">Billed monthly through Stripe. Cancel anytime through the billing portal or by emailing <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.</p>
+      </aside>
+    </section>
+
+    <section class="grid" aria-label="Included AI tools">
+      <div class="tool">
+        <h3>Listing Generator</h3>
+        <p>Creates a polished MLS-style property description from address, price, beds, baths, square footage, features, garage/pool details, and neighborhood highlights.</p>
+      </div>
+      <div class="tool">
+        <h3>Social Post Generator</h3>
+        <p>Creates platform-specific promotional posts for Instagram, Facebook, and X/Twitter based on the listing details entered by the user.</p>
+      </div>
+      <div class="tool">
+        <h3>Prospect Email Generator</h3>
+        <p>Creates a short email announcement for a prospect list, including a subject line, listing overview, and call to action to schedule a showing.</p>
+      </div>
+      <div class="tool">
+        <h3>Cold Call Script Generator</h3>
+        <p>Creates real estate prospecting scripts, objection handlers, and voicemail scripts based on target area, property type, seller situation, agent name, and key value proposition.</p>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top: 24px;">
+      <h2>What is included</h2>
+      <ul>
+        <li>Subscriber access to the web app and current AI tools.</li>
+        <li>AI-generated drafts for listing marketing and real estate prospecting.</li>
+        <li>Copy buttons for generated outputs.</li>
+        <li>Billing handled securely by Stripe.</li>
+      </ul>
+      <p class="muted">The subscription does not include legal, brokerage, compliance, or advertising advice. Customers are responsible for reviewing all generated content before use.</p>
+    </section>
+  </main>
+
+  <footer>
+    <strong>{{ business_name }}</strong> operates {{ product_name }}.<br />
+    Contact: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a><br />
+    <a href="/pricing">Pricing</a> | <a href="/terms">Terms of Service</a> | <a href="/privacy">Privacy Policy</a> | <a href="/refund-policy">Refund Policy</a> | <a href="/contact">Contact</a>
+  </footer>
+</body>
+</html>
