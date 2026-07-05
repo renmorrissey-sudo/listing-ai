@@ -21,13 +21,16 @@
   <p class="muted">Last updated: July 2026</p>
   <p>{{ product_name }} is operated by {{ business_name }}. These terms explain how customers may use the subscription software service.</p>
   <h2>Service</h2>
-  <p>{{ product_name }} provides AI-assisted real estate marketing tools for agents and real estate professionals. The software helps generate listing descriptions, social media posts, prospect emails, cold call scripts, objection handlers, and voicemail scripts based on information entered by the user.</p>
+  <p>{{ product_name }} provides AI-assisted real estate marketing tools for agents and real estate professionals. The software helps generate listing descriptions, social media posts, prospect emails, cold call scripts, objection handlers, voicemail scripts, and AI-assisted calling workflows based on information entered by the user.</p>
   <p>Generated content is a draft for convenience and must be reviewed by the customer before publication, distribution, or use with prospects. Customers are responsible for ensuring that their use of generated content complies with applicable real estate advertising rules, MLS rules, fair housing laws, brokerage policies, and local regulations.</p>
+  <h2>AI calling assistant</h2>
+  <p>The AI Calling Assistant is intended for consent-based, one-to-one real estate follow-up calls. Customers are responsible for ensuring that any call they start complies with TCPA requirements, Do Not Call rules, state call recording and consent laws, brokerage policies, and all other applicable regulations.</p>
+  <p>The assistant must identify itself as an AI assistant calling on behalf of the agent or business. Customers may not use the service for unlawful robocalling, deceptive impersonation, harassment, spam, or bulk autodialing.</p>
   <h2>Billing</h2>
   <p>The service is sold as a recurring SaaS subscription at {{ subscription_price }} unless another price or promotion is shown at checkout. Promotional offers, including {{ trial_offer }}, are applied through Stripe checkout when eligible.</p>
   <p>Subscriptions renew monthly until canceled. Customers may cancel through the Stripe customer portal or by contacting {{ contact_email }}.</p>
   <h2>Acceptable use</h2>
-  <p>You may not abuse the service, attempt to bypass access controls, resell access without permission, overload the AI generation endpoints, or use generated content for unlawful, deceptive, discriminatory, or misleading purposes.</p>
+  <p>You may not abuse the service, attempt to bypass access controls, resell access without permission, overload the AI generation or calling endpoints, or use generated content or calls for unlawful, deceptive, discriminatory, or misleading purposes.</p>
   <h2>Account access</h2>
   <p>Access is tied to the email address used for subscription checkout. Customers must keep their account information accurate and may not share subscriber access with unauthorized users.</p>
   <h2>Refunds</h2>
@@ -50,18 +53,20 @@
   <h2>Support email</h2>
   <p>For billing, account access, cancellations, refund questions, or product support, email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.</p>
   <h2>What we sell</h2>
-  <p>We sell subscription access to AI-powered real estate content tools. Customers use the web app to generate property listing copy, social posts, prospect emails, and real estate call scripts.</p>
+  <p>We sell subscription access to AI-powered real estate tools. Customers use the web app to generate property listing copy, social posts, prospect emails, real estate call scripts, and consent-based AI-assisted calling workflows.</p>
   <h2>Billing descriptor</h2>
   <p>Charges are processed by Stripe for {{ business_name }}. The business name on the website is intended to match the Stripe account reviewing and processing payments.</p>
   {% else %}
   <p class="muted">Last updated: July 2026</p>
   <p>This Privacy Policy explains how {{ business_name }} handles information for {{ product_name }}.</p>
   <h2>Data we collect</h2>
-  <p>We collect the email address used for subscription access, subscription status, and the property or prospecting details you submit to generate AI content. Payment details are collected and processed by Stripe; we do not store full card numbers.</p>
+  <p>We collect the email address used for subscription access, subscription status, and the property or prospecting details you submit to generate AI content. For AI Calling Assistant features, we may also process lead names, phone numbers, call notes, call status, call summaries, transcripts, recording links, and appointment outcome metadata. Payment details are collected and processed by Stripe; we do not store full card numbers.</p>
   <h2>How we use data</h2>
   <p>We use submitted information to provide the software, verify subscriber access, manage billing, troubleshoot issues, prevent abuse, and generate requested AI outputs.</p>
   <h2>AI processing</h2>
   <p>Property details, listing features, neighborhood notes, and call-script inputs may be sent to Anthropic's API to generate content. Do not enter confidential information that you are not authorized to process.</p>
+  <h2>Call processing</h2>
+  <p>AI calls may be processed by a managed voice AI provider to place calls, generate voice responses, create transcripts, store recordings, and return call summaries. Customers are responsible for obtaining all permissions required before submitting a phone number or initiating a call.</p>
   <h2>Payments</h2>
   <p>Stripe processes subscription payments, invoices, and payment method details. Stripe's own privacy and security policies apply to payment processing.</p>
   <h2>Retention</h2>

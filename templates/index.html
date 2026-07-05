@@ -57,6 +57,15 @@
     .placeholder svg { opacity: 0.35; }
     .placeholder p { font-size: 14px; }
     .error-msg { background: #fff5f5; border: 1.5px solid #fca5a5; color: #dc2626; border-radius: 8px; padding: 12px 16px; font-size: 13px; margin-top: 12px; display: none; }
+    .notice { background: #fff8e6; border: 1.5px solid #f0d98c; color: #7a5c00; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.45; margin-bottom: 14px; }
+    .checkbox-row { display: flex; gap: 9px; align-items: flex-start; margin: 12px 0; font-size: 13px; color: #556; line-height: 1.45; }
+    .checkbox-row input { width: auto; margin-top: 3px; }
+    .call-history { display: flex; flex-direction: column; gap: 12px; max-height: 560px; overflow-y: auto; }
+    .call-item { background: #f8fafc; border: 1.5px solid #e0e4ed; border-radius: 8px; padding: 14px; font-size: 13px; line-height: 1.5; }
+    .call-item strong { color: #1a1a2e; }
+    .call-meta { color: #667; font-size: 12px; margin: 3px 0 8px; }
+    .call-summary { white-space: pre-wrap; color: #2a2a3e; }
+    .call-link { color: #4f8ef7; font-weight: 600; text-decoration: none; }
     .gate-overlay { position: fixed; inset: 0; background: rgba(20,20,40,0.97); display: flex; align-items: center; justify-content: center; z-index: 1000; }
     .gate-overlay.hidden { display: none; }
     .gate-card { background: white; border-radius: 16px; padding: 44px 40px 36px; max-width: 420px; width: 92%; text-align: center; box-shadow: 0 24px 64px rgba(0,0,0,0.4); }
@@ -140,6 +149,7 @@
 <nav class="tool-nav">
   <button class="tool-nav-btn active" onclick="switchTool('listing', this)">&#128221; Listing Generator</button>
   <button class="tool-nav-btn" onclick="switchTool('coldcall', this)">&#128222; Cold Call Scripts</button>
+  <button class="tool-nav-btn" onclick="switchTool('voice', this)">AI Calling Assistant</button>
 </nav>
 
 <div id="tool-listing" class="tool-page active">
@@ -191,6 +201,41 @@
   </main>
 </div>
 
+<div id="tool-voice" class="tool-page">
+  <main>
+    <div class="card">
+      <h2>AI Calling Assistant</h2>
+      <div class="notice">
+        Start with consent-based one-to-one calls only. You are responsible for TCPA, DNC, state recording laws, brokerage policy, and local regulations.
+      </div>
+      <form id="voice-form">
+        <div class="form-group"><label>Persona</label><select name="persona_id" id="voice-persona" required><option value="">Loading personas...</option></select></div>
+        <div class="form-row">
+          <div class="form-group"><label>Lead Name</label><input type="text" name="lead_name" placeholder="e.g. Sarah Johnson" maxlength="120" /></div>
+          <div class="form-group"><label>Phone Number *</label><input type="tel" name="phone_number" placeholder="e.g. (555) 123-4567" maxlength="32" required /></div>
+        </div>
+        <div class="form-group"><label>Lead Type</label><input type="text" name="lead_type" placeholder="e.g. buyer lead, open house visitor, seller lead" maxlength="80" /></div>
+        <div class="form-group"><label>Property Interest</label><textarea name="property_interest" maxlength="500" placeholder="e.g. Interested in 3-bedroom homes near downtown under $500k"></textarea></div>
+        <div class="form-group"><label>Desired Outcome</label><input type="text" name="desired_outcome" maxlength="300" placeholder="e.g. qualify and book a buyer consultation" /></div>
+        <div class="form-group"><label>Agent Notes</label><textarea name="notes" maxlength="1500" placeholder="Any context the AI should know before calling"></textarea></div>
+        <label class="checkbox-row">
+          <input type="checkbox" name="compliance_confirmed" value="true" required />
+          <span>I confirm this lead gave permission to be contacted and I understand I am responsible for calling, recording, DNC, and brokerage compliance.</span>
+        </label>
+        <div class="error-msg" id="voice-error"></div>
+        <button type="submit" class="btn-generate" id="voice-btn"><div class="spinner" id="voice-spinner"></div><span id="voice-btn-label">Start Call</span></button>
+      </form>
+    </div>
+    <div class="card results-panel">
+      <h2>Recent Calls</h2>
+      <div class="placeholder" id="voice-placeholder">
+        <p>Start an AI call or refresh history<br/>to see call outcomes here.</p>
+      </div>
+      <div class="call-history" id="voice-history" style="display:none;"></div>
+    </div>
+  </main>
+</div>
+
 <script>
   async function checkSession() {
     try {
@@ -208,11 +253,76 @@
       : '';
     document.getElementById('header-right').innerHTML =
       `<div class="subscriber-info"><span class="subscriber-email">&#10003; ${email}</span>${billingLink}<button class="logout-btn" onclick="doLogout()">Sign out</button></div>`;
+    loadVoiceData();
   }
 
   function handle401() {
     document.getElementById('gate').classList.remove('hidden');
     document.getElementById('gate-error').textContent = 'Session expired. Please verify again.';
+  }
+
+  async function fetchJson(url, options = {}) {
+    const res = await fetch(url, options);
+    if (res.status === 401) { handle401(); return null; }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Something went wrong.');
+    return data;
+  }
+
+  function escapeHtml(value) {
+    return String(value || '').replace(/[&<>"']/g, char => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[char]));
+  }
+
+  async function loadVoiceData() {
+    await Promise.all([loadVoicePersonas(), loadVoiceCalls()]);
+  }
+
+  async function loadVoicePersonas() {
+    const select = document.getElementById('voice-persona');
+    if (!select) return;
+    try {
+      const data = await fetchJson('/voice/personas');
+      if (!data) return;
+      select.innerHTML = data.personas.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+    } catch (err) {
+      select.innerHTML = '<option value="">Personas unavailable</option>';
+    }
+  }
+
+  async function loadVoiceCalls() {
+    const history = document.getElementById('voice-history');
+    const placeholder = document.getElementById('voice-placeholder');
+    if (!history || !placeholder) return;
+    try {
+      const data = await fetchJson('/voice/calls');
+      if (!data || !data.calls.length) {
+        history.style.display = 'none';
+        placeholder.style.display = 'flex';
+        return;
+      }
+      history.innerHTML = data.calls.map(call => {
+        const recording = call.recording_url ? `<div><a class="call-link" href="${escapeHtml(call.recording_url)}" target="_blank">Recording</a></div>` : '';
+        const appointment = call.appointment_requested ? ' | Appointment requested' : '';
+        return `<div class="call-item">
+          <strong>${escapeHtml(call.lead_name || 'Lead')} - ${escapeHtml(call.status)}</strong>
+          <div class="call-meta">${escapeHtml(call.persona_name || 'AI Calling Assistant')} | ${escapeHtml(call.phone_number)}${appointment}</div>
+          <div class="call-summary">${escapeHtml(call.summary || call.outcome || 'Call started. Summary will appear after the provider webhook is received.')}</div>
+          ${recording}
+        </div>`;
+      }).join('');
+      placeholder.style.display = 'none';
+      history.style.display = 'flex';
+    } catch (err) {
+      history.style.display = 'none';
+      placeholder.style.display = 'flex';
+      placeholder.innerHTML = `<p>${err.message}</p>`;
+    }
   }
 
   document.getElementById('gate-submit').addEventListener('click', async () => {
@@ -252,6 +362,7 @@
     document.querySelectorAll('.tool-nav-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('tool-' + tool).classList.add('active');
     btn.classList.add('active');
+    if (tool === 'voice') loadVoiceData();
   }
 
   document.querySelectorAll('.tab').forEach(tab => {
@@ -323,6 +434,31 @@
       }
     } catch { errEl.textContent = 'Network error.'; errEl.style.display = 'block'; }
     btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Generate Scripts';
+  });
+
+  document.getElementById('voice-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = document.getElementById('voice-btn');
+    const spinner = document.getElementById('voice-spinner');
+    const label = document.getElementById('voice-btn-label');
+    const errEl = document.getElementById('voice-error');
+    errEl.style.display = 'none';
+    btn.disabled = true; spinner.style.display = 'block'; label.textContent = 'Starting...';
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    data.compliance_confirmed = Boolean(data.compliance_confirmed);
+    try {
+      await fetchJson('/voice/calls', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(data)
+      });
+      e.target.reset();
+      await loadVoiceData();
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.style.display = 'block';
+    }
+    btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Start Call';
   });
 
   checkSession();

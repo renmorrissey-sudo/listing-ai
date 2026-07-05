@@ -12,6 +12,9 @@ import auth
 import config
 import db
 from validation import validate_listing_payload, validate_script_payload
+from voice_prompts import build_voice_call_prompt
+from voice_provider import VoiceProviderError, get_voice_provider, normalize_voice_webhook
+from voice_validation import validate_voice_call_payload
 
 config.validate_config()
 
@@ -69,7 +72,7 @@ def set_security_headers(response):
 
 @app.errorhandler(HTTPException)
 def handle_http_exception(error):
-    api_paths = ("/generate", "/generate-script", "/verify", "/session-status", "/webhook")
+    api_paths = ("/generate", "/generate-script", "/verify", "/session-status", "/webhook", "/voice")
     if request.path.startswith(api_paths):
         return jsonify({"error": error.description}), error.code
     return error
@@ -420,6 +423,106 @@ def stripe_webhook():
             status = "canceled" if event_type == "customer.subscription.deleted" else _stripe_status_from_subscription(data)
             db.update_user_subscription(user["id"], status, subscription_id=data.get("id"))
 
+    return jsonify({"received": True}), 200
+
+
+@app.route("/voice/personas")
+@auth.subscription_required
+def voice_personas():
+    user = auth.get_current_user()
+    personas = db.list_voice_personas(user["id"])
+    return jsonify({
+        "personas": [
+            {
+                "id": p["id"],
+                "name": p["name"],
+                "persona_type": p["persona_type"],
+                "tone": p["tone"],
+                "goal": p["goal"],
+            }
+            for p in personas
+        ]
+    })
+
+
+@app.route("/voice/calls")
+@auth.subscription_required
+def voice_calls():
+    user = auth.get_current_user()
+    calls = db.list_voice_calls(user["id"])
+    return jsonify({
+        "calls": [
+            {
+                "id": c["id"],
+                "persona_name": c.get("persona_name"),
+                "lead_name": c.get("lead_name"),
+                "phone_number": c.get("phone_number"),
+                "lead_type": c.get("lead_type"),
+                "status": c.get("status"),
+                "outcome": c.get("outcome"),
+                "appointment_requested": bool(c.get("appointment_requested")),
+                "summary": c.get("summary"),
+                "transcript": c.get("transcript"),
+                "recording_url": c.get("recording_url"),
+                "created_at": c.get("created_at"),
+                "completed_at": c.get("completed_at"),
+            }
+            for c in calls
+        ]
+    })
+
+
+@app.route("/voice/calls", methods=["POST"])
+@auth.subscription_required
+@limiter.limit(lambda: f"{config.VOICE_DAILY_CALL_LIMIT} per day", key_func=_user_rate_limit_key)
+def start_voice_call():
+    user = auth.get_current_user()
+    data = request.get_json(silent=True)
+    cleaned, error = validate_voice_call_payload(data)
+    if error:
+        return jsonify({"error": error}), 400
+
+    persona = db.get_voice_persona(cleaned["persona_id"], user["id"])
+    if not persona:
+        return jsonify({"error": "Selected persona was not found."}), 404
+
+    call_id = db.create_voice_call(
+        user_id=user["id"],
+        persona_id=persona["id"],
+        provider=config.VOICE_PROVIDER,
+        direction="outbound",
+        data=cleaned,
+    )
+    prompt = build_voice_call_prompt(persona, cleaned)
+    try:
+        result = get_voice_provider().start_outbound_call(call_id, cleaned, persona, prompt)
+        db.update_voice_call_provider(call_id, result["provider_call_id"], "started")
+    except VoiceProviderError as exc:
+        logger.warning("Voice call failed to start: %s", exc)
+        db.update_voice_call_provider(call_id, None, "failed")
+        return jsonify({"error": str(exc)}), 503
+
+    return jsonify({
+        "id": call_id,
+        "provider_call_id": result["provider_call_id"],
+        "status": "started",
+    }), 201
+
+
+@app.route("/webhook/voice", methods=["POST"])
+@limiter.exempt
+def voice_webhook():
+    if config.VOICE_PROVIDER_WEBHOOK_SECRET:
+        supplied = request.headers.get("X-Voice-Webhook-Secret") or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+        if supplied != config.VOICE_PROVIDER_WEBHOOK_SECRET:
+            return jsonify({"error": "Invalid signature."}), 401
+
+    payload = request.get_json(silent=True) or {}
+    normalized = normalize_voice_webhook(payload)
+    if not normalized.get("provider_call_id"):
+        return jsonify({"error": "Missing provider call ID."}), 400
+
+    db.update_voice_call_from_webhook(**normalized)
     return jsonify({"received": True}), 200
 
 
