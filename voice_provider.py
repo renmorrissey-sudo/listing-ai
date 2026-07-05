@@ -61,6 +61,8 @@ class VapiVoiceProvider:
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "TopAI-Real-Estate-Tools/1.0",
             },
             method="POST",
         )

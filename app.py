@@ -14,7 +14,7 @@ import db
 from validation import validate_listing_payload, validate_script_payload
 from voice_prompts import build_voice_call_prompt
 from voice_provider import VoiceProviderError, get_voice_provider, normalize_voice_webhook
-from voice_validation import validate_voice_call_payload
+from voice_validation import validate_voice_call_payload, validate_voice_persona_payload
 
 config.validate_config()
 
@@ -443,6 +443,25 @@ def voice_personas():
             for p in personas
         ]
     })
+
+
+@app.route("/voice/personas", methods=["POST"])
+@auth.subscription_required
+def create_voice_persona():
+    user = auth.get_current_user()
+    data = request.get_json(silent=True)
+    cleaned, error = validate_voice_persona_payload(data)
+    if error:
+        return jsonify({"error": error}), 400
+    persona_id = db.create_voice_persona(user["id"], cleaned)
+    persona = db.get_voice_persona(persona_id, user["id"])
+    return jsonify({
+        "id": persona["id"],
+        "name": persona["name"],
+        "persona_type": persona["persona_type"],
+        "tone": persona["tone"],
+        "goal": persona["goal"],
+    }), 201
 
 
 @app.route("/voice/calls")

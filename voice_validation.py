@@ -10,6 +10,15 @@ VOICE_FIELD_LIMITS = {
     "notes": 1500,
 }
 
+PERSONA_FIELD_LIMITS = {
+    "name": 120,
+    "persona_type": 80,
+    "prompt": 3000,
+    "tone": 200,
+    "goal": 500,
+    "objection_handling_notes": 1500,
+}
+
 
 def _clean_phone(phone_number):
     raw = str(phone_number or "").strip()
@@ -54,5 +63,29 @@ def validate_voice_call_payload(data):
         cleaned["lead_name"] = "the lead"
     if not cleaned.get("desired_outcome"):
         cleaned["desired_outcome"] = "qualify the lead and request an appointment"
+
+    return cleaned, None
+
+
+def validate_voice_persona_payload(data):
+    if not data:
+        return None, "Invalid JSON body."
+
+    cleaned = {}
+    for field, limit in PERSONA_FIELD_LIMITS.items():
+        value = str(data.get(field, "")).strip()
+        cleaned[field] = value[:limit]
+
+    if not cleaned["name"]:
+        return None, "Persona name is required."
+    if not cleaned["prompt"]:
+        return None, "Persona instructions are required."
+    if not cleaned["goal"]:
+        return None, "Persona goal is required."
+
+    if not cleaned["persona_type"]:
+        cleaned["persona_type"] = "custom"
+    if not cleaned["tone"]:
+        cleaned["tone"] = "professional, helpful, and concise"
 
     return cleaned, None

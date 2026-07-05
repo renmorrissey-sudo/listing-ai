@@ -195,6 +195,29 @@ def get_voice_persona(persona_id, user_id=None):
         return dict(row) if row else None
 
 
+def create_voice_persona(user_id, data):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO voice_personas
+                (user_id, name, persona_type, prompt, tone, goal, objection_handling_notes, is_default, active, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?)
+            """,
+            (
+                user_id,
+                data.get("name"),
+                data.get("persona_type"),
+                data.get("prompt"),
+                data.get("tone"),
+                data.get("goal"),
+                data.get("objection_handling_notes"),
+                now,
+            ),
+        )
+        return cur.lastrowid
+
+
 def create_voice_call(user_id, persona_id, provider, direction, data):
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
