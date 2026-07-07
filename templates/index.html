@@ -103,6 +103,24 @@
     .public-nav { background: #eef2f7; border-bottom: 1px solid #dde4f0; padding: 9px 32px; font-size: 13px; }
     .public-nav a { color: #445; text-decoration: none; margin-right: 18px; font-weight: 600; }
     .public-nav a:hover { color: #4f8ef7; }
+    @media (max-width: 640px) {
+      header { padding: 14px 16px; display: block; }
+      header .logo { font-size: 21px; line-height: 1.05; max-width: 190px; }
+      header .logo span { display: inline; }
+      header .tagline { font-size: 12px; margin-top: 6px; line-height: 1.3; }
+      .business-note { font-size: 11px; line-height: 1.3; }
+      #header-right { margin-top: 12px; }
+      .subscriber-info { justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .subscriber-email { flex: 1 1 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+      .billing-link, .logout-btn, .subscribe-btn { padding: 7px 10px; font-size: 12px; }
+      .public-nav { padding: 8px 16px; display: flex; gap: 14px; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+      .public-nav a { margin-right: 0; flex: 0 0 auto; }
+      .tool-nav { padding: 0 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      .tool-nav-btn { flex: 0 0 auto; padding: 11px 14px; min-width: 118px; white-space: normal; line-height: 1.15; text-align: center; }
+      main { margin: 20px auto; padding: 0 12px; }
+      .card { padding: 20px; border-radius: 10px; }
+      .form-row { grid-template-columns: 1fr; gap: 0; }
+    }
   </style>
 </head>
 <body>
