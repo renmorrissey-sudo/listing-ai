@@ -614,6 +614,20 @@ def tutorial():
     )
 
 
+@app.route("/dashboard")
+def dashboard():
+    user = auth.get_current_user()
+    if not user or not auth.user_has_active_subscription(user):
+        return redirect(url_for("index"))
+    metrics = db.get_dashboard_metrics(user["id"])
+    return render_template(
+        "dashboard.html",
+        email=user["email"],
+        has_billing_portal=bool(user.get("stripe_customer_id")),
+        metrics=metrics,
+    )
+
+
 @app.route("/refund-policy")
 def refund_policy():
     return render_template("legal.html", title="Refund Policy", doc="refund")
@@ -643,6 +657,9 @@ def generate():
         listing = _extract_section(raw, "LISTING DESCRIPTION", "SOCIAL POSTS")
         social = _extract_section(raw, "SOCIAL POSTS", "PROSPECT EMAIL")
         email = _extract_section(raw, "PROSPECT EMAIL", None)
+        user = auth.get_current_user()
+        if user:
+            db.record_tool_usage(user["id"], "listing_generator", "generated")
         return jsonify({"listing": listing.strip(), "social": social.strip(), "email": email.strip()})
     except Exception:
         logger.exception("Listing generation failed")
@@ -668,6 +685,9 @@ def generate_script():
         opening = _extract_section(raw, "OPENING SCRIPT", "OBJECTION HANDLERS")
         objections = _extract_section(raw, "OBJECTION HANDLERS", "VOICEMAIL SCRIPT")
         voicemail = _extract_section(raw, "VOICEMAIL SCRIPT", None)
+        user = auth.get_current_user()
+        if user:
+            db.record_tool_usage(user["id"], "cold_call_scripts", "generated")
         return jsonify({"opening": opening.strip(), "objections": objections.strip(), "voicemail": voicemail.strip()})
     except Exception:
         logger.exception("Script generation failed")

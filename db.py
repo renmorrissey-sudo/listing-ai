@@ -79,6 +79,24 @@ def init_db():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tool_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                tool_key TEXT NOT NULL,
+                event_type TEXT NOT NULL DEFAULT 'generated',
+                metadata TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_created ON tool_usage(user_id, created_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_tool ON tool_usage(user_id, tool_key)"
+        )
         _ensure_default_voice_personas(conn)
 
 
@@ -328,3 +346,176 @@ def list_voice_calls(user_id, limit=20):
             (user_id, limit),
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+def record_tool_usage(user_id, tool_key, event_type="generated", metadata=None):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO tool_usage (user_id, tool_key, event_type, metadata, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, tool_key, event_type, metadata, now),
+        )
+        return cur.lastrowid
+
+
+def _count_usage_since(conn, user_id, tool_key, since_iso=None):
+    if since_iso:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM tool_usage
+            WHERE user_id = ? AND tool_key = ? AND created_at >= ?
+            """,
+            (user_id, tool_key, since_iso),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM tool_usage
+            WHERE user_id = ? AND tool_key = ?
+            """,
+            (user_id, tool_key),
+        ).fetchone()
+    return int(row["count"] if row else 0)
+
+
+def _last_usage_at(conn, user_id, tool_key):
+    row = conn.execute(
+        """
+        SELECT created_at
+        FROM tool_usage
+        WHERE user_id = ? AND tool_key = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (user_id, tool_key),
+    ).fetchone()
+    return row["created_at"] if row else None
+
+
+def get_dashboard_metrics(user_id):
+    from datetime import timedelta
+
+    now = datetime.now(timezone.utc)
+    since_7d = (now - timedelta(days=7)).isoformat()
+    since_30d = (now - timedelta(days=30)).isoformat()
+
+    with get_db() as conn:
+        listing_total = _count_usage_since(conn, user_id, "listing_generator")
+        listing_7d = _count_usage_since(conn, user_id, "listing_generator", since_7d)
+        listing_30d = _count_usage_since(conn, user_id, "listing_generator", since_30d)
+        listing_last = _last_usage_at(conn, user_id, "listing_generator")
+
+        scripts_total = _count_usage_since(conn, user_id, "cold_call_scripts")
+        scripts_7d = _count_usage_since(conn, user_id, "cold_call_scripts", since_7d)
+        scripts_30d = _count_usage_since(conn, user_id, "cold_call_scripts", since_30d)
+        scripts_last = _last_usage_at(conn, user_id, "cold_call_scripts")
+
+        calls_total = conn.execute(
+            "SELECT COUNT(*) AS count FROM voice_calls WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()["count"]
+        calls_7d = conn.execute(
+            "SELECT COUNT(*) AS count FROM voice_calls WHERE user_id = ? AND created_at >= ?",
+            (user_id, since_7d),
+        ).fetchone()["count"]
+        calls_30d = conn.execute(
+            "SELECT COUNT(*) AS count FROM voice_calls WHERE user_id = ? AND created_at >= ?",
+            (user_id, since_30d),
+        ).fetchone()["count"]
+        calls_completed = conn.execute(
+            "SELECT COUNT(*) AS count FROM voice_calls WHERE user_id = ? AND status = 'completed'",
+            (user_id,),
+        ).fetchone()["count"]
+        calls_appointments = conn.execute(
+            "SELECT COUNT(*) AS count FROM voice_calls WHERE user_id = ? AND appointment_requested = 1",
+            (user_id,),
+        ).fetchone()["count"]
+        calls_with_recording = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM voice_calls
+            WHERE user_id = ? AND recording_url IS NOT NULL AND recording_url != ''
+            """,
+            (user_id,),
+        ).fetchone()["count"]
+        calls_last = conn.execute(
+            """
+            SELECT created_at FROM voice_calls
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+        calls_last = calls_last["created_at"] if calls_last else None
+
+        recent_usage = conn.execute(
+            """
+            SELECT tool_key, event_type, created_at
+            FROM tool_usage
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 8
+            """,
+            (user_id,),
+        ).fetchall()
+        recent_calls = conn.execute(
+            """
+            SELECT lead_name, status, appointment_requested, created_at, summary
+            FROM voice_calls
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 5
+            """,
+            (user_id,),
+        ).fetchall()
+
+    content_pieces = (listing_total * 3) + (scripts_total * 3)
+    return {
+        "overview": {
+            "listing_generations": listing_total,
+            "script_generations": scripts_total,
+            "ai_calls": calls_total,
+            "appointments_requested": calls_appointments,
+            "content_pieces": content_pieces,
+            "activity_7d": listing_7d + scripts_7d + calls_7d,
+            "activity_30d": listing_30d + scripts_30d + calls_30d,
+        },
+        "tools": {
+            "listing_generator": {
+                "label": "Listing Generator",
+                "total": listing_total,
+                "last_7_days": listing_7d,
+                "last_30_days": listing_30d,
+                "last_used_at": listing_last,
+                "outputs_per_run": 3,
+                "outputs_label": "listing + social + email drafts",
+            },
+            "cold_call_scripts": {
+                "label": "Cold Call Scripts",
+                "total": scripts_total,
+                "last_7_days": scripts_7d,
+                "last_30_days": scripts_30d,
+                "last_used_at": scripts_last,
+                "outputs_per_run": 3,
+                "outputs_label": "opening + objections + voicemail",
+            },
+            "ai_calling": {
+                "label": "AI Calling Assistant",
+                "total": calls_total,
+                "last_7_days": calls_7d,
+                "last_30_days": calls_30d,
+                "last_used_at": calls_last,
+                "completed": calls_completed,
+                "appointments_requested": calls_appointments,
+                "recordings_available": calls_with_recording,
+            },
+        },
+        "recent_usage": [dict(row) for row in recent_usage],
+        "recent_calls": [dict(row) for row in recent_calls],
+    }

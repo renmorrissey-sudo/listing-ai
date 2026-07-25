@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; line-height: 1.55; }
+    header { background: #1a1a2e; color: white; padding: 16px 32px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    .logo { font-size: 20px; font-weight: 700; }
+    .logo span { color: #4f8ef7; }
+    .tagline { font-size: 12px; color: #8899aa; margin-top: 2px; }
+    .subscriber-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .subscriber-email { font-size: 12px; color: #22c55e; font-weight: 600; }
+    .billing-link { border: 1.5px solid #4f8ef7; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #dce8ff; text-decoration: none; }
+    .logout-btn { background: none; border: 1.5px solid #445; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #aab; cursor: pointer; }
+    .public-nav { background: #eef2f7; border-bottom: 1px solid #dde4f0; padding: 9px 32px; font-size: 13px; }
+    .public-nav a { color: #445; text-decoration: none; margin-right: 18px; font-weight: 600; }
+    .public-nav a:hover, .public-nav a.active { color: #4f8ef7; }
+    .tool-nav { background: #232344; display: flex; padding: 0 32px; gap: 4px; overflow-x: auto; }
+    .tool-nav a { padding: 12px 20px; font-size: 13px; font-weight: 600; color: #8899bb; text-decoration: none; border-bottom: 3px solid transparent; white-space: nowrap; }
+    .tool-nav a:hover { color: #ccd; }
+    .tool-nav a.active { color: #4f8ef7; border-bottom-color: #4f8ef7; }
+    main { max-width: 1100px; margin: 28px auto 40px; padding: 0 20px; }
+    h1 { font-size: 28px; margin: 0 0 8px; }
+    h2 { font-size: 18px; margin: 0 0 12px; }
+    .muted { color: #667; }
+    .overview { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 18px 0 22px; }
+    .stat { background: white; border-radius: 12px; padding: 18px; box-shadow: 0 1px 5px rgba(0,0,0,0.08); }
+    .stat .label { font-size: 12px; font-weight: 700; color: #667; text-transform: uppercase; letter-spacing: 0.4px; }
+    .stat .value { font-size: 30px; font-weight: 800; margin-top: 6px; color: #1a1a2e; }
+    .stat .sub { font-size: 12px; color: #889; margin-top: 4px; }
+    .grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 16px; }
+    .card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 5px rgba(0,0,0,0.08); margin-bottom: 16px; }
+    .tool-card { border: 1px solid #e5ebf5; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+    .tool-card h3 { margin: 0 0 8px; font-size: 16px; }
+    .metrics-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
+    .metric { background: #f8fafc; border-radius: 8px; padding: 10px; }
+    .metric .k { font-size: 11px; color: #778; font-weight: 700; text-transform: uppercase; }
+    .metric .v { font-size: 20px; font-weight: 800; margin-top: 2px; }
+    .cta { display: inline-block; margin-top: 10px; background: #4f8ef7; color: white; border-radius: 8px; padding: 8px 12px; font-size: 13px; font-weight: 700; text-decoration: none; }
+    .activity { list-style: none; padding: 0; margin: 0; }
+    .activity li { padding: 10px 0; border-bottom: 1px solid #eef2f7; font-size: 13px; }
+    .activity li:last-child { border-bottom: none; }
+    .pill { display: inline-block; background: #eef5ff; color: #1d4ed8; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700; }
+    .empty { color: #889; font-size: 13px; padding: 8px 0; }
+    footer { max-width: 1100px; margin: 0 auto 36px; padding: 0 20px; color: #667; font-size: 14px; }
+    footer a { color: #4f8ef7; }
+    @media (max-width: 900px) {
+      .overview { grid-template-columns: repeat(2, 1fr); }
+      .grid { grid-template-columns: 1fr; }
+      .metrics-row { grid-template-columns: 1fr 1fr; }
+      header, .public-nav, .tool-nav { padding-left: 16px; padding-right: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="logo">TopAI <span>Real Estate Tools</span></div>
+      <div class="tagline">Subscriber dashboard</div>
+    </div>
+    <div class="subscriber-info">
+      <span class="subscriber-email">&#10003; {{ email }}</span>
+      {% if has_billing_portal %}
+      <a class="billing-link" href="/billing/portal">Manage billing</a>
+      {% endif %}
+      <button class="logout-btn" type="button" onclick="doLogout()">Sign out</button>
+    </div>
+  </header>
+
+  <div class="public-nav">
+    <a href="/dashboard" class="active">Dashboard</a>
+    <a href="/tutorial">Tutorial</a>
+    <a href="/terms">Terms</a>
+    <a href="/privacy">Privacy</a>
+    <a href="/refund-policy">Refund Policy</a>
+    <a href="/contact">Contact</a>
+  </div>
+
+  <nav class="tool-nav">
+    <a href="/dashboard" class="active">Dashboard</a>
+    <a href="/">Listing Generator</a>
+    <a href="/#coldcall">Cold Call Scripts</a>
+    <a href="/#voice">AI Calling Assistant</a>
+    <a href="/tutorial">Tutorial</a>
+  </nav>
+
+  <main>
+    <h1>Dashboard</h1>
+    <p class="muted">Track how you use each TopAI tool to market listings, create scripts, and follow up with leads.</p>
+
+    <section class="overview" aria-label="Overview metrics">
+      <div class="stat">
+        <div class="label">Listing Generations</div>
+        <div class="value">{{ metrics.overview.listing_generations }}</div>
+        <div class="sub">{{ metrics.overview.listing_generations * 3 }} content drafts created</div>
+      </div>
+      <div class="stat">
+        <div class="label">Call Script Runs</div>
+        <div class="value">{{ metrics.overview.script_generations }}</div>
+        <div class="sub">Opening, objections, and voicemail</div>
+      </div>
+      <div class="stat">
+        <div class="label">AI Calls</div>
+        <div class="value">{{ metrics.overview.ai_calls }}</div>
+        <div class="sub">{{ metrics.overview.appointments_requested }} appointment requests</div>
+      </div>
+      <div class="stat">
+        <div class="label">30-Day Activity</div>
+        <div class="value">{{ metrics.overview.activity_30d }}</div>
+        <div class="sub">{{ metrics.overview.activity_7d }} actions in last 7 days</div>
+      </div>
+    </section>
+
+    <div class="grid">
+      <section>
+        <div class="card">
+          <h2>Tool metrics</h2>
+
+          <div class="tool-card">
+            <h3>{{ metrics.tools.listing_generator.label }}</h3>
+            <p class="muted">Creates listing copy, social posts, and prospect emails from one property form.</p>
+            <div class="metrics-row">
+              <div class="metric"><div class="k">Total uses</div><div class="v">{{ metrics.tools.listing_generator.total }}</div></div>
+              <div class="metric"><div class="k">Last 7 days</div><div class="v">{{ metrics.tools.listing_generator.last_7_days }}</div></div>
+              <div class="metric"><div class="k">Last 30 days</div><div class="v">{{ metrics.tools.listing_generator.last_30_days }}</div></div>
+            </div>
+            <p class="muted" style="margin-top:10px;font-size:13px;">
+              Last used:
+              {% if metrics.tools.listing_generator.last_used_at %}
+                {{ metrics.tools.listing_generator.last_used_at[:16].replace('T', ' ') }} UTC
+              {% else %}
+                Not used yet
+              {% endif %}
+            </p>
+            <a class="cta" href="/">Open Listing Generator</a>
+          </div>
+
+          <div class="tool-card">
+            <h3>{{ metrics.tools.cold_call_scripts.label }}</h3>
+            <p class="muted">Creates opening scripts, objection handlers, and voicemail scripts for prospecting.</p>
+            <div class="metrics-row">
+              <div class="metric"><div class="k">Total uses</div><div class="v">{{ metrics.tools.cold_call_scripts.total }}</div></div>
+              <div class="metric"><div class="k">Last 7 days</div><div class="v">{{ metrics.tools.cold_call_scripts.last_7_days }}</div></div>
+              <div class="metric"><div class="k">Last 30 days</div><div class="v">{{ metrics.tools.cold_call_scripts.last_30_days }}</div></div>
+            </div>
+            <p class="muted" style="margin-top:10px;font-size:13px;">
+              Last used:
+              {% if metrics.tools.cold_call_scripts.last_used_at %}
+                {{ metrics.tools.cold_call_scripts.last_used_at[:16].replace('T', ' ') }} UTC
+              {% else %}
+                Not used yet
+              {% endif %}
+            </p>
+            <a class="cta" href="/#coldcall">Open Cold Call Scripts</a>
+          </div>
+
+          <div class="tool-card">
+            <h3>{{ metrics.tools.ai_calling.label }}</h3>
+            <p class="muted">Consent-based AI follow-up calls with summaries, outcomes, and recordings.</p>
+            <div class="metrics-row">
+              <div class="metric"><div class="k">Total calls</div><div class="v">{{ metrics.tools.ai_calling.total }}</div></div>
+              <div class="metric"><div class="k">Completed</div><div class="v">{{ metrics.tools.ai_calling.completed }}</div></div>
+              <div class="metric"><div class="k">Appointments</div><div class="v">{{ metrics.tools.ai_calling.appointments_requested }}</div></div>
+            </div>
+            <div class="metrics-row" style="margin-top:10px;">
+              <div class="metric"><div class="k">Last 7 days</div><div class="v">{{ metrics.tools.ai_calling.last_7_days }}</div></div>
+              <div class="metric"><div class="k">Last 30 days</div><div class="v">{{ metrics.tools.ai_calling.last_30_days }}</div></div>
+              <div class="metric"><div class="k">Recordings</div><div class="v">{{ metrics.tools.ai_calling.recordings_available }}</div></div>
+            </div>
+            <p class="muted" style="margin-top:10px;font-size:13px;">
+              Last used:
+              {% if metrics.tools.ai_calling.last_used_at %}
+                {{ metrics.tools.ai_calling.last_used_at[:16].replace('T', ' ') }} UTC
+              {% else %}
+                Not used yet
+              {% endif %}
+            </p>
+            <a class="cta" href="/#voice">Open AI Calling Assistant</a>
+          </div>
+        </div>
+      </section>
+
+      <aside>
+        <div class="card">
+          <h2>Recent content activity</h2>
+          {% if metrics.recent_usage %}
+          <ul class="activity">
+            {% for item in metrics.recent_usage %}
+            <li>
+              <span class="pill">
+                {% if item.tool_key == 'listing_generator' %}Listing Generator
+                {% elif item.tool_key == 'cold_call_scripts' %}Cold Call Scripts
+                {% else %}{{ item.tool_key }}{% endif %}
+              </span>
+              <div class="muted" style="margin-top:4px;">{{ item.event_type }} · {{ item.created_at[:16].replace('T', ' ') }} UTC</div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="empty">No listing or script generations yet. Generate content to start tracking usage.</p>
+          {% endif %}
+        </div>
+
+        <div class="card">
+          <h2>Recent AI calls</h2>
+          {% if metrics.recent_calls %}
+          <ul class="activity">
+            {% for call in metrics.recent_calls %}
+            <li>
+              <strong>{{ call.lead_name or 'Lead' }}</strong>
+              <span class="pill">{{ call.status }}</span>
+              {% if call.appointment_requested %}<span class="pill">Appointment</span>{% endif %}
+              <div class="muted" style="margin-top:4px;">{{ call.created_at[:16].replace('T', ' ') }} UTC</div>
+              {% if call.summary %}
+              <div style="margin-top:6px;">{{ call.summary[:160] }}{% if call.summary|length > 160 %}…{% endif %}</div>
+              {% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="empty">No AI calls yet. Start a consent-based call to see outcomes here.</p>
+          {% endif %}
+          <a class="cta" href="/#voice">View calling tool</a>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <footer>
+    <strong>{{ business_name }}</strong> operates {{ product_name }}.<br />
+    Contact: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>
+  </footer>
+
+  <script>
+    async function doLogout() {
+      await fetch('/logout', {method: 'POST'});
+      window.location.href = '/';
+    }
+  </script>
+</body>
+</html>
