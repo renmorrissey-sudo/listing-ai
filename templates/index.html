@@ -194,6 +194,7 @@
   <button class="tool-nav-btn active" data-tool="listing" onclick="switchTool('listing', this)">&#128221; Listing Generator</button>
   <button class="tool-nav-btn" data-tool="coldcall" onclick="switchTool('coldcall', this)">&#128222; Cold Call Scripts</button>
   <button class="tool-nav-btn" data-tool="voice" onclick="switchTool('voice', this)">AI Calling Assistant</button>
+  <button class="tool-nav-btn" data-tool="sms" onclick="switchTool('sms', this)">AI SMS Assistant</button>
   <a class="tool-nav-btn nav-subscriber" id="dashboard-tool-link" href="/dashboard" style="display:none; text-decoration:none;">Dashboard</a>
   <a class="tool-nav-btn nav-subscriber" id="tutorial-tool-link" href="/tutorial" style="display:none; text-decoration:none;">Tutorial</a>
 </nav>
@@ -282,6 +283,53 @@
   </main>
 </div>
 
+<div id="tool-sms" class="tool-page">
+  <main>
+    <div class="card">
+      <h2>AI SMS Assistant</h2>
+      <div class="notice">
+        Use consent-based one-to-one SMS only. You are responsible for TCPA, DNC, carrier rules, brokerage policy, and local regulations. Include opt-out language when required.
+      </div>
+      <form id="sms-form">
+        <div class="form-group"><label>Persona</label><select name="persona_id" id="sms-persona" required><option value="">Loading personas...</option></select></div>
+        <div class="form-row">
+          <div class="form-group"><label>Lead Name</label><input type="text" name="lead_name" placeholder="e.g. Sarah Johnson" maxlength="120" /></div>
+          <div class="form-group"><label>Phone Number *</label><input type="tel" name="phone_number" placeholder="e.g. (555) 123-4567" maxlength="32" required /></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Your Name</label><input type="text" name="agent_name" placeholder="e.g. Ren Morrissey" maxlength="120" /></div>
+          <div class="form-group"><label>Lead Type</label><input type="text" name="lead_type" placeholder="e.g. buyer lead, open house visitor" maxlength="80" /></div>
+        </div>
+        <div class="form-group"><label>Property Interest</label><textarea name="property_interest" maxlength="500" placeholder="e.g. Looking at 3-bedroom homes near downtown under $500k"></textarea></div>
+        <div class="form-group"><label>Desired Outcome</label><input type="text" name="desired_outcome" maxlength="300" placeholder="e.g. get a reply and book a showing" /></div>
+        <div class="form-group"><label>Agent Notes</label><textarea name="notes" maxlength="1500" placeholder="Any context the AI should use in the text"></textarea></div>
+        <div class="form-group">
+          <label>SMS Message</label>
+          <textarea name="message_body" id="sms-message-body" maxlength="480" placeholder="Click Generate SMS to draft a message, then edit before sending."></textarea>
+          <div class="muted" id="sms-char-count" style="font-size:12px;margin-top:6px;">0 / 480 characters</div>
+        </div>
+        <label class="checkbox-row">
+          <input type="checkbox" name="compliance_confirmed" value="true" required />
+          <span>I confirm this lead consented to SMS contact and I am responsible for TCPA, DNC, opt-out, and brokerage compliance.</span>
+        </label>
+        <div class="error-msg" id="sms-error"></div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
+          <button type="button" class="btn-generate" id="sms-generate-btn" style="flex:1;"><div class="spinner" id="sms-generate-spinner"></div><span id="sms-generate-label">Generate SMS</span></button>
+          <button type="submit" class="btn-generate" id="sms-send-btn" style="flex:1;"><div class="spinner" id="sms-send-spinner"></div><span id="sms-send-label">Send SMS</span></button>
+        </div>
+        <p class="muted" id="sms-config-note" style="font-size:12px;margin-top:10px;"></p>
+      </form>
+    </div>
+    <div class="card results-panel">
+      <h2>Recent SMS</h2>
+      <div class="placeholder" id="sms-placeholder">
+        <p>Generate or send an SMS<br/>to see recent messages here.</p>
+      </div>
+      <div class="call-history" id="sms-history" style="display:none;"></div>
+    </div>
+  </main>
+</div>
+
 <script>
   let voiceCallsRefreshTimer = null;
 
@@ -312,6 +360,7 @@
       `<div class="subscriber-info"><span class="subscriber-email">&#10003; ${email}</span>${billingLink}<button class="logout-btn" onclick="doLogout()">Sign out</button></div>`;
     setSubscriberNav(true);
     loadVoiceData();
+    loadSmsData();
     applyToolHash();
   }
 
@@ -344,14 +393,62 @@
   }
 
   async function loadVoicePersonas() {
-    const select = document.getElementById('voice-persona');
-    if (!select) return;
+    const selects = [document.getElementById('voice-persona'), document.getElementById('sms-persona')].filter(Boolean);
+    if (!selects.length) return;
     try {
       const data = await fetchJson('/voice/personas');
       if (!data) return;
-      select.innerHTML = data.personas.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+      const options = data.personas.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+      selects.forEach(select => { select.innerHTML = options; });
     } catch (err) {
-      select.innerHTML = '<option value="">Personas unavailable</option>';
+      selects.forEach(select => { select.innerHTML = '<option value="">Personas unavailable</option>'; });
+    }
+  }
+
+  async function loadSmsData() {
+    await Promise.all([loadVoicePersonas(), loadSmsMessages()]);
+  }
+
+  function updateSmsCharCount() {
+    const body = document.getElementById('sms-message-body');
+    const count = document.getElementById('sms-char-count');
+    if (!body || !count) return;
+    count.textContent = `${body.value.length} / 480 characters`;
+  }
+
+  async function loadSmsMessages() {
+    const history = document.getElementById('sms-history');
+    const placeholder = document.getElementById('sms-placeholder');
+    const note = document.getElementById('sms-config-note');
+    if (!history || !placeholder) return;
+    try {
+      const data = await fetchJson('/sms/messages', {cache: 'no-store'});
+      if (!data) return;
+      if (note) {
+        note.textContent = data.send_configured
+          ? 'Twilio SMS sending is configured. Generated messages can be sent directly.'
+          : 'Twilio is not configured yet. You can still generate and save SMS drafts. Add SMS_TWILIO_ACCOUNT_SID, SMS_TWILIO_AUTH_TOKEN, and SMS_FROM_NUMBER to enable sending.';
+      }
+      if (!data.messages.length) {
+        history.style.display = 'none';
+        placeholder.style.display = 'flex';
+        return;
+      }
+      history.innerHTML = data.messages.map(msg => {
+        const err = msg.error_message ? `<div class="call-meta">${escapeHtml(msg.error_message)}</div>` : '';
+        return `<div class="call-item">
+          <strong>${escapeHtml(msg.lead_name || 'Lead')} - ${escapeHtml(msg.status)}</strong>
+          <div class="call-meta">${escapeHtml(msg.persona_name || 'AI SMS Assistant')} | ${escapeHtml(msg.phone_number)}</div>
+          <div class="call-summary">${escapeHtml(msg.message_body || '')}</div>
+          ${err}
+        </div>`;
+      }).join('');
+      placeholder.style.display = 'none';
+      history.style.display = 'flex';
+    } catch (err) {
+      history.style.display = 'none';
+      placeholder.style.display = 'flex';
+      placeholder.innerHTML = `<p>${err.message}</p>`;
     }
   }
 
@@ -450,6 +547,7 @@
       if (match) match.classList.add('active');
     }
     if (tool === 'voice') loadVoiceData();
+    if (tool === 'sms') loadSmsData();
     if (tool === 'listing') history.replaceState(null, '', '/');
     else history.replaceState(null, '', '/#' + tool);
   }
@@ -558,6 +656,70 @@
       errEl.style.display = 'block';
     }
     btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Start Call';
+  });
+
+  const smsBody = document.getElementById('sms-message-body');
+  if (smsBody) {
+    smsBody.addEventListener('input', updateSmsCharCount);
+    updateSmsCharCount();
+  }
+
+  document.getElementById('sms-generate-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('sms-generate-btn');
+    const spinner = document.getElementById('sms-generate-spinner');
+    const label = document.getElementById('sms-generate-label');
+    const errEl = document.getElementById('sms-error');
+    const form = document.getElementById('sms-form');
+    errEl.style.display = 'none';
+    btn.disabled = true; spinner.style.display = 'block'; label.textContent = 'Generating...';
+    const data = Object.fromEntries(new FormData(form).entries());
+    try {
+      const result = await fetchJson('/sms/generate', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(data)
+      });
+      if (result) {
+        document.getElementById('sms-message-body').value = result.message_body || '';
+        updateSmsCharCount();
+      }
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.style.display = 'block';
+    }
+    btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Generate SMS';
+  });
+
+  document.getElementById('sms-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = document.getElementById('sms-send-btn');
+    const spinner = document.getElementById('sms-send-spinner');
+    const label = document.getElementById('sms-send-label');
+    const errEl = document.getElementById('sms-error');
+    errEl.style.display = 'none';
+    btn.disabled = true; spinner.style.display = 'block'; label.textContent = 'Sending...';
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    data.compliance_confirmed = Boolean(data.compliance_confirmed);
+    data.send_now = true;
+    try {
+      const result = await fetchJson('/sms/messages', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(data)
+      });
+      if (result && result.warning) {
+        errEl.textContent = result.warning;
+        errEl.style.display = 'block';
+      } else {
+        e.target.reset();
+        updateSmsCharCount();
+      }
+      await loadSmsData();
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.style.display = 'block';
+    }
+    btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Send SMS';
   });
 
   checkSession();

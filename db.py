@@ -92,6 +92,31 @@ def init_db():
             """
         )
         conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sms_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                persona_id INTEGER,
+                provider TEXT NOT NULL DEFAULT 'twilio',
+                provider_message_id TEXT,
+                lead_name TEXT,
+                phone_number TEXT NOT NULL,
+                lead_type TEXT,
+                property_interest TEXT,
+                desired_outcome TEXT,
+                notes TEXT,
+                message_body TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'draft',
+                error_message TEXT,
+                created_at TEXT NOT NULL,
+                sent_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sms_messages_user_created ON sms_messages(user_id, created_at DESC)"
+        )
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_created ON tool_usage(user_id, created_at DESC)"
         )
         conn.execute(
@@ -348,6 +373,66 @@ def list_voice_calls(user_id, limit=20):
         return [dict(row) for row in rows]
 
 
+def create_sms_message(user_id, persona_id, provider, data, status="draft"):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO sms_messages
+                (user_id, persona_id, provider, lead_name, phone_number, lead_type,
+                 property_interest, desired_outcome, notes, message_body, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                persona_id,
+                provider,
+                data.get("lead_name"),
+                data.get("phone_number"),
+                data.get("lead_type"),
+                data.get("property_interest"),
+                data.get("desired_outcome"),
+                data.get("notes"),
+                data.get("message_body"),
+                status,
+                now,
+            ),
+        )
+        return cur.lastrowid
+
+
+def update_sms_message_send_result(message_id, provider_message_id=None, status="sent", error_message=None):
+    sent_at = datetime.now(timezone.utc).isoformat() if status == "sent" else None
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE sms_messages
+            SET provider_message_id = COALESCE(?, provider_message_id),
+                status = ?,
+                error_message = ?,
+                sent_at = COALESCE(?, sent_at)
+            WHERE id = ?
+            """,
+            (provider_message_id, status, error_message, sent_at, message_id),
+        )
+
+
+def list_sms_messages(user_id, limit=20):
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT sm.*, vp.name AS persona_name
+            FROM sms_messages sm
+            LEFT JOIN voice_personas vp ON vp.id = sm.persona_id
+            WHERE sm.user_id = ?
+            ORDER BY sm.created_at DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 def record_tool_usage(user_id, tool_key, event_type="generated", metadata=None):
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
@@ -475,16 +560,58 @@ def get_dashboard_metrics(user_id):
             (user_id,),
         ).fetchall()
 
+        sms_total = conn.execute(
+            "SELECT COUNT(*) AS count FROM sms_messages WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()["count"]
+        sms_7d = conn.execute(
+            "SELECT COUNT(*) AS count FROM sms_messages WHERE user_id = ? AND created_at >= ?",
+            (user_id, since_7d),
+        ).fetchone()["count"]
+        sms_30d = conn.execute(
+            "SELECT COUNT(*) AS count FROM sms_messages WHERE user_id = ? AND created_at >= ?",
+            (user_id, since_30d),
+        ).fetchone()["count"]
+        sms_sent = conn.execute(
+            "SELECT COUNT(*) AS count FROM sms_messages WHERE user_id = ? AND status = 'sent'",
+            (user_id,),
+        ).fetchone()["count"]
+        sms_draft = conn.execute(
+            "SELECT COUNT(*) AS count FROM sms_messages WHERE user_id = ? AND status = 'draft'",
+            (user_id,),
+        ).fetchone()["count"]
+        sms_last = conn.execute(
+            """
+            SELECT created_at FROM sms_messages
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+        sms_last = sms_last["created_at"] if sms_last else None
+        recent_sms = conn.execute(
+            """
+            SELECT lead_name, phone_number, status, message_body, created_at
+            FROM sms_messages
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 5
+            """,
+            (user_id,),
+        ).fetchall()
+
     content_pieces = (listing_total * 3) + (scripts_total * 3)
     return {
         "overview": {
             "listing_generations": listing_total,
             "script_generations": scripts_total,
             "ai_calls": calls_total,
+            "sms_messages": sms_total,
             "appointments_requested": calls_appointments,
             "content_pieces": content_pieces,
-            "activity_7d": listing_7d + scripts_7d + calls_7d,
-            "activity_30d": listing_30d + scripts_30d + calls_30d,
+            "activity_7d": listing_7d + scripts_7d + calls_7d + sms_7d,
+            "activity_30d": listing_30d + scripts_30d + calls_30d + sms_30d,
         },
         "tools": {
             "listing_generator": {
@@ -515,7 +642,17 @@ def get_dashboard_metrics(user_id):
                 "appointments_requested": calls_appointments,
                 "recordings_available": calls_with_recording,
             },
+            "ai_sms": {
+                "label": "AI SMS Assistant",
+                "total": sms_total,
+                "last_7_days": sms_7d,
+                "last_30_days": sms_30d,
+                "last_used_at": sms_last,
+                "sent": sms_sent,
+                "drafts": sms_draft,
+            },
         },
         "recent_usage": [dict(row) for row in recent_usage],
         "recent_calls": [dict(row) for row in recent_calls],
+        "recent_sms": [dict(row) for row in recent_sms],
     }

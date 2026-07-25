@@ -80,17 +80,18 @@
     <a href="/contact">Contact</a>
   </div>
 
-  <nav class="tool-nav">
+    <nav class="tool-nav">
     <a href="/dashboard" class="active">Dashboard</a>
     <a href="/">Listing Generator</a>
     <a href="/#coldcall">Cold Call Scripts</a>
     <a href="/#voice">AI Calling Assistant</a>
+    <a href="/#sms">AI SMS Assistant</a>
     <a href="/tutorial">Tutorial</a>
   </nav>
 
   <main>
     <h1>Dashboard</h1>
-    <p class="muted">Track how you use each TopAI tool to market listings, create scripts, and follow up with leads.</p>
+    <p class="muted">Track how you use each TopAI tool to market listings, create scripts, and follow up with leads. {{ metrics.overview.activity_30d }} actions in the last 30 days ({{ metrics.overview.activity_7d }} in the last 7).</p>
 
     <section class="overview" aria-label="Overview metrics">
       <div class="stat">
@@ -109,9 +110,9 @@
         <div class="sub">{{ metrics.overview.appointments_requested }} appointment requests</div>
       </div>
       <div class="stat">
-        <div class="label">30-Day Activity</div>
-        <div class="value">{{ metrics.overview.activity_30d }}</div>
-        <div class="sub">{{ metrics.overview.activity_7d }} actions in last 7 days</div>
+        <div class="label">AI SMS</div>
+        <div class="value">{{ metrics.overview.sms_messages }}</div>
+        <div class="sub">Generated, drafted, and sent texts</div>
       </div>
     </section>
 
@@ -181,6 +182,30 @@
             </p>
             <a class="cta" href="/#voice">Open AI Calling Assistant</a>
           </div>
+
+          <div class="tool-card">
+            <h3>{{ metrics.tools.ai_sms.label }}</h3>
+            <p class="muted">Consent-based AI SMS outreach with draft generation and optional Twilio sending.</p>
+            <div class="metrics-row">
+              <div class="metric"><div class="k">Total SMS</div><div class="v">{{ metrics.tools.ai_sms.total }}</div></div>
+              <div class="metric"><div class="k">Sent</div><div class="v">{{ metrics.tools.ai_sms.sent }}</div></div>
+              <div class="metric"><div class="k">Drafts</div><div class="v">{{ metrics.tools.ai_sms.drafts }}</div></div>
+            </div>
+            <div class="metrics-row" style="margin-top:10px;">
+              <div class="metric"><div class="k">Last 7 days</div><div class="v">{{ metrics.tools.ai_sms.last_7_days }}</div></div>
+              <div class="metric"><div class="k">Last 30 days</div><div class="v">{{ metrics.tools.ai_sms.last_30_days }}</div></div>
+              <div class="metric"><div class="k">Status</div><div class="v" style="font-size:14px;padding-top:6px;">Active</div></div>
+            </div>
+            <p class="muted" style="margin-top:10px;font-size:13px;">
+              Last used:
+              {% if metrics.tools.ai_sms.last_used_at %}
+                {{ metrics.tools.ai_sms.last_used_at[:16].replace('T', ' ') }} UTC
+              {% else %}
+                Not used yet
+              {% endif %}
+            </p>
+            <a class="cta" href="/#sms">Open AI SMS Assistant</a>
+          </div>
         </div>
       </section>
 
@@ -194,6 +219,7 @@
               <span class="pill">
                 {% if item.tool_key == 'listing_generator' %}Listing Generator
                 {% elif item.tool_key == 'cold_call_scripts' %}Cold Call Scripts
+                {% elif item.tool_key == 'ai_sms' %}AI SMS Assistant
                 {% else %}{{ item.tool_key }}{% endif %}
               </span>
               <div class="muted" style="margin-top:4px;">{{ item.event_type }} · {{ item.created_at[:16].replace('T', ' ') }} UTC</div>
@@ -225,6 +251,27 @@
           <p class="empty">No AI calls yet. Start a consent-based call to see outcomes here.</p>
           {% endif %}
           <a class="cta" href="/#voice">View calling tool</a>
+        </div>
+
+        <div class="card">
+          <h2>Recent SMS</h2>
+          {% if metrics.recent_sms %}
+          <ul class="activity">
+            {% for msg in metrics.recent_sms %}
+            <li>
+              <strong>{{ msg.lead_name or 'Lead' }}</strong>
+              <span class="pill">{{ msg.status }}</span>
+              <div class="muted" style="margin-top:4px;">{{ msg.phone_number }} · {{ msg.created_at[:16].replace('T', ' ') }} UTC</div>
+              {% if msg.message_body %}
+              <div style="margin-top:6px;">{{ msg.message_body[:160] }}{% if msg.message_body|length > 160 %}…{% endif %}</div>
+              {% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="empty">No SMS activity yet. Generate or send a text to track it here.</p>
+          {% endif %}
+          <a class="cta" href="/#sms">View SMS tool</a>
         </div>
       </aside>
     </div>

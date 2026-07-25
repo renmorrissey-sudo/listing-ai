@@ -11,6 +11,9 @@ from werkzeug.exceptions import HTTPException
 import auth
 import config
 import db
+from sms_prompts import build_sms_prompt
+from sms_provider import SmsProviderError, get_sms_provider
+from sms_validation import validate_sms_generate_payload, validate_sms_send_payload
 from validation import validate_listing_payload, validate_script_payload
 from voice_prompts import build_voice_call_prompt
 from voice_provider import VoiceProviderError, get_voice_provider, normalize_voice_webhook
@@ -72,7 +75,7 @@ def set_security_headers(response):
 
 @app.errorhandler(HTTPException)
 def handle_http_exception(error):
-    api_paths = ("/generate", "/generate-script", "/verify", "/session-status", "/webhook", "/voice")
+    api_paths = ("/generate", "/generate-script", "/verify", "/session-status", "/webhook", "/voice", "/sms")
     if request.path.startswith(api_paths):
         return jsonify({"error": error.description}), error.code
     return error
@@ -552,6 +555,127 @@ def start_voice_call():
         "provider_call_id": result["provider_call_id"],
         "status": "started",
     }), 201
+
+
+@app.route("/sms/messages")
+@auth.subscription_required
+def sms_messages():
+    user = auth.get_current_user()
+    messages = db.list_sms_messages(user["id"])
+    provider = get_sms_provider()
+    return jsonify({
+        "send_configured": provider.is_configured(),
+        "messages": [
+            {
+                "id": m["id"],
+                "persona_name": m.get("persona_name"),
+                "lead_name": m.get("lead_name"),
+                "phone_number": m.get("phone_number"),
+                "lead_type": m.get("lead_type"),
+                "status": m.get("status"),
+                "message_body": m.get("message_body"),
+                "error_message": m.get("error_message"),
+                "created_at": m.get("created_at"),
+                "sent_at": m.get("sent_at"),
+            }
+            for m in messages
+        ],
+    })
+
+
+@app.route("/sms/generate", methods=["POST"])
+@auth.subscription_required
+@limiter.limit("20 per minute", key_func=_user_rate_limit_key)
+def generate_sms():
+    user = auth.get_current_user()
+    data = request.get_json(silent=True)
+    cleaned, error = validate_sms_generate_payload(data)
+    if error:
+        return jsonify({"error": error}), 400
+
+    persona = db.get_voice_persona(cleaned["persona_id"], user["id"])
+    if not persona:
+        return jsonify({"error": "Selected persona was not found."}), 404
+
+    try:
+        message = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=300,
+            messages=[{"role": "user", "content": build_sms_prompt(persona, cleaned)}],
+        )
+        body = message.content[0].text.strip().strip('"').strip("'")
+        db.record_tool_usage(user["id"], "ai_sms", "generated")
+        return jsonify({"message_body": body})
+    except Exception:
+        logger.exception("SMS generation failed")
+        return jsonify({"error": "Could not generate SMS. Please try again."}), 500
+
+
+@app.route("/sms/messages", methods=["POST"])
+@auth.subscription_required
+@limiter.limit(lambda: f"{config.SMS_DAILY_LIMIT} per day", key_func=_user_rate_limit_key)
+def send_sms_message():
+    user = auth.get_current_user()
+    data = request.get_json(silent=True)
+    cleaned, error = validate_sms_send_payload(data)
+    if error:
+        return jsonify({"error": error}), 400
+
+    persona = db.get_voice_persona(cleaned["persona_id"], user["id"])
+    if not persona:
+        return jsonify({"error": "Selected persona was not found."}), 404
+
+    message_id = db.create_sms_message(
+        user_id=user["id"],
+        persona_id=persona["id"],
+        provider=config.SMS_PROVIDER,
+        data=cleaned,
+        status="draft",
+    )
+    db.record_tool_usage(user["id"], "ai_sms", "saved")
+
+    provider = get_sms_provider()
+    if not cleaned.get("send_now"):
+        return jsonify({
+            "id": message_id,
+            "status": "draft",
+            "message_body": cleaned["message_body"],
+            "send_configured": provider.is_configured(),
+        }), 201
+
+    if not provider.is_configured():
+        db.update_sms_message_send_result(
+            message_id,
+            status="draft",
+            error_message="Saved as draft. Add Twilio SMS credentials to enable sending.",
+        )
+        return jsonify({
+            "id": message_id,
+            "status": "draft",
+            "message_body": cleaned["message_body"],
+            "send_configured": False,
+            "warning": "SMS saved as draft. Add Twilio credentials in Railway to send texts.",
+        }), 201
+
+    try:
+        result = provider.send_sms(cleaned["phone_number"], cleaned["message_body"])
+        db.update_sms_message_send_result(
+            message_id,
+            provider_message_id=result["provider_message_id"],
+            status="sent",
+        )
+        db.record_tool_usage(user["id"], "ai_sms", "sent")
+        return jsonify({
+            "id": message_id,
+            "status": "sent",
+            "provider_message_id": result["provider_message_id"],
+            "message_body": cleaned["message_body"],
+            "send_configured": True,
+        }), 201
+    except SmsProviderError as exc:
+        logger.warning("SMS send failed: %s", exc)
+        db.update_sms_message_send_result(message_id, status="failed", error_message=str(exc))
+        return jsonify({"error": str(exc), "id": message_id, "status": "failed"}), 503
 
 
 @app.route("/webhook/voice", methods=["POST"])

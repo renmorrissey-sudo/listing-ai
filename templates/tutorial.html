@@ -78,6 +78,7 @@
     <a href="/">Listing Generator</a>
     <a href="/#coldcall">Cold Call Scripts</a>
     <a href="/#voice">AI Calling Assistant</a>
+    <a href="/#sms">AI SMS Assistant</a>
     <a href="/tutorial" class="active">Tutorial</a>
   </nav>
 
@@ -89,6 +90,7 @@
         <a href="#listing">1. Listing Generator</a>
         <a href="#scripts">2. Cold Call Scripts</a>
         <a href="#calling">3. AI Calling Assistant</a>
+        <a href="#sms">4. AI SMS Assistant</a>
       </div>
       <a class="cta" href="/">Open the tools</a>
       <a class="cta secondary" href="#listing">Start with Listing Generator</a>
@@ -182,6 +184,32 @@
       <a class="cta" href="/#voice">Go to AI Calling Assistant</a>
     </section>
 
+    <section class="section" id="sms">
+      <div class="badge">Tool 4</div>
+      <h2>AI SMS Assistant</h2>
+      <p class="muted">Use this for consent-based one-to-one text outreach. Generate a short SMS, edit it, then send through Twilio when configured.</p>
+
+      <h3>Before you start</h3>
+      <ul>
+        <li>Confirm the lead consented to SMS contact.</li>
+        <li>Follow TCPA, DNC, carrier, and brokerage rules.</li>
+        <li>Include opt-out language when required.</li>
+      </ul>
+
+      <h3>Step-by-step</h3>
+      <ol>
+        <li>Choose <strong>AI SMS Assistant</strong>.</li>
+        <li>Select a persona and enter the lead phone number.</li>
+        <li>Add lead type, property interest, desired outcome, and notes.</li>
+        <li>Click <strong>Generate SMS</strong>, then edit the draft if needed.</li>
+        <li>Confirm compliance and click <strong>Send SMS</strong>.</li>
+        <li>Review the message in <strong>Recent SMS</strong>.</li>
+      </ol>
+
+      <div class="tip">Tip: If Twilio is not configured yet, messages are saved as drafts so you can still practice and track usage. Add SMS_TWILIO_ACCOUNT_SID, SMS_TWILIO_AUTH_TOKEN, and SMS_FROM_NUMBER in Railway to enable sending.</div>
+      <a class="cta" href="/#sms">Go to AI SMS Assistant</a>
+    </section>
+
     <section class="section">
       <h2>Recommended workflow</h2>
       <ol>
@@ -189,6 +217,7 @@
         <li>Publish or send the reviewed marketing copy.</li>
         <li>Generate call scripts for your target farm or lead type.</li>
         <li>Use AI Calling Assistant for consented follow-up calls.</li>
+        <li>Use AI SMS Assistant for short consented text follow-ups.</li>
         <li>Review summaries and book the appointments that come back.</li>
       </ol>
       <p class="muted">Need help? Email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.</p>
