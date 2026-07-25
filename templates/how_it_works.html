@@ -74,6 +74,19 @@
       <h1>How {{ product_name }} works</h1>
       <p class="muted">{{ product_name }} is operated by {{ business_name }}. It is a paid SaaS web app that helps real estate professionals create marketing and prospecting content with AI, and optionally place consent-based AI follow-up calls.</p>
       <p class="muted">Customers subscribe through Stripe, open the web app, verify access with their subscriber email, enter property or lead details, and receive draft outputs they can copy, review, and use in their own real estate workflow.</p>
+      <div class="video-wrap" style="margin: 22px 0 8px;">
+        <video
+          controls
+          playsinline
+          preload="metadata"
+          poster="{{ url_for('static', filename='product/topai-how-it-works-poster.jpg') }}"
+          style="width:100%; max-width:100%; height:auto; border-radius:12px; border:1px solid #dde4f0; background:#0f172a; display:block;"
+        >
+          <source src="{{ url_for('static', filename='product/topai-how-it-works.mp4') }}" type="video/mp4" />
+          Your browser does not support the video tag.
+        </video>
+        <p class="caption">Watch this short cartoon overview of how TopAI Real Estate Tools helps agents source more leads and market their services with AI.</p>
+      </div>
       <a class="cta" href="/features">Browse features</a>
       <a class="cta secondary" href="/pricing">View pricing</a>
     </section>

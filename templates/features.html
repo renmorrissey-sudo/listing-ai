@@ -75,6 +75,19 @@
       <h1>Features of {{ product_name }}</h1>
       <p class="muted">{{ product_name }} is a subscription SaaS web application for real estate agents and professionals. Subscribers log in with the email used at checkout and use AI tools to draft listing marketing content, prospecting scripts, and consent-based AI calling workflows from details they enter.</p>
       <p class="muted">This page is a public product overview for customers and payment processors reviewing what the software does, how it is used, and what is included in the monthly subscription.</p>
+      <div class="video-wrap" style="margin: 22px 0 8px;">
+        <video
+          controls
+          playsinline
+          preload="metadata"
+          poster="{{ url_for('static', filename='product/topai-how-it-works-poster.jpg') }}"
+          style="width:100%; max-width:100%; height:auto; border-radius:12px; border:1px solid #dde4f0; background:#0f172a; display:block;"
+        >
+          <source src="{{ url_for('static', filename='product/topai-how-it-works.mp4') }}" type="video/mp4" />
+          Your browser does not support the video tag.
+        </video>
+        <p class="caption">Product overview video: how agents use TopAI Real Estate Tools to create listing content, social posts, scripts, and AI calling workflows.</p>
+      </div>
       <a class="cta" href="/pricing">View pricing</a>
       <a class="cta secondary" href="/how-it-works">See how it works</a>
     </section>
