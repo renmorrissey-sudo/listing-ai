@@ -66,9 +66,14 @@
     .call-meta { color: #667; font-size: 12px; margin: 3px 0 8px; }
     .call-summary { white-space: pre-wrap; color: #2a2a3e; }
     .call-link { color: #4f8ef7; font-weight: 600; text-decoration: none; }
-    .gate-overlay { position: fixed; inset: 0; background: rgba(20,20,40,0.97); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+    .gate-overlay { position: fixed; inset: 0; background: rgba(20,20,40,0.97); display: flex; align-items: flex-start; justify-content: center; z-index: 1000; overflow-y: auto; padding: 28px 16px 40px; }
     .gate-overlay.hidden { display: none; }
-    .gate-card { background: white; border-radius: 16px; padding: 44px 40px 36px; max-width: 420px; width: 92%; text-align: center; box-shadow: 0 24px 64px rgba(0,0,0,0.4); }
+    .gate-stack { width: min(720px, 100%); display: flex; flex-direction: column; gap: 18px; margin: auto 0; }
+    .gate-card { background: white; border-radius: 16px; padding: 44px 40px 36px; width: 100%; max-width: 420px; margin: 0 auto; text-align: center; box-shadow: 0 24px 64px rgba(0,0,0,0.4); }
+    .gate-video-card { background: white; border-radius: 16px; padding: 18px; width: 100%; box-shadow: 0 24px 64px rgba(0,0,0,0.35); text-align: left; }
+    .gate-video-card h3 { font-size: 16px; font-weight: 700; color: #1a1a2e; margin: 0 0 6px; }
+    .gate-video-card p { font-size: 13px; color: #667; margin: 0 0 12px; line-height: 1.45; }
+    .gate-video-card video { width: 100%; height: auto; border-radius: 10px; border: 1px solid #dde4f0; background: #0f172a; display: block; }
     .gate-logo { font-size: 22px; font-weight: 700; color: #1a1a2e; margin-bottom: 6px; }
     .gate-logo span { color: #4f8ef7; }
     .gate-tagline { font-size: 12px; color: #8899aa; margin-bottom: 28px; }
@@ -126,25 +131,40 @@
 <body>
 
 <div id="gate" class="gate-overlay">
-  <div class="gate-card">
-    <div class="gate-logo">TopAI <span>Real Estate Tools</span></div>
-    <div class="gate-tagline">AI-powered content for real estate agents</div>
-    <h2>Subscriber Access</h2>
-    <p>Enter the email address you used to subscribe.</p>
-    <input type="email" class="gate-input" id="gate-email" placeholder="you@email.com" autocomplete="email" />
-    <div class="gate-error" id="gate-error"></div>
-    <button class="gate-btn" id="gate-submit">Access Tools</button>
-    <div class="gate-divider">don't have a subscription?</div>
-    <a class="gate-subscribe-link" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00?prefilled_promo_code=TRIAL50" target="_blank">Start trial &mdash; 50% off &rArr;</a>
-    <div class="gate-links">
-      <div>Sold by {{ business_name }}</div>
-      <a href="/features">Features</a>
-      <a href="/how-it-works">How It Works</a>
-      <a href="/pricing">Pricing</a>
-      <a href="/terms">Terms</a>
-      <a href="/privacy">Privacy</a>
-      <a href="/refund-policy">Refunds</a>
-      <a href="/contact">Contact</a>
+  <div class="gate-stack">
+    <div class="gate-card">
+      <div class="gate-logo">TopAI <span>Real Estate Tools</span></div>
+      <div class="gate-tagline">AI-powered content for real estate agents</div>
+      <h2>Subscriber Access</h2>
+      <p>Enter the email address you used to subscribe.</p>
+      <input type="email" class="gate-input" id="gate-email" placeholder="you@email.com" autocomplete="email" />
+      <div class="gate-error" id="gate-error"></div>
+      <button class="gate-btn" id="gate-submit">Access Tools</button>
+      <div class="gate-divider">don't have a subscription?</div>
+      <a class="gate-subscribe-link" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00?prefilled_promo_code=TRIAL50" target="_blank">Start trial &mdash; 50% off &rArr;</a>
+      <div class="gate-links">
+        <div>Sold by {{ business_name }}</div>
+        <a href="/features">Features</a>
+        <a href="/how-it-works">How It Works</a>
+        <a href="/pricing">Pricing</a>
+        <a href="/terms">Terms</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/refund-policy">Refunds</a>
+        <a href="/contact">Contact</a>
+      </div>
+    </div>
+    <div class="gate-video-card">
+      <h3>See how TopAI Real Estate Tools works</h3>
+      <p>A short overview of the AI tools agents use to market listings, grow leads, and follow up with prospects.</p>
+      <video
+        controls
+        playsinline
+        preload="metadata"
+        poster="{{ url_for('static', filename='product/topai-how-it-works-poster.jpg') }}"
+      >
+        <source src="{{ url_for('static', filename='product/topai-how-it-works.mp4') }}" type="video/mp4" />
+        Your browser does not support the video tag.
+      </video>
     </div>
   </div>
 </div>
