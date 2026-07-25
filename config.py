@@ -52,11 +52,11 @@ def _env_strip(name, default=None):
 
 
 SMS_PROVIDER = (_env("SMS_PROVIDER", "twilio") or "twilio").lower().strip()
-# Outbound REST: API Key SID + Secret + Account SID. Never use Auth Token to send SMS.
+# TEMP diagnostic outbound auth: Account SID + Auth Token (not API keys).
 TWILIO_ACCOUNT_SID = _env_strip("TWILIO_ACCOUNT_SID") or _env_strip("SMS_TWILIO_ACCOUNT_SID")
 TWILIO_API_KEY_SID = _env_strip("TWILIO_API_KEY_SID")
 TWILIO_API_KEY_SECRET = _env_strip("TWILIO_API_KEY_SECRET")
-# Auth Token is only for Twilio RequestValidator on inbound/status webhooks.
+# Used for outbound SMS (temporary diagnostic) and webhook RequestValidator.
 TWILIO_AUTH_TOKEN = _env_strip("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = _env_strip("TWILIO_PHONE_NUMBER") or _env_strip("SMS_FROM_NUMBER")
 SMS_DAILY_LIMIT = int(_env("SMS_DAILY_LIMIT", "50"))
@@ -85,3 +85,13 @@ def validate_config():
     if missing:
         print(f"FATAL: Missing required environment variables: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
+
+    # Safe Twilio startup checks — never log credential values.
+    account_sid_ok = bool(TWILIO_ACCOUNT_SID and TWILIO_ACCOUNT_SID.startswith("AC"))
+    auth_token_present = bool(TWILIO_AUTH_TOKEN)
+    print(
+        "Twilio startup check: "
+        f"account_sid_starts_with_AC={account_sid_ok} "
+        f"auth_token_present={auth_token_present}",
+        file=sys.stderr,
+    )
