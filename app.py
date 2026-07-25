@@ -482,13 +482,39 @@ def voice_calls():
                 "appointment_requested": bool(c.get("appointment_requested")),
                 "summary": c.get("summary"),
                 "transcript": c.get("transcript"),
-                "recording_url": c.get("recording_url"),
+                # Private Vapi/R2 URLs are not browser-playable; expose our auth proxy instead.
+                "recording_url": (
+                    f"/voice/calls/{c['id']}/recording"
+                    if c.get("recording_url") and c.get("provider_call_id")
+                    else None
+                ),
                 "created_at": c.get("created_at"),
                 "completed_at": c.get("completed_at"),
             }
             for c in calls
         ]
     })
+
+
+@app.route("/voice/calls/<int:call_id>/recording")
+@auth.subscription_required
+def voice_call_recording(call_id):
+    user = auth.get_current_user()
+    call = db.get_voice_call(call_id, user["id"])
+    if not call:
+        return jsonify({"error": "Call not found."}), 404
+    if not call.get("provider_call_id"):
+        return jsonify({"error": "Recording is not available for this call."}), 404
+    if not call.get("recording_url"):
+        return jsonify({"error": "Recording is not available for this call yet."}), 404
+
+    try:
+        download_url = get_voice_provider().get_recording_download_url(call["provider_call_id"])
+    except VoiceProviderError as exc:
+        logger.warning("Recording fetch failed for call %s: %s", call_id, exc)
+        return jsonify({"error": str(exc)}), 503
+
+    return redirect(download_url, code=302)
 
 
 @app.route("/voice/calls", methods=["POST"])
@@ -538,10 +564,16 @@ def voice_webhook():
 
     payload = request.get_json(silent=True) or {}
     normalized = normalize_voice_webhook(payload)
-    if not normalized.get("provider_call_id"):
+    if not normalized.get("provider_call_id") and not normalized.get("call_id"):
         return jsonify({"error": "Missing provider call ID."}), 400
 
-    db.update_voice_call_from_webhook(**normalized)
+    updated = db.update_voice_call_from_webhook(**normalized)
+    if not updated:
+        logger.warning(
+            "Voice webhook did not match an existing call: provider_call_id=%s call_id=%s",
+            normalized.get("provider_call_id"),
+            normalized.get("call_id"),
+        )
     return jsonify({"received": True}), 200
 
 

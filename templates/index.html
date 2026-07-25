@@ -255,6 +255,8 @@
 </div>
 
 <script>
+  let voiceCallsRefreshTimer = null;
+
   async function checkSession() {
     try {
       const res = await fetch('/session-status');
@@ -318,10 +320,11 @@
     const placeholder = document.getElementById('voice-placeholder');
     if (!history || !placeholder) return;
     try {
-      const data = await fetchJson('/voice/calls');
+      const data = await fetchJson('/voice/calls', {cache: 'no-store'});
       if (!data || !data.calls.length) {
         history.style.display = 'none';
         placeholder.style.display = 'flex';
+        stopVoiceCallRefresh();
         return;
       }
       history.innerHTML = data.calls.map(call => {
@@ -336,11 +339,29 @@
       }).join('');
       placeholder.style.display = 'none';
       history.style.display = 'flex';
+      updateVoiceCallRefresh(data.calls);
     } catch (err) {
       history.style.display = 'none';
       placeholder.style.display = 'flex';
       placeholder.innerHTML = `<p>${err.message}</p>`;
+      stopVoiceCallRefresh();
     }
+  }
+
+  function updateVoiceCallRefresh(calls) {
+    const terminalStatuses = new Set(['completed', 'failed', 'canceled', 'cancelled']);
+    const hasActiveCall = calls.some(call => !terminalStatuses.has(String(call.status || '').toLowerCase()));
+    if (hasActiveCall && !voiceCallsRefreshTimer) {
+      voiceCallsRefreshTimer = setInterval(loadVoiceCalls, 10000);
+    } else if (!hasActiveCall) {
+      stopVoiceCallRefresh();
+    }
+  }
+
+  function stopVoiceCallRefresh() {
+    if (!voiceCallsRefreshTimer) return;
+    clearInterval(voiceCallsRefreshTimer);
+    voiceCallsRefreshTimer = null;
   }
 
   document.getElementById('gate-submit').addEventListener('click', async () => {

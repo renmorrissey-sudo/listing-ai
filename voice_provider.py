@@ -9,6 +9,11 @@ class VoiceProviderError(Exception):
     pass
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class VapiVoiceProvider:
     api_url = "https://api.vapi.ai/call"
 
@@ -83,6 +88,51 @@ class VapiVoiceProvider:
             "raw": result,
         }
 
+    def get_recording_download_url(self, provider_call_id, kind="mono"):
+        if not self.api_key:
+            raise VoiceProviderError("AI calling is not configured yet.")
+        if not provider_call_id:
+            raise VoiceProviderError("Missing provider call ID for recording.")
+
+        kinds = [kind] if kind != "mono" else ["mono", "stereo"]
+        last_error = None
+        for candidate in kinds:
+            try:
+                return self._fetch_recording_redirect(provider_call_id, candidate)
+            except VoiceProviderError as exc:
+                last_error = exc
+        raise last_error or VoiceProviderError("Could not retrieve recording.")
+
+    def _fetch_recording_redirect(self, provider_call_id, kind):
+        artifact = "mono-recording" if kind == "mono" else f"{kind}-recording"
+        url = f"{self.api_url}/{provider_call_id}/{artifact}"
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Accept": "*/*",
+                "User-Agent": "TopAI-Real-Estate-Tools/1.0",
+            },
+            method="GET",
+        )
+        opener = urllib.request.build_opener(_NoRedirect)
+        try:
+            with opener.open(request, timeout=20) as response:
+                location = response.headers.get("Location")
+                if response.status in (301, 302, 303, 307, 308) and location:
+                    return location
+                if 200 <= response.status < 300 and response.geturl():
+                    return response.geturl()
+                raise VoiceProviderError("Voice provider did not return a recording URL.")
+        except urllib.error.HTTPError as exc:
+            location = exc.headers.get("Location") if exc.headers else None
+            if exc.code in (301, 302, 303, 307, 308) and location:
+                return location
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise VoiceProviderError(f"Could not retrieve recording: {detail or exc.reason}") from exc
+        except urllib.error.URLError as exc:
+            raise VoiceProviderError("Could not reach the voice provider for the recording.") from exc
+
 
 def get_voice_provider():
     if config.VOICE_PROVIDER != "vapi":
@@ -90,10 +140,42 @@ def get_voice_provider():
     return VapiVoiceProvider()
 
 
+def _extract_recording_url(message, payload, call, artifact):
+    recording = artifact.get("recording") or {}
+    if isinstance(recording, str):
+        recording_url = recording
+    elif isinstance(recording, dict):
+        mono = recording.get("mono")
+        stereo = recording.get("stereo")
+        recording_url = (
+            recording.get("url")
+            or recording.get("stereoUrl")
+            or recording.get("monoUrl")
+            or (mono if isinstance(mono, str) else None)
+            or (stereo if isinstance(stereo, str) else None)
+            or (mono.get("combinedUrl") if isinstance(mono, dict) else None)
+            or (stereo.get("combinedUrl") if isinstance(stereo, dict) else None)
+        )
+    else:
+        recording_url = None
+
+    return (
+        recording_url
+        or artifact.get("recordingUrl")
+        or artifact.get("stereoRecordingUrl")
+        or message.get("recordingUrl")
+        or message.get("stereoRecordingUrl")
+        or message.get("recording_url")
+        or payload.get("recording_url")
+        or call.get("recordingUrl")
+    )
+
+
 def normalize_voice_webhook(payload):
     message = payload.get("message", payload)
     call = message.get("call") or payload.get("call") or {}
     artifact = message.get("artifact") or payload.get("artifact") or {}
+    metadata = message.get("metadata") or call.get("metadata") or payload.get("metadata") or {}
 
     provider_call_id = (
         call.get("id")
@@ -101,22 +183,18 @@ def normalize_voice_webhook(payload):
         or payload.get("call_id")
         or payload.get("id")
     )
+    internal_call_id = metadata.get("topai_call_id") or metadata.get("call_id")
     event_type = message.get("type") or payload.get("event") or payload.get("type")
 
     transcript = artifact.get("transcript") or payload.get("transcript")
     if not transcript and isinstance(message.get("transcript"), str):
         transcript = message.get("transcript")
 
-    recording = artifact.get("recording") or {}
-    recording_url = (
-        recording.get("url")
-        or recording.get("stereoUrl")
-        or payload.get("recording_url")
-        or call.get("recordingUrl")
-    )
+    recording_url = _extract_recording_url(message, payload, call, artifact)
 
     summary = (
-        message.get("summary")
+        (message.get("analysis") or {}).get("summary")
+        or message.get("summary")
         or payload.get("summary")
         or call.get("summary")
         or (call.get("analysis") or {}).get("summary")
@@ -136,9 +214,10 @@ def normalize_voice_webhook(payload):
             appointment_requested = True
             break
 
-    status = "completed" if event_type in ("end-of-call-report", "call_ended", "call_analyzed") else (outcome or "updated")
+    status = "completed" if event_type in ("end-of-call-report", "call_ended", "call_analyzed") else None
 
     return {
+        "call_id": internal_call_id,
         "provider_call_id": provider_call_id,
         "status": status,
         "outcome": outcome,

@@ -253,32 +253,65 @@ def update_voice_call_provider(call_id, provider_call_id, status):
         )
 
 
-def update_voice_call_from_webhook(provider_call_id, status=None, outcome=None, transcript=None, summary=None, recording_url=None, appointment_requested=False):
+def update_voice_call_from_webhook(call_id=None, provider_call_id=None, status=None, outcome=None, transcript=None, summary=None, recording_url=None, appointment_requested=False):
     completed_at = datetime.now(timezone.utc).isoformat()
+    appointment_flag = 1 if appointment_requested else 0
+    update_sql = """
+        UPDATE voice_calls
+        SET provider_call_id = COALESCE(?, provider_call_id),
+            status = COALESCE(?, status),
+            outcome = COALESCE(?, outcome),
+            transcript = COALESCE(?, transcript),
+            summary = COALESCE(?, summary),
+            recording_url = COALESCE(?, recording_url),
+            appointment_requested = CASE WHEN ? = 1 THEN 1 ELSE appointment_requested END,
+            completed_at = CASE WHEN ? = 'completed' THEN COALESCE(completed_at, ?) ELSE completed_at END
+        WHERE {where_clause}
+        """
+
+    params = (
+        provider_call_id,
+        status,
+        outcome,
+        transcript,
+        summary,
+        recording_url,
+        appointment_flag,
+        status,
+        completed_at,
+    )
+
     with get_db() as conn:
-        conn.execute(
+        if provider_call_id:
+            cur = conn.execute(
+                update_sql.format(where_clause="provider_call_id = ?"),
+                params + (provider_call_id,),
+            )
+            if cur.rowcount:
+                return cur.rowcount
+
+        if call_id:
+            cur = conn.execute(
+                update_sql.format(where_clause="id = ?"),
+                params + (call_id,),
+            )
+            return cur.rowcount
+
+        return 0
+
+
+def get_voice_call(call_id, user_id):
+    with get_db() as conn:
+        row = conn.execute(
             """
-            UPDATE voice_calls
-            SET status = COALESCE(?, status),
-                outcome = COALESCE(?, outcome),
-                transcript = COALESCE(?, transcript),
-                summary = COALESCE(?, summary),
-                recording_url = COALESCE(?, recording_url),
-                appointment_requested = ?,
-                completed_at = ?
-            WHERE provider_call_id = ?
+            SELECT vc.*, vp.name AS persona_name
+            FROM voice_calls vc
+            LEFT JOIN voice_personas vp ON vp.id = vc.persona_id
+            WHERE vc.id = ? AND vc.user_id = ?
             """,
-            (
-                status,
-                outcome,
-                transcript,
-                summary,
-                recording_url,
-                1 if appointment_requested else 0,
-                completed_at,
-                provider_call_id,
-            ),
-        )
+            (call_id, user_id),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def list_voice_calls(user_id, limit=20):
