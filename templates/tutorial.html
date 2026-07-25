@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tutorial - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  <meta name="description" content="Subscriber tutorial for using TopAI Real Estate Tools: Listing Generator, Cold Call Scripts, and AI Calling Assistant." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; line-height: 1.65; }
+    header { background: #1a1a2e; color: white; padding: 16px 32px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    .logo { font-size: 20px; font-weight: 700; }
+    .logo span { color: #4f8ef7; }
+    .tagline { font-size: 12px; color: #8899aa; margin-top: 2px; }
+    .subscriber-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .subscriber-email { font-size: 12px; color: #22c55e; font-weight: 600; }
+    .billing-link { border: 1.5px solid #4f8ef7; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #dce8ff; text-decoration: none; }
+    .logout-btn { background: none; border: 1.5px solid #445; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #aab; cursor: pointer; }
+    .public-nav { background: #eef2f7; border-bottom: 1px solid #dde4f0; padding: 9px 32px; font-size: 13px; }
+    .public-nav a { color: #445; text-decoration: none; margin-right: 18px; font-weight: 600; }
+    .public-nav a:hover, .public-nav a.active { color: #4f8ef7; }
+    .tool-nav { background: #232344; display: flex; padding: 0 32px; gap: 4px; }
+    .tool-nav a { padding: 12px 20px; font-size: 13px; font-weight: 600; color: #8899bb; text-decoration: none; border-bottom: 3px solid transparent; }
+    .tool-nav a:hover { color: #ccd; }
+    .tool-nav a.active { color: #4f8ef7; border-bottom-color: #4f8ef7; }
+    main { max-width: 920px; margin: 28px auto 40px; padding: 0 20px; }
+    .hero, .section { background: white; border-radius: 14px; padding: 28px; box-shadow: 0 1px 5px rgba(0,0,0,0.08); margin-bottom: 18px; }
+    h1 { font-size: 30px; margin: 0 0 10px; line-height: 1.2; }
+    h2 { font-size: 20px; margin: 0 0 10px; }
+    h3 { font-size: 15px; margin: 18px 0 8px; }
+    .muted { color: #667; }
+    .toc { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 16px; }
+    .toc a { display: block; background: #f8fafc; border: 1px solid #dde4f0; border-radius: 10px; padding: 12px; text-decoration: none; color: #1a1a2e; font-weight: 600; font-size: 13px; }
+    .toc a:hover { border-color: #4f8ef7; color: #4f8ef7; }
+    .badge { display: inline-block; background: #eef5ff; color: #1d4ed8; border: 1px solid #cfe0ff; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 700; margin-bottom: 8px; }
+    ol, ul { padding-left: 20px; margin: 8px 0 0; }
+    li { margin-bottom: 7px; }
+    .tip { background: #fff8e6; border: 1px solid #f0d98c; color: #7a5c00; border-radius: 8px; padding: 12px; font-size: 13px; margin-top: 14px; }
+    .cta { display: inline-block; margin-top: 14px; background: #4f8ef7; color: white; border-radius: 9px; padding: 11px 16px; font-weight: 700; text-decoration: none; }
+    .cta.secondary { background: white; color: #1d4ed8; border: 1.5px solid #cfe0ff; margin-left: 8px; }
+    footer { max-width: 920px; margin: 0 auto 36px; padding: 0 20px; color: #667; font-size: 14px; }
+    footer a { color: #4f8ef7; }
+    @media (max-width: 720px) {
+      header, .public-nav, .tool-nav { padding-left: 16px; padding-right: 16px; }
+      .toc { grid-template-columns: 1fr; }
+      .tool-nav { overflow-x: auto; }
+      .tool-nav a { flex: 0 0 auto; white-space: nowrap; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="logo">TopAI <span>Real Estate Tools</span></div>
+      <div class="tagline">Subscriber tutorial</div>
+    </div>
+    <div class="subscriber-info">
+      <span class="subscriber-email">&#10003; {{ email }}</span>
+      {% if has_billing_portal %}
+      <a class="billing-link" href="/billing/portal">Manage billing</a>
+      {% endif %}
+      <button class="logout-btn" type="button" onclick="doLogout()">Sign out</button>
+    </div>
+  </header>
+
+  <div class="public-nav">
+    <a href="/tutorial" class="active">Tutorial</a>
+    <a href="/terms">Terms</a>
+    <a href="/privacy">Privacy</a>
+    <a href="/refund-policy">Refund Policy</a>
+    <a href="/contact">Contact</a>
+  </div>
+
+  <nav class="tool-nav">
+    <a href="/">Listing Generator</a>
+    <a href="/#coldcall">Cold Call Scripts</a>
+    <a href="/#voice">AI Calling Assistant</a>
+    <a href="/tutorial" class="active">Tutorial</a>
+  </nav>
+
+  <main>
+    <section class="hero">
+      <h1>How to use your TopAI tools</h1>
+      <p class="muted">This tutorial is for paid subscribers. Follow each section to generate listing marketing content, prospecting scripts, and consent-based AI follow-up calls.</p>
+      <div class="toc">
+        <a href="#listing">1. Listing Generator</a>
+        <a href="#scripts">2. Cold Call Scripts</a>
+        <a href="#calling">3. AI Calling Assistant</a>
+      </div>
+      <a class="cta" href="/">Open the tools</a>
+      <a class="cta secondary" href="#listing">Start with Listing Generator</a>
+    </section>
+
+    <section class="section" id="listing">
+      <div class="badge">Tool 1</div>
+      <h2>Listing Generator</h2>
+      <p class="muted">Use this when you need listing copy, social posts, and a prospect email from one property.</p>
+
+      <h3>Step-by-step</h3>
+      <ol>
+        <li>Open the app and choose <strong>Listing Generator</strong>.</li>
+        <li>Enter the property address, price, beds, baths, and square footage.</li>
+        <li>Add optional details: year built, garage, pool, key features, and neighborhood highlights.</li>
+        <li>Click <strong>Generate Content</strong>.</li>
+        <li>Review the three tabs: <strong>Listing</strong>, <strong>Social Posts</strong>, and <strong>Email</strong>.</li>
+        <li>Click <strong>Copy</strong> on any draft, then paste it into your MLS, CRM, email tool, or social scheduler.</li>
+      </ol>
+
+      <h3>What each output is for</h3>
+      <ul>
+        <li><strong>Listing:</strong> MLS-style property description draft.</li>
+        <li><strong>Social Posts:</strong> Platform-ready promotional copy for Instagram, Facebook, and X.</li>
+        <li><strong>Email:</strong> Short prospect announcement with a subject line and call to action.</li>
+      </ul>
+
+      <div class="tip">Tip: The more specific your features and neighborhood notes are, the stronger the drafts will sound. Always review AI copy before publishing.</div>
+      <a class="cta" href="/">Go to Listing Generator</a>
+    </section>
+
+    <section class="section" id="scripts">
+      <div class="badge">Tool 2</div>
+      <h2>Cold Call Scripts</h2>
+      <p class="muted">Use this to prepare prospecting conversations before you call or leave a voicemail.</p>
+
+      <h3>Step-by-step</h3>
+      <ol>
+        <li>Choose <strong>Cold Call Scripts</strong> in the tool navigation.</li>
+        <li>Enter the target area or neighborhood.</li>
+        <li>Select the property type and seller situation (for example Expired Listing or FSBO).</li>
+        <li>Add your name and a key benefit to mention.</li>
+        <li>Click <strong>Generate Scripts</strong>.</li>
+        <li>Review the tabs: <strong>Opening</strong>, <strong>Objections</strong>, and <strong>Voicemail</strong>.</li>
+        <li>Copy the sections you want and keep them handy while prospecting.</li>
+      </ol>
+
+      <h3>How to use the scripts</h3>
+      <ul>
+        <li><strong>Opening:</strong> Start the conversation and establish why you are calling.</li>
+        <li><strong>Objections:</strong> Respond to common pushback without sounding pushy.</li>
+        <li><strong>Voicemail:</strong> Leave a short, callback-friendly message when no one answers.</li>
+      </ul>
+
+      <div class="tip">Tip: Update the key benefit for each farm area so the script feels local and personal.</div>
+      <a class="cta" href="/#coldcall">Go to Cold Call Scripts</a>
+    </section>
+
+    <section class="section" id="calling">
+      <div class="badge">Tool 3</div>
+      <h2>AI Calling Assistant</h2>
+      <p class="muted">Use this for consent-based, one-to-one follow-up calls. The AI identifies itself as an AI assistant and returns a summary when the call ends.</p>
+
+      <h3>Before you start</h3>
+      <ul>
+        <li>Confirm the lead gave permission to be contacted.</li>
+        <li>Check Do Not Call, brokerage policy, and recording consent rules for your area.</li>
+        <li>Use this for one-to-one follow-up, not bulk robocalling.</li>
+      </ul>
+
+      <h3>Step-by-step</h3>
+      <ol>
+        <li>Choose <strong>AI Calling Assistant</strong>.</li>
+        <li>Select a persona, such as ISA / New Lead Follow-up or Open House Follow-up.</li>
+        <li>Enter the lead name and phone number.</li>
+        <li>Add lead type, property interest, desired outcome, and any agent notes.</li>
+        <li>Check the compliance confirmation box.</li>
+        <li>Click <strong>Start Call</strong>.</li>
+        <li>Watch <strong>Recent Calls</strong> for status updates, summaries, appointment indicators, and recording access.</li>
+      </ol>
+
+      <h3>How to read Recent Calls</h3>
+      <ul>
+        <li><strong>Status:</strong> Shows whether the call is started, completed, or failed.</li>
+        <li><strong>Summary:</strong> Appears after the provider webhook finishes processing the call.</li>
+        <li><strong>Appointment requested:</strong> Highlights when the conversation points to a next step.</li>
+        <li><strong>Recording:</strong> Opens a secure playback link when a recording is available.</li>
+      </ul>
+
+      <div class="tip">Tip: Put the desired outcome in plain language, such as “qualify and book a buyer consultation.” That helps the AI stay focused.</div>
+      <a class="cta" href="/#voice">Go to AI Calling Assistant</a>
+    </section>
+
+    <section class="section">
+      <h2>Recommended workflow</h2>
+      <ol>
+        <li>Generate listing, social, and email drafts for a property.</li>
+        <li>Publish or send the reviewed marketing copy.</li>
+        <li>Generate call scripts for your target farm or lead type.</li>
+        <li>Use AI Calling Assistant for consented follow-up calls.</li>
+        <li>Review summaries and book the appointments that come back.</li>
+      </ol>
+      <p class="muted">Need help? Email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.</p>
+      <a class="cta" href="/">Back to your tools</a>
+    </section>
+  </main>
+
+  <footer>
+    <strong>{{ business_name }}</strong> operates {{ product_name }}.<br />
+    Contact: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>
+  </footer>
+
+  <script>
+    async function doLogout() {
+      await fetch('/logout', {method: 'POST'});
+      window.location.href = '/';
+    }
+  </script>
+</body>
+</html>

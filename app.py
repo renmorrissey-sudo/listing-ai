@@ -602,6 +602,18 @@ def how_it_works():
     return render_template("how_it_works.html")
 
 
+@app.route("/tutorial")
+def tutorial():
+    user = auth.get_current_user()
+    if not user or not auth.user_has_active_subscription(user):
+        return redirect(url_for("index"))
+    return render_template(
+        "tutorial.html",
+        email=user["email"],
+        has_billing_portal=bool(user.get("stripe_customer_id")),
+    )
+
+
 @app.route("/refund-policy")
 def refund_policy():
     return render_template("legal.html", title="Refund Policy", doc="refund")

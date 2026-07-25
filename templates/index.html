@@ -179,19 +179,21 @@
     <a class="subscribe-btn" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00?prefilled_promo_code=TRIAL50" target="_blank">Start trial &mdash; 50% off</a>
   </div>
 </header>
-<div class="public-nav">
-  <a href="/features">Features</a>
-  <a href="/how-it-works">How It Works</a>
-  <a href="/pricing">Pricing</a>
+<div class="public-nav" id="public-nav">
+  <a class="nav-marketing" href="/features">Features</a>
+  <a class="nav-marketing" href="/how-it-works">How It Works</a>
+  <a class="nav-marketing" href="/pricing">Pricing</a>
+  <a class="nav-subscriber" href="/tutorial" style="display:none;">Tutorial</a>
   <a href="/terms">Terms</a>
   <a href="/privacy">Privacy</a>
   <a href="/refund-policy">Refund Policy</a>
   <a href="/contact">Contact</a>
 </div>
 <nav class="tool-nav">
-  <button class="tool-nav-btn active" onclick="switchTool('listing', this)">&#128221; Listing Generator</button>
-  <button class="tool-nav-btn" onclick="switchTool('coldcall', this)">&#128222; Cold Call Scripts</button>
-  <button class="tool-nav-btn" onclick="switchTool('voice', this)">AI Calling Assistant</button>
+  <button class="tool-nav-btn active" data-tool="listing" onclick="switchTool('listing', this)">&#128221; Listing Generator</button>
+  <button class="tool-nav-btn" data-tool="coldcall" onclick="switchTool('coldcall', this)">&#128222; Cold Call Scripts</button>
+  <button class="tool-nav-btn" data-tool="voice" onclick="switchTool('voice', this)">AI Calling Assistant</button>
+  <a class="tool-nav-btn nav-subscriber" id="tutorial-tool-link" href="/tutorial" style="display:none; text-decoration:none;">Tutorial</a>
 </nav>
 
 <div id="tool-listing" class="tool-page active">
@@ -290,6 +292,15 @@
     } catch { document.getElementById('gate').classList.remove('hidden'); }
   }
 
+  function setSubscriberNav(isSubscriber) {
+    document.querySelectorAll('.nav-marketing').forEach(el => {
+      el.style.display = isSubscriber ? 'none' : '';
+    });
+    document.querySelectorAll('.nav-subscriber').forEach(el => {
+      el.style.display = isSubscriber ? '' : 'none';
+    });
+  }
+
   function showLoggedIn(email, hasBillingPortal) {
     document.getElementById('gate').classList.add('hidden');
     const billingLink = hasBillingPortal
@@ -297,12 +308,15 @@
       : '';
     document.getElementById('header-right').innerHTML =
       `<div class="subscriber-info"><span class="subscriber-email">&#10003; ${email}</span>${billingLink}<button class="logout-btn" onclick="doLogout()">Sign out</button></div>`;
+    setSubscriberNav(true);
     loadVoiceData();
+    applyToolHash();
   }
 
   function handle401() {
     document.getElementById('gate').classList.remove('hidden');
     document.getElementById('gate-error').textContent = 'Session expired. Please verify again.';
+    setSubscriberNav(false);
   }
 
   async function fetchJson(url, options = {}) {
@@ -418,15 +432,35 @@
     document.getElementById('gate').classList.remove('hidden');
     document.getElementById('gate-error').textContent = '';
     document.getElementById('gate-email').value = '';
+    setSubscriberNav(false);
   }
 
   function switchTool(tool, btn) {
+    const page = document.getElementById('tool-' + tool);
+    if (!page) return;
     document.querySelectorAll('.tool-page').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.tool-nav-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById('tool-' + tool).classList.add('active');
-    btn.classList.add('active');
+    page.classList.add('active');
+    if (btn) {
+      btn.classList.add('active');
+    } else {
+      const match = document.querySelector(`.tool-nav-btn[data-tool="${tool}"]`);
+      if (match) match.classList.add('active');
+    }
     if (tool === 'voice') loadVoiceData();
+    if (tool === 'listing') history.replaceState(null, '', '/');
+    else history.replaceState(null, '', '/#' + tool);
   }
+
+  function applyToolHash() {
+    const hash = (window.location.hash || '').replace(/^#/, '');
+    if (!hash || hash === 'listing') return;
+    if (document.getElementById('tool-' + hash)) {
+      switchTool(hash);
+    }
+  }
+
+  window.addEventListener('hashchange', applyToolHash);
 
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
