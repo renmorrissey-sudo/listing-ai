@@ -427,7 +427,7 @@
       if (note) {
         note.textContent = data.send_configured
           ? 'Twilio SMS sending is configured. Generated messages can be sent directly.'
-          : 'Twilio is not configured yet. You can still generate and save SMS drafts. Add SMS_TWILIO_ACCOUNT_SID, SMS_TWILIO_AUTH_TOKEN, and SMS_FROM_NUMBER to enable sending.';
+          : 'Twilio is not configured yet. You can still generate and save SMS drafts. Sending uses the Twilio API key variables configured in Railway.';
       }
       if (!data.messages.length) {
         history.style.display = 'none';

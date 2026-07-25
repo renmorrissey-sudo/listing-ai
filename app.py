@@ -12,8 +12,13 @@ import auth
 import config
 import db
 from sms_prompts import build_sms_prompt
-from sms_provider import SmsProviderError, get_sms_provider
-from sms_validation import validate_sms_generate_payload, validate_sms_send_payload
+from sms_provider import SmsProviderError, get_sms_provider, sms_status_callback_url
+from sms_validation import (
+    validate_e164_phone,
+    validate_sms_generate_payload,
+    validate_sms_send_payload,
+    validate_sms_test_payload,
+)
 from validation import validate_listing_payload, validate_script_payload
 from voice_prompts import build_voice_call_prompt
 from voice_provider import VoiceProviderError, get_voice_provider, normalize_voice_webhook
@@ -647,35 +652,157 @@ def send_sms_message():
         db.update_sms_message_send_result(
             message_id,
             status="draft",
-            error_message="Saved as draft. Add Twilio SMS credentials to enable sending.",
+            error_message="Saved as draft. Twilio SMS is not configured.",
         )
         return jsonify({
             "id": message_id,
             "status": "draft",
             "message_body": cleaned["message_body"],
             "send_configured": False,
-            "warning": "SMS saved as draft. Add Twilio credentials in Railway to send texts.",
+            "warning": "SMS saved as draft. Twilio SMS is not configured for sending yet.",
         }), 201
 
     try:
-        result = provider.send_sms(cleaned["phone_number"], cleaned["message_body"])
+        result = provider.send_sms(
+            cleaned["phone_number"],
+            cleaned["message_body"],
+            status_callback=sms_status_callback_url(),
+        )
         db.update_sms_message_send_result(
             message_id,
             provider_message_id=result["provider_message_id"],
-            status="sent",
+            status=result.get("status") or "queued",
         )
         db.record_tool_usage(user["id"], "ai_sms", "sent")
         return jsonify({
             "id": message_id,
-            "status": "sent",
+            "status": result.get("status") or "queued",
             "provider_message_id": result["provider_message_id"],
             "message_body": cleaned["message_body"],
             "send_configured": True,
         }), 201
     except SmsProviderError as exc:
-        logger.warning("SMS send failed: %s", exc)
+        logger.warning("SMS send failed code=%s", getattr(exc, "provider_code", None))
         db.update_sms_message_send_result(message_id, status="failed", error_message=str(exc))
         return jsonify({"error": str(exc), "id": message_id, "status": "failed"}), 503
+
+
+@app.route("/sms/test", methods=["POST"])
+@auth.subscription_required
+@limiter.limit("5 per minute", key_func=_user_rate_limit_key)
+def sms_test_send():
+    """Secure server-side test send to a verified Twilio trial recipient."""
+    user = auth.get_current_user()
+    data = request.get_json(silent=True)
+    cleaned, error = validate_sms_test_payload(data)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+
+    provider = get_sms_provider()
+    if not provider.is_configured():
+        return jsonify({"ok": False, "error": "Twilio SMS is not configured."}), 503
+
+    message_id = db.create_sms_message(
+        user_id=user["id"],
+        persona_id=None,
+        provider=config.SMS_PROVIDER,
+        data={
+            "lead_name": "SMS Test",
+            "phone_number": cleaned["to"],
+            "message_body": cleaned["message"],
+            "lead_type": "test",
+            "desired_outcome": "verify Twilio connectivity",
+        },
+        status="draft",
+    )
+
+    try:
+        result = provider.send_sms(
+            cleaned["to"],
+            cleaned["message"],
+            status_callback=sms_status_callback_url(),
+        )
+        db.update_sms_message_send_result(
+            message_id,
+            provider_message_id=result["provider_message_id"],
+            status=result.get("status") or "queued",
+        )
+        db.record_tool_usage(user["id"], "ai_sms", "test_sent")
+        return jsonify({
+            "ok": True,
+            "status": result.get("status") or "queued",
+            "provider_message_id": result["provider_message_id"],
+            "to": cleaned["to"],
+        }), 201
+    except SmsProviderError as exc:
+        logger.warning("SMS test send failed code=%s", getattr(exc, "provider_code", None))
+        db.update_sms_message_send_result(message_id, status="failed", error_message=str(exc))
+        return jsonify({"ok": False, "error": str(exc)}), 503
+
+
+@app.route("/webhook/sms/inbound", methods=["POST"])
+@limiter.exempt
+def sms_inbound_webhook():
+    """Twilio inbound SMS webhook. Do not point Twilio here until this route is public."""
+    from_number, from_error = validate_e164_phone(request.form.get("From"))
+    body = str(request.form.get("Body") or "").strip()[:1500]
+    message_sid = str(request.form.get("MessageSid") or "").strip() or None
+
+    if from_error or not body:
+        # Acknowledge Twilio even on bad payloads to avoid retries storms.
+        return _twiml_empty_response()
+
+    owner_id = db.find_sms_user_by_phone(from_number)
+    if owner_id:
+        try:
+            db.create_inbound_sms_message(
+                user_id=owner_id,
+                phone_number=from_number,
+                message_body=body,
+                provider_message_id=message_sid,
+            )
+        except Exception:
+            logger.exception("Failed to persist inbound SMS")
+
+    return _twiml_empty_response()
+
+
+@app.route("/webhook/sms/status", methods=["POST"])
+@limiter.exempt
+def sms_status_webhook():
+    """Twilio delivery-status webhook. Do not point Twilio here until this route is public."""
+    message_sid = str(request.form.get("MessageSid") or "").strip()
+    message_status = str(request.form.get("MessageStatus") or "").strip().lower()
+    error_code = str(request.form.get("ErrorCode") or "").strip()
+
+    if not message_sid:
+        return jsonify({"received": True}), 200
+
+    status_map = {
+        "queued": "queued",
+        "sending": "queued",
+        "sent": "sent",
+        "delivered": "delivered",
+        "undelivered": "failed",
+        "failed": "failed",
+    }
+    mapped = status_map.get(message_status)
+    error_message = f"Delivery error {error_code}" if error_code and mapped == "failed" else None
+    if mapped:
+        db.update_sms_message_by_provider_id(
+            message_sid,
+            status=mapped,
+            error_message=error_message,
+        )
+    return jsonify({"received": True}), 200
+
+
+def _twiml_empty_response():
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+        200,
+        {"Content-Type": "text/xml; charset=utf-8"},
+    )
 
 
 @app.route("/webhook/voice", methods=["POST"])

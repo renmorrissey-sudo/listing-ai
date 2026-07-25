@@ -47,9 +47,11 @@ VOICE_CALL_FROM_NUMBER = _env("VOICE_CALL_FROM_NUMBER")
 VOICE_DAILY_CALL_LIMIT = int(_env("VOICE_DAILY_CALL_LIMIT", "20"))
 
 SMS_PROVIDER = _env("SMS_PROVIDER", "twilio").lower()
-SMS_TWILIO_ACCOUNT_SID = _env("SMS_TWILIO_ACCOUNT_SID")
-SMS_TWILIO_AUTH_TOKEN = _env("SMS_TWILIO_AUTH_TOKEN")
-SMS_FROM_NUMBER = _env("SMS_FROM_NUMBER")
+# Prefer Railway Twilio API-key credentials. Fallbacks keep older local names working.
+TWILIO_ACCOUNT_SID = _env("TWILIO_ACCOUNT_SID") or _env("SMS_TWILIO_ACCOUNT_SID")
+TWILIO_API_KEY_SID = _env("TWILIO_API_KEY_SID")
+TWILIO_API_KEY_SECRET = _env("TWILIO_API_KEY_SECRET")
+TWILIO_PHONE_NUMBER = _env("TWILIO_PHONE_NUMBER") or _env("SMS_FROM_NUMBER")
 SMS_DAILY_LIMIT = int(_env("SMS_DAILY_LIMIT", "50"))
 
 # Skip subscription checks locally when Stripe is not configured.

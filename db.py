@@ -95,7 +95,7 @@ def init_db():
             """
             CREATE TABLE IF NOT EXISTS sms_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
+                user_id INTEGER,
                 persona_id INTEGER,
                 provider TEXT NOT NULL DEFAULT 'twilio',
                 provider_message_id TEXT,
@@ -115,6 +115,9 @@ def init_db():
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_sms_messages_user_created ON sms_messages(user_id, created_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sms_messages_provider_id ON sms_messages(provider_message_id)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_created ON tool_usage(user_id, created_at DESC)"
@@ -402,7 +405,7 @@ def create_sms_message(user_id, persona_id, provider, data, status="draft"):
 
 
 def update_sms_message_send_result(message_id, provider_message_id=None, status="sent", error_message=None):
-    sent_at = datetime.now(timezone.utc).isoformat() if status == "sent" else None
+    sent_at = datetime.now(timezone.utc).isoformat() if status in ("sent", "delivered", "queued") else None
     with get_db() as conn:
         conn.execute(
             """
@@ -415,6 +418,56 @@ def update_sms_message_send_result(message_id, provider_message_id=None, status=
             """,
             (provider_message_id, status, error_message, sent_at, message_id),
         )
+
+
+def update_sms_message_by_provider_id(provider_message_id, status=None, error_message=None):
+    if not provider_message_id:
+        return 0
+    sent_at = datetime.now(timezone.utc).isoformat() if status in ("sent", "delivered") else None
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            UPDATE sms_messages
+            SET status = COALESCE(?, status),
+                error_message = COALESCE(?, error_message),
+                sent_at = COALESCE(?, sent_at)
+            WHERE provider_message_id = ?
+            """,
+            (status, error_message, sent_at, provider_message_id),
+        )
+        return cur.rowcount
+
+
+def find_sms_user_by_phone(phone_number):
+    if not phone_number:
+        return None
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT user_id
+            FROM sms_messages
+            WHERE phone_number = ? AND status != 'received'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (phone_number,),
+        ).fetchone()
+        return row["user_id"] if row else None
+
+
+def create_inbound_sms_message(user_id, phone_number, message_body, provider_message_id=None):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO sms_messages
+                (user_id, persona_id, provider, provider_message_id, lead_name, phone_number,
+                 message_body, status, created_at)
+            VALUES (?, NULL, 'twilio', ?, NULL, ?, ?, 'received', ?)
+            """,
+            (user_id, provider_message_id, phone_number, message_body, now),
+        )
+        return cur.lastrowid
 
 
 def list_sms_messages(user_id, limit=20):

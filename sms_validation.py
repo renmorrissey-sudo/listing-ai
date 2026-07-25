@@ -65,3 +65,28 @@ def validate_sms_send_payload(data):
     cleaned["message_body"] = message_body
     cleaned["send_now"] = bool(data.get("send_now", True))
     return cleaned, None
+
+
+def validate_e164_phone(phone_number):
+    cleaned = _clean_phone(phone_number)
+    if not re.fullmatch(r"\+[1-9]\d{9,14}", cleaned or ""):
+        return None, "Enter a valid destination phone number in E.164 format (example: +15551234567)."
+    return cleaned, None
+
+
+def validate_sms_test_payload(data):
+    if not data:
+        return None, "Invalid JSON body."
+
+    to_number, error = validate_e164_phone(data.get("to") or data.get("phone_number"))
+    if error:
+        return None, error
+
+    message = str(data.get("message") or data.get("message_body") or "").strip()
+    if not message:
+        message = "TopAI Real Estate Tools SMS test message."
+    message = message[:480]
+    if not message:
+        return None, "Enter a short test message."
+
+    return {"to": to_number, "message": message}, None
