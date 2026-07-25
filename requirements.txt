@@ -4,3 +4,4 @@ python-dotenv==1.1.0
 gunicorn==23.0.0
 flask-limiter==3.12
 stripe==11.6.0
+twilio==9.6.5

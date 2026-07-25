@@ -52,11 +52,12 @@ def _env_strip(name, default=None):
 
 
 SMS_PROVIDER = (_env("SMS_PROVIDER", "twilio") or "twilio").lower().strip()
-# Prefer Railway Twilio API-key credentials. Fallbacks keep older local names working.
+# Outbound REST: API Key SID + Secret + Account SID. Never use Auth Token to send SMS.
 TWILIO_ACCOUNT_SID = _env_strip("TWILIO_ACCOUNT_SID") or _env_strip("SMS_TWILIO_ACCOUNT_SID")
 TWILIO_API_KEY_SID = _env_strip("TWILIO_API_KEY_SID")
 TWILIO_API_KEY_SECRET = _env_strip("TWILIO_API_KEY_SECRET")
-TWILIO_AUTH_TOKEN = _env_strip("TWILIO_AUTH_TOKEN") or _env_strip("SMS_TWILIO_AUTH_TOKEN")
+# Auth Token is only for Twilio RequestValidator on inbound/status webhooks.
+TWILIO_AUTH_TOKEN = _env_strip("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = _env_strip("TWILIO_PHONE_NUMBER") or _env_strip("SMS_FROM_NUMBER")
 SMS_DAILY_LIMIT = int(_env("SMS_DAILY_LIMIT", "50"))
 

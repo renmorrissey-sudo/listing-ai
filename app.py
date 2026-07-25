@@ -19,6 +19,7 @@ from sms_validation import (
     validate_sms_send_payload,
     validate_sms_test_payload,
 )
+from twilio_security import validate_twilio_request
 from validation import validate_listing_payload, validate_script_payload
 from voice_prompts import build_voice_call_prompt
 from voice_provider import VoiceProviderError, get_voice_provider, normalize_voice_webhook
@@ -742,6 +743,7 @@ def sms_test_send():
 
 @app.route("/webhook/sms/inbound", methods=["POST"])
 @limiter.exempt
+@validate_twilio_request
 def sms_inbound_webhook():
     """Twilio inbound SMS webhook. Do not point Twilio here until this route is public."""
     from_number, from_error = validate_e164_phone(request.form.get("From"))
@@ -769,6 +771,7 @@ def sms_inbound_webhook():
 
 @app.route("/webhook/sms/status", methods=["POST"])
 @limiter.exempt
+@validate_twilio_request
 def sms_status_webhook():
     """Twilio delivery-status webhook. Do not point Twilio here until this route is public."""
     message_sid = str(request.form.get("MessageSid") or "").strip()
