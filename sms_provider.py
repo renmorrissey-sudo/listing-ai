@@ -17,23 +17,54 @@ class SmsProviderError(Exception):
 
 class TwilioSmsProvider:
     def __init__(self):
-        self.account_sid = config.TWILIO_ACCOUNT_SID
-        self.api_key_sid = config.TWILIO_API_KEY_SID
-        self.api_key_secret = config.TWILIO_API_KEY_SECRET
-        self.from_number = config.TWILIO_PHONE_NUMBER
+        self.account_sid = (config.TWILIO_ACCOUNT_SID or "").strip()
+        self.api_key_sid = (config.TWILIO_API_KEY_SID or "").strip()
+        self.api_key_secret = (config.TWILIO_API_KEY_SECRET or "").strip()
+        self.auth_token = (getattr(config, "TWILIO_AUTH_TOKEN", None) or "").strip()
+        self.from_number = (config.TWILIO_PHONE_NUMBER or "").strip()
+
+    def _auth_pair(self):
+        """Return (username, password) for Twilio Basic auth."""
+        if self.api_key_sid and self.api_key_secret:
+            return self.api_key_sid, self.api_key_secret
+        if self.account_sid and self.auth_token:
+            return self.account_sid, self.auth_token
+        return None, None
 
     def is_configured(self):
-        return bool(
-            self.account_sid
-            and self.api_key_sid
-            and self.api_key_secret
-            and self.from_number
-        )
+        username, password = self._auth_pair()
+        return bool(self.account_sid and username and password and self.from_number)
+
+    def config_error(self):
+        """Return a safe configuration error, or None if shapes look usable."""
+        if not self.account_sid:
+            return "Twilio account SID is missing."
+        if not self.account_sid.startswith("AC"):
+            return "Twilio account SID looks invalid. It should start with AC."
+        if not self.from_number:
+            return "Twilio phone number is missing."
+        if not re.fullmatch(r"\+[1-9]\d{9,14}", self.from_number):
+            return "Twilio phone number must be in E.164 format."
+
+        if self.api_key_sid or self.api_key_secret:
+            if not self.api_key_sid.startswith("SK"):
+                return "Twilio API Key SID looks invalid. It should start with SK."
+            if not self.api_key_secret:
+                return "Twilio API Key Secret is missing."
+            return None
+
+        if self.auth_token:
+            return None
+        return "Twilio API Key SID/Secret (or Auth Token) is missing."
 
     def send_sms(self, phone_number, message_body, status_callback=None):
+        config_error = self.config_error()
+        if config_error:
+            raise SmsProviderError(config_error)
         if not self.is_configured():
             raise SmsProviderError("SMS sending is not configured yet.")
 
+        username, password = self._auth_pair()
         url = f"https://api.twilio.com/2010-04-01/Accounts/{self.account_sid}/Messages.json"
         form = {
             "To": phone_number,
@@ -45,8 +76,7 @@ class TwilioSmsProvider:
 
         payload = urllib.parse.urlencode(form).encode("utf-8")
         request = urllib.request.Request(url, data=payload, method="POST")
-        # Twilio API Key auth: username = API Key SID, password = API Key Secret.
-        credentials = f"{self.api_key_sid}:{self.api_key_secret}".encode("utf-8")
+        credentials = f"{username}:{password}".encode("utf-8")
         request.add_header("Authorization", "Basic " + base64.b64encode(credentials).decode("ascii"))
         request.add_header("Content-Type", "application/x-www-form-urlencoded")
         request.add_header("Accept", "application/json")
@@ -88,7 +118,11 @@ def _provider_error_from_response(detail, http_status):
         elif provider_code == 21614:
             message = "Destination phone number is not a valid mobile number."
         elif provider_code in (20003, 20005):
-            message = "SMS provider authentication failed."
+            message = (
+                "Twilio rejected the API credentials. Recreate an API Key in Twilio Console "
+                "(Account > API keys & tokens), then update TWILIO_API_KEY_SID and "
+                "TWILIO_API_KEY_SECRET in Railway for the same account as TWILIO_ACCOUNT_SID."
+            )
         elif raw_message:
             cleaned = re.sub(r"(?i)(sk|ac|auth|token|secret)[=:\s]+\S+", "[redacted]", raw_message)
             message = cleaned[:180]
