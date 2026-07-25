@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>How It Works - {{ product_name }}</title>
+  <meta name="description" content="Step-by-step explanation of how {{ product_name }} works: subscribe, access the web app, generate real estate content, and run consent-based AI calling workflows." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; line-height: 1.65; }
+    header { background: #1a1a2e; color: white; padding: 18px 32px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    .logo { font-size: 20px; font-weight: 700; }
+    .logo span { color: #4f8ef7; }
+    .business { color: #aab; font-size: 13px; margin-top: 2px; }
+    .nav a { color: #dce6ff; margin-left: 16px; text-decoration: none; font-size: 14px; }
+    main { max-width: 980px; margin: 36px auto; padding: 0 20px; }
+    .hero, .step, .card { background: white; border-radius: 14px; padding: 28px; box-shadow: 0 1px 5px rgba(0,0,0,0.08); margin-bottom: 24px; }
+    h1 { font-size: 34px; line-height: 1.15; margin: 0 0 12px; }
+    h2 { font-size: 22px; margin: 0 0 10px; }
+    h3 { font-size: 16px; margin: 0 0 8px; }
+    .muted { color: #667; }
+    .step-grid { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 24px; align-items: start; }
+    @media (max-width: 820px) {
+      .step-grid { grid-template-columns: 1fr; }
+      .nav a { margin-left: 0; margin-right: 12px; }
+    }
+    .badge { display: inline-block; background: #eef5ff; color: #1d4ed8; border: 1px solid #cfe0ff; border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 700; margin-bottom: 10px; }
+    .shot { width: 100%; border-radius: 10px; border: 1px solid #dde4f0; box-shadow: 0 8px 24px rgba(26,26,46,0.08); display: block; background: #eef2f7; }
+    .caption { font-size: 13px; color: #667; margin-top: 8px; }
+    ol, ul { padding-left: 20px; margin: 10px 0 0; }
+    li { margin-bottom: 7px; }
+    .cta { display: inline-block; margin-top: 8px; background: #4f8ef7; color: white; border-radius: 9px; padding: 12px 16px; font-weight: 700; text-decoration: none; }
+    .cta.secondary { background: white; color: #1d4ed8; border: 1.5px solid #cfe0ff; margin-left: 8px; }
+    footer { max-width: 980px; margin: 24px auto 36px; padding: 0 20px; color: #667; font-size: 14px; }
+    footer a { color: #4f8ef7; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="logo">TopAI <span>Real Estate Tools</span></div>
+      <div class="business">Operated by {{ business_name }}</div>
+    </div>
+    <nav class="nav">
+      <a href="/">App</a>
+      <a href="/features">Features</a>
+      <a href="/how-it-works">How It Works</a>
+      <a href="/pricing">Pricing</a>
+      <a href="/contact">Contact</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>How {{ product_name }} works</h1>
+      <p class="muted">{{ product_name }} is operated by {{ business_name }}. It is a paid SaaS web app that helps real estate professionals create marketing and prospecting content with AI, and optionally place consent-based AI follow-up calls.</p>
+      <p class="muted">Customers subscribe through Stripe, open the web app, verify access with their subscriber email, enter property or lead details, and receive draft outputs they can copy, review, and use in their own real estate workflow.</p>
+      <a class="cta" href="/features">Browse features</a>
+      <a class="cta secondary" href="/pricing">View pricing</a>
+    </section>
+
+    <section class="step" id="step-1">
+      <div class="step-grid">
+        <div>
+          <div class="badge">Step 1</div>
+          <h2>Subscribe through Stripe</h2>
+          <p class="muted">Customers start from the public Pricing page or the in-app trial link and complete checkout with Stripe.</p>
+          <ul>
+            <li>Standard price: {{ subscription_price }}</li>
+            <li>Current promo: {{ trial_offer }}</li>
+            <li>Billing and cancellations are handled through Stripe</li>
+            <li>Support contact: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></li>
+          </ul>
+        </div>
+        <figure>
+          <img class="shot" src="{{ url_for('static', filename='product/how-it-works-pricing.png') }}" alt="Screenshot of the TopAI Real Estate Tools pricing page showing monthly subscription and included AI tools" width="960" height="540" loading="lazy" />
+          <figcaption class="caption">Screenshot: Public Pricing page describing the subscription and included tools.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="step" id="step-2">
+      <div class="step-grid">
+        <div>
+          <div class="badge">Step 2</div>
+          <h2>Access the web app</h2>
+          <p class="muted">After payment, the customer visits the app homepage and enters the same email address used at Stripe checkout.</p>
+          <ol>
+            <li>Open <a href="/">topairealestatetools.com</a></li>
+            <li>Enter the subscriber email on the access screen</li>
+            <li>The app verifies that the email belongs to an active or eligible subscription</li>
+            <li>Subscriber tools unlock for that session</li>
+          </ol>
+        </div>
+        <figure>
+          <img class="shot" src="{{ url_for('static', filename='product/how-it-works-access.png') }}" alt="Screenshot of the TopAI Real Estate Tools subscriber access screen asking for email verification" width="960" height="540" loading="lazy" />
+          <figcaption class="caption">Screenshot: Subscriber Access screen used to unlock the SaaS tools after checkout.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="step" id="step-3">
+      <div class="step-grid">
+        <div>
+          <div class="badge">Step 3</div>
+          <h2>Generate listing and marketing drafts</h2>
+          <p class="muted">In the Listing Generator, the agent fills in property details and clicks Generate Content.</p>
+          <ul>
+            <li>AI creates a listing description draft</li>
+            <li>AI creates social posts for major platforms</li>
+            <li>AI creates a prospect email with a subject line and call to action</li>
+            <li>The agent reviews the drafts and copies the text they want to use</li>
+          </ul>
+        </div>
+        <figure>
+          <img class="shot" src="{{ url_for('static', filename='product/features-listing-generator.png') }}" alt="Screenshot of listing generator producing AI listing copy from property details" width="960" height="540" loading="lazy" />
+          <figcaption class="caption">Screenshot: Property details on the left and generated listing output on the right.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="step" id="step-4">
+      <div class="step-grid">
+        <div>
+          <div class="badge">Step 4</div>
+          <h2>Create prospecting scripts</h2>
+          <p class="muted">In Cold Call Scripts, the agent enters area, property type, seller situation, and value proposition, then generates opening, objection, and voicemail scripts for review.</p>
+        </div>
+        <figure>
+          <img class="shot" src="{{ url_for('static', filename='product/features-cold-call-scripts.png') }}" alt="Screenshot of cold call script generator with opening script output" width="960" height="540" loading="lazy" />
+          <figcaption class="caption">Screenshot: Cold Call Scripts workflow used for real estate prospecting.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="step" id="step-5">
+      <div class="step-grid">
+        <div>
+          <div class="badge">Step 5</div>
+          <h2>Optional: run consent-based AI calls</h2>
+          <p class="muted">In AI Calling Assistant, the agent confirms consent, enters lead details, and starts a one-to-one AI call. After the call ends, Recent Calls shows status, summary, outcome, and recording access when available.</p>
+          <ul>
+            <li>Intended for consent-based, one-to-one real estate follow-up</li>
+            <li>The AI identifies itself as an AI assistant</li>
+            <li>Customers remain responsible for calling and recording compliance</li>
+          </ul>
+        </div>
+        <figure>
+          <img class="shot" src="{{ url_for('static', filename='product/features-ai-calling.png') }}" alt="Screenshot of AI Calling Assistant setup and recent call history with summaries" width="960" height="540" loading="lazy" />
+          <figcaption class="caption">Screenshot: AI Calling Assistant setup and completed call history.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>What customers are buying</h2>
+      <p class="muted">Customers are buying recurring software access to {{ product_name }}, not a physical product. The subscription provides online access to AI drafting tools and AI calling workflows through a browser.</p>
+      <h3>Business details</h3>
+      <ul>
+        <li><strong>Business:</strong> {{ business_name }}</li>
+        <li><strong>Product:</strong> {{ product_name }}</li>
+        <li><strong>Website:</strong> <a href="/">topairealestatetools.com</a></li>
+        <li><strong>Support:</strong> <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></li>
+        <li><strong>Legal:</strong> <a href="/terms">Terms</a>, <a href="/privacy">Privacy</a>, <a href="/refund-policy">Refund Policy</a></li>
+      </ul>
+      <a class="cta" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00?prefilled_promo_code=TRIAL50" target="_blank" rel="noopener">Start trial - 50% off</a>
+    </section>
+  </main>
+
+  <footer>
+    <strong>{{ business_name }}</strong> operates {{ product_name }}.<br />
+    Contact: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a><br />
+    <a href="/features">Features</a> |
+    <a href="/how-it-works">How It Works</a> |
+    <a href="/pricing">Pricing</a> |
+    <a href="/terms">Terms of Service</a> |
+    <a href="/privacy">Privacy Policy</a> |
+    <a href="/refund-policy">Refund Policy</a> |
+    <a href="/contact">Contact</a>
+  </footer>
+</body>
+</html>

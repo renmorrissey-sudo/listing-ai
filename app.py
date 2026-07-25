@@ -592,6 +592,16 @@ def pricing():
     return render_template("pricing.html")
 
 
+@app.route("/features")
+def features():
+    return render_template("features.html")
+
+
+@app.route("/how-it-works")
+def how_it_works():
+    return render_template("how_it_works.html")
+
+
 @app.route("/refund-policy")
 def refund_policy():
     return render_template("legal.html", title="Refund Policy", doc="refund")
