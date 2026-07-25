@@ -105,11 +105,21 @@ def _provider_error_from_response(detail, http_status):
         elif provider_code == 21614:
             message = "Destination phone number is not a valid mobile number."
         elif provider_code in (20003, 20005):
-            message = (
-                "Twilio rejected the Account SID / Auth Token credentials. "
-                "Confirm TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in Railway match the "
-                "upgraded Twilio account (never paste credential values into chat)."
-            )
+            lowered = raw_message.lower()
+            if "compliance" in lowered or "kyc" in lowered or "trust hub" in lowered:
+                message = (
+                    "Twilio blocked messaging until your primary compliance profile "
+                    "is approved in Trust Hub (KYC). Complete that in Twilio Console, "
+                    "then retry sending."
+                )
+            elif raw_message:
+                cleaned = re.sub(r"(?i)(sk|ac|auth|token|secret)[=:\s]+\S+", "[redacted]", raw_message)
+                message = cleaned[:180]
+            else:
+                message = (
+                    "Twilio rejected the request (auth or permissions). "
+                    "Confirm account credentials and Trust Hub compliance status."
+                )
         elif raw_message:
             cleaned = re.sub(r"(?i)(sk|ac|auth|token|secret)[=:\s]+\S+", "[redacted]", raw_message)
             message = cleaned[:180]
