@@ -84,7 +84,8 @@ def prepare_images() -> list[Path]:
         if not src.exists():
             raise FileNotFoundError(f"Missing storyboard image: {src}")
         img = Image.open(src).convert("RGB")
-        img = fit_cover(img, WIDTH, HEIGHT)
+        # Letterbox instead of cropping so top titles stay fully visible.
+        img = fit_contain(img, WIDTH, HEIGHT, background=(15, 23, 42))
         dest = WORK / f"scene_{index:02d}.png"
         img.save(dest, format="PNG", optimize=True)
         frames.append(dest)
@@ -93,19 +94,21 @@ def prepare_images() -> list[Path]:
     return frames
 
 
-def fit_cover(img: Image.Image, width: int, height: int) -> Image.Image:
+def fit_contain(img: Image.Image, width: int, height: int, background=(15, 23, 42)) -> Image.Image:
+    canvas = Image.new("RGB", (width, height), background)
     src_ratio = img.width / img.height
     dest_ratio = width / height
     if src_ratio > dest_ratio:
-        new_height = height
-        new_width = int(height * src_ratio)
-    else:
         new_width = width
-        new_height = int(width / src_ratio)
+        new_height = max(1, int(width / src_ratio))
+    else:
+        new_height = height
+        new_width = max(1, int(height * src_ratio))
     resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-    left = (new_width - width) // 2
-    top = (new_height - height) // 2
-    return resized.crop((left, top, left + width, top + height))
+    left = (width - new_width) // 2
+    top = (height - new_height) // 2
+    canvas.paste(resized, (left, top))
+    return canvas
 
 
 async def synthesize_scene_audio(index: int, text: str) -> Path:
