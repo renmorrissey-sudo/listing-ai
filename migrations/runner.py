@@ -86,6 +86,33 @@ def _release_lock(conn):
         conn.execute("SELECT pg_advisory_unlock(?)", (872364001,))
 
 
+def _expected_versions():
+    versions = []
+    for module_name in MIGRATION_MODULES:
+        mod = import_module(module_name)
+        versions.append(mod.VERSION)
+    return versions
+
+
+def log_migration_state(applied):
+    """Safe always-on summary: env, engine, postgres flag, migration versions. No secrets."""
+    expected = _expected_versions()
+    applied_ordered = [v for v in expected if v in applied]
+    pending = [v for v in expected if v not in applied]
+    postgres_active = config.DB_ENGINE == "postgres" and bool(config.DATABASE_URL)
+    latest = applied_ordered[-1] if applied_ordered else "none"
+    message = (
+        "Migration state: "
+        f"app_env={config.APP_ENV} engine={config.DB_ENGINE} "
+        f"postgres_active={'true' if postgres_active else 'false'} "
+        f"latest={latest} "
+        f"applied={','.join(applied_ordered) or 'none'} "
+        f"pending={','.join(pending) or 'none'}"
+    )
+    logger.info(message)
+    print(message, file=sys.stderr)
+
+
 def apply_pending_migrations():
     """Run only unapplied forward migrations. Safe for production startup."""
     if config.ALLOW_DESTRUCTIVE_DB_RESET and config.APP_ENV in {"production", "staging"}:
@@ -120,6 +147,8 @@ def apply_pending_migrations():
             conn.commit()
             applied.add(version)
             logger.info("Applied migration %s", version)
+
+        log_migration_state(applied)
     finally:
         try:
             _release_lock(conn)

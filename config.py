@@ -175,12 +175,15 @@ def validate_database_config():
             print(f"FATAL: {err}", file=sys.stderr)
         sys.exit(1)
 
-    # Safe summary — never log credentials.
-    if DB_ENGINE == "postgres":
+    # Safe summary — never log DATABASE_URL, passwords, or other secrets.
+    postgres_active = DB_ENGINE == "postgres" and bool(DATABASE_URL) and not _database_url_is_sqlite(
+        DATABASE_URL
+    )
+    if postgres_active:
         parsed = urlparse(DATABASE_URL)
         print(
             "Database startup check: "
-            f"app_env={APP_ENV} engine=postgres "
+            f"app_env={APP_ENV} engine=postgres postgres_active=true "
             f"host={(parsed.hostname or 'unknown')} "
             f"db={(parsed.path or '').lstrip('/') or 'unknown'}",
             file=sys.stderr,
@@ -188,7 +191,8 @@ def validate_database_config():
     else:
         print(
             "Database startup check: "
-            f"app_env={APP_ENV} engine=sqlite path={DATABASE_PATH}",
+            f"app_env={APP_ENV} engine={DB_ENGINE} postgres_active=false "
+            f"path={DATABASE_PATH}",
             file=sys.stderr,
         )
 

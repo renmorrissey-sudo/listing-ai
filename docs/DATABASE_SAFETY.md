@@ -10,24 +10,71 @@ Production previously used a **SQLite file** (`DATABASE_PATH=real_estate.db`) on
 |------|--------|
 | Engine | **PostgreSQL** (Railway managed plugin) |
 | Connection | `DATABASE_URL` (injected by Railway when Postgres is linked) |
+| App env variable | `APP_ENV=production` (`ENV` is a fallback alias only) |
+| Local-only path | `DATABASE_PATH` — **ignored** when `DATABASE_URL` is set; never the production store |
 | Owner | Railway Postgres service linked to the `web` service |
-| App env | `APP_ENV=production` |
 | Not allowed | SQLite, local hosts, `/tmp`, test DB URLs, destructive reset flags |
+
+### Environment variables the app reads
+
+| Variable | Role |
+|----------|------|
+| `APP_ENV` | Primary environment: `production` \| `staging` \| `development` \| `test` |
+| `ENV` | Used only if `APP_ENV` is unset |
+| `DATABASE_URL` | PostgreSQL connection string; wins over `DATABASE_PATH` |
+| `DATABASE_PATH` | SQLite file for local development/test only |
+| `ALLOW_DESTRUCTIVE_DB_RESET` | Must be false in production/staging |
+| `ALLOW_SQLITE_TABLE_REBUILD` | Must be false in production/staging |
+| `RUN_DEMO_SEED_ON_STARTUP` | Must be false in production/staging |
+
+---
+
+## Production cutover sequence (SQLite → Railway Postgres)
+
+This cutover **discards** ephemeral SQLite tester data. There is no automated SQLite→Postgres data migration.
+
+```text
+Create and link Railway PostgreSQL
+→ expose DATABASE_URL to the web service
+→ set APP_ENV=production
+→ remove or ignore DATABASE_PATH in production Variables
+→ deploy (forward-only migrations create empty schema)
+→ create fresh tester / paid-access data
+→ restart service → verify data still present
+→ second deploy → verify data still present
+```
 
 ### Railway setup (one-time)
 
 1. In the Railway project, **New → Database → PostgreSQL**.
 2. Open the **web** service → **Variables**.
-3. Ensure `DATABASE_URL` is present (Railway usually auto-injects it when you link the Postgres service).
-4. Set:
-   - `APP_ENV=production`
-   - `ENV=production` (optional alias; `APP_ENV` wins)
+3. Ensure `DATABASE_URL` is present (Railway auto-injects it when Postgres is linked to `web`).
+4. Set `APP_ENV=production` (optional: `ENV=production`; `APP_ENV` wins).
 5. Confirm these are **unset or false**:
    - `ALLOW_DESTRUCTIVE_DB_RESET`
    - `ALLOW_SQLITE_TABLE_REBUILD`
    - `RUN_DEMO_SEED_ON_STARTUP`
-6. Remove reliance on `DATABASE_PATH` in production (ignore it when `DATABASE_URL` is set).
-7. Redeploy. Startup runs **forward-only migrations** only (`python -m migrations.runner`), then gunicorn.
+6. **Remove `DATABASE_PATH`** from production Variables (recommended). If left set, the app still ignores it whenever `DATABASE_URL` is present.
+7. Redeploy `web`. Startup:
+   - refuses unsafe DB config
+   - applies pending migrations only (`python -m migrations.runner`)
+   - starts gunicorn
+8. Create fresh tester account and paid-access data in Postgres.
+9. **Verify survival:**
+   - Restart the `web` service → login and confirm tasks/leads still exist.
+   - Trigger a second deploy → confirm the same rows still exist.
+10. Confirm startup logs show `engine=postgres`, `postgres_active=true`, and migration versions — never a full `DATABASE_URL` or password.
+
+### Post-cutover verification checklist
+
+- [ ] `DATABASE_URL` present on `web` and points at Railway Postgres (not SQLite)
+- [ ] `APP_ENV=production`
+- [ ] `DATABASE_PATH` removed from production (or confirmed ignored)
+- [ ] Destructive/seed flags false or unset
+- [ ] Logs: `postgres_active=true` and `Migration state: ... latest=...`
+- [ ] Fresh tester data created
+- [ ] Data survives service restart
+- [ ] Data survives a second deployment
 
 Each environment must use a **different** database:
 
@@ -43,21 +90,43 @@ Each environment must use a **different** database:
 - Apply **pending** additive migrations recorded in `schema_migrations`
 - Insert **idempotent** default voice personas if none exist
 - Refuse to boot if production DB config is unsafe
+- Log safe summary: `app_env`, `engine`, `postgres_active`, migration versions (never secrets)
 
 ## What startup must never do
 
-- Point production at SQLite
+- Point production at SQLite / `DATABASE_PATH`
 - `DROP TABLE` / `DROP DATABASE` / `TRUNCATE`
 - Rebuild schema from scratch
 - Auto-run demo/seed user data
 - Enable destructive reset flags
+- Copy or migrate legacy SQLite rows automatically
 
-## Migrations
+## Safe migration command
+
+```bash
+python -m migrations.runner
+```
 
 - Location: `migrations/versions/`
-- Runner: `python -m migrations.runner`
 - Rules: forward-only, additive, versioned, reviewed, non-destructive
 - New columns: add a new versioned migration with `ALTER TABLE ... ADD COLUMN` only when missing
+
+## Prohibited production reset commands
+
+Do **not** run against production:
+
+```bash
+# FORBIDDEN — examples of destructive operations
+DROP TABLE ...;
+DROP DATABASE ...;
+TRUNCATE ...;
+# FORBIDDEN — app flags
+ALLOW_DESTRUCTIVE_DB_RESET=true
+ALLOW_SQLITE_TABLE_REBUILD=true
+RUN_DEMO_SEED_ON_STARTUP=true
+# FORBIDDEN — production SQLite
+DATABASE_PATH=real_estate.db   # with DATABASE_URL unset / APP_ENV not forcing Postgres
+```
 
 ## Pre-deployment backup (Railway Postgres)
 
@@ -86,19 +155,6 @@ After restore:
 3. Restart the web service.
 4. Spot-check: login as a known subscriber, verify Tasks/Leads row counts.
 
-## Optional: copy leftover SQLite into Postgres (if you still have a file)
-
-Only if you recovered `real_estate.db` from a volume or local backup:
-
-```bash
-# Example approach — run manually, never in app startup
-# 1. Keep a copy of real_estate.db
-# 2. Use a one-off ETL/script to INSERT into Postgres by stable user.id / task.id
-# 3. Verify row counts before switching traffic
-```
-
-Do **not** automate this in production boot.
-
 ## Task tenancy
 
 Tasks are keyed by:
@@ -108,4 +164,4 @@ Tasks are keyed by:
 - `tasks.assigned_user_id`
 - optional `tasks.lead_id` (same owner)
 
-APIs always filter by `user_id`. There is no cascade-delete from redeploy/reseed/reauth.
+APIs always filter by `user_id`. There is no SQL `ON DELETE CASCADE` from redeploy/reseed/reauth. Permanent records are never keyed only by browser sessions, temporary auth tokens, deployment IDs, or local files.

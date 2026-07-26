@@ -91,13 +91,24 @@ def _normalize_row(row):
 
 
 def connect():
-    """Open a CompatConnection for the configured backend."""
+    """Open a CompatConnection for the configured backend.
+
+    When DATABASE_URL is set, config.DB_ENGINE is postgres and DATABASE_PATH
+    is ignored (development-only SQLite path).
+    """
     if config.DB_ENGINE == "postgres":
         import psycopg
         from psycopg.rows import dict_row
 
+        # Never fall back to SQLite when Postgres is configured.
         raw = psycopg.connect(config.DATABASE_URL, row_factory=dict_row)
         return CompatConnection(raw, "postgres")
+
+    if config.APP_ENV in {"production", "staging"}:
+        raise RuntimeError(
+            "Refusing SQLite connection in production/staging. "
+            "Set DATABASE_URL to Railway PostgreSQL."
+        )
 
     raw = sqlite3.connect(config.DATABASE_PATH)
     raw.row_factory = sqlite3.Row

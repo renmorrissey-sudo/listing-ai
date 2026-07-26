@@ -1,78 +1,87 @@
-# ListingAI — Setup Guide (Windows)
+# TopAI Real Estate Tools — Setup Guide
 
 ## What you need
-- Python 3.10+ ([download here](https://www.python.org/downloads/))
-- An Anthropic API key ([get one here](https://console.anthropic.com/))
+- Python 3.10+ ([download](https://www.python.org/downloads/))
+- An Anthropic API key ([console.anthropic.com](https://console.anthropic.com/))
 
 ---
 
-## Step 1 — Get your API key
+## Local development (SQLite)
 
-1. Go to https://console.anthropic.com/
-2. Sign up or log in
-3. Click **API Keys** → **Create Key**
-4. Copy the key (starts with `sk-ant-...`)
-
----
-
-## Step 2 — Create your .env file
-
-In the `real-estate-ai` folder, create a file named `.env` (no extension) containing:
-
-```
-ANTHROPIC_API_KEY=sk-ant-your-key-here
-```
-
-Replace `sk-ant-your-key-here` with your actual key.
-
----
-
-## Step 3 — Install dependencies
-
-Open **Command Prompt** or **PowerShell** in the `real-estate-ai` folder and run:
+1. Copy `.env.example` to `.env` and set at least:
+   - `ANTHROPIC_API_KEY`
+   - `FLASK_SECRET_KEY`
+   - `APP_ENV=development`
+2. Leave `DATABASE_URL` unset for local SQLite.
+3. Optional: set `DATABASE_PATH=real_estate.db` (default). This is **development-only**.
+4. Install and run:
 
 ```
 pip install -r requirements.txt
-```
-
----
-
-## Step 4 — Run the app
-
-```
+python -m migrations.runner
 python app.py
 ```
 
-You should see:
+Open **http://localhost:8080** (or the `PORT` in `.env`).
+
+When `DATABASE_URL` is set, the app uses PostgreSQL and **ignores** `DATABASE_PATH`.
+
+---
+
+## Production (Railway PostgreSQL) — required
+
+Production paid-user data must live in **Railway PostgreSQL** via `DATABASE_URL`.  
+Do **not** use `DATABASE_PATH` / SQLite on Railway (ephemeral container filesystem).
+
+Full cutover checklist, forbidden commands, and backup/restore: **[docs/DATABASE_SAFETY.md](docs/DATABASE_SAFETY.md)**.
+
+### Minimum production variables on the `web` service
+
+| Variable | Required value |
+|----------|----------------|
+| `APP_ENV` | `production` |
+| `DATABASE_URL` | Injected by linked Railway Postgres (postgresql://…) |
+| `ANTHROPIC_API_KEY` | Set |
+| `FLASK_SECRET_KEY` | Set |
+| Stripe keys | Set in production |
+
+Unset or `false` in production:
+
+- `ALLOW_DESTRUCTIVE_DB_RESET`
+- `ALLOW_SQLITE_TABLE_REBUILD`
+- `RUN_DEMO_SEED_ON_STARTUP`
+
+Remove `DATABASE_PATH` from production Variables (or leave it; it is ignored when `DATABASE_URL` is set).
+
+Deploy command (Procfile): migrations then gunicorn:
+
 ```
-✅ ListingAI is running → http://localhost:5000
+python -m migrations.runner && gunicorn app:app --bind 0.0.0.0:$PORT ...
 ```
 
-Open your browser and go to **http://localhost:5000**
+---
+
+## Safe migration command
+
+```
+python -m migrations.runner
+```
+
+Applies only pending forward-only migrations. Never drops or truncates tables.
+
+## Prohibited in production
+
+- Pointing the app at SQLite (`DATABASE_PATH` without Postgres)
+- `DROP TABLE` / `DROP DATABASE` / `TRUNCATE`
+- Enabling destructive reset or demo-seed flags
+- Recreating the database on every deploy
 
 ---
 
-## Cost estimate
+## Tests
 
-Each listing generation costs roughly **$0.01–0.02** with the Claude API.
-At $99/month per agent, you break even at **5 agents**. Everything above that is profit.
+```
+pytest
+```
 
----
-
-## Showing it to prospects
-
-1. Run the app on your machine
-2. Open http://localhost:5000 in your browser
-3. Fill in a real local property and generate
-4. Show them the output — listing description + 3 social posts + email in ~10 seconds
-
-That's your demo. Most agents will want this immediately.
-
----
-
-## Next steps after first paying customers
-
-- Move from `claude-opus-4-6` to a local model (Ollama + Llama 3) to eliminate per-use costs
-- Add a simple login/password so each client gets their own account
-- Add a "history" page showing past generated listings
-- Raise the price to $149/month
+Uses a temporary SQLite file (`APP_ENV=test`). Each environment (production, staging, development, test) must use a **separate** database.
