@@ -10,10 +10,16 @@ def _env(name, default=None):
     return os.environ.get(name, default)
 
 
+def _env_strip(name, default=None):
+    value = _env(name, default)
+    return value.strip() if isinstance(value, str) else value
+
+
 ENV = _env("ENV", "development")
 IS_PRODUCTION = ENV == "production"
 
 ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY")
+CLAUDE_MODEL = _env_strip("CLAUDE_MODEL") or "claude-opus-4-6"
 FLASK_SECRET_KEY = _env("FLASK_SECRET_KEY")
 DATABASE_PATH = _env("DATABASE_PATH", "real_estate.db")
 
@@ -45,11 +51,6 @@ VOICE_DEFAULT_ASSISTANT_ID = _env("VOICE_DEFAULT_ASSISTANT_ID")
 VOICE_PHONE_NUMBER_ID = _env("VOICE_PHONE_NUMBER_ID")
 VOICE_CALL_FROM_NUMBER = _env("VOICE_CALL_FROM_NUMBER")
 VOICE_DAILY_CALL_LIMIT = int(_env("VOICE_DAILY_CALL_LIMIT", "20"))
-
-def _env_strip(name, default=None):
-    value = _env(name, default)
-    return value.strip() if isinstance(value, str) else value
-
 
 SMS_PROVIDER = (_env("SMS_PROVIDER", "twilio") or "twilio").lower().strip()
 # TEMP diagnostic outbound auth: Account SID + Auth Token (not API keys).
@@ -92,6 +93,7 @@ def validate_config():
     print(
         "Twilio startup check: "
         f"account_sid_starts_with_AC={account_sid_ok} "
-        f"auth_token_present={auth_token_present}",
+        f"auth_token_present={auth_token_present} "
+        f"anthropic_api_key_present={bool(ANTHROPIC_API_KEY)}",
         file=sys.stderr,
     )

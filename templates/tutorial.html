@@ -203,10 +203,12 @@
         <li>Add lead type, property interest, desired outcome, and notes.</li>
         <li>Click <strong>Generate SMS</strong>, then edit the draft if needed.</li>
         <li>Confirm compliance and click <strong>Send SMS</strong>.</li>
-        <li>Review the message in <strong>Recent SMS</strong>.</li>
+        <li>When a lead replies, open <strong>Needs your review</strong> — Claude summarizes the reply, suggests the next action, and drafts a response.</li>
+        <li>Edit if needed, confirm consent, then click <strong>Approve &amp; Send</strong>. TopAI never auto-sends AI replies.</li>
+        <li>Track leads, conversation history, and follow-ups in the CRM panel and Dashboard.</li>
       </ol>
 
-      <div class="tip">Tip: If Twilio is not configured yet, messages are saved as drafts so you can still practice and track usage. Sending uses TWILIO_ACCOUNT_SID, TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET, and TWILIO_PHONE_NUMBER. TWILIO_AUTH_TOKEN is only for webhook signature validation.</div>
+      <div class="tip">Tip: CRM lead records are created when you send SMS. Inbound coaching uses your existing ANTHROPIC_API_KEY (Claude). Escalated topics (legal, financing, negotiation, fair housing, complaints, uncertain facts) require manual review before Approve &amp; Send. Nothing auto-sends.</div>
       <a class="cta" href="/#sms">Go to AI SMS Assistant</a>
     </section>
 

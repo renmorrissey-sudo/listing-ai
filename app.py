@@ -1,4 +1,5 @@
 import logging
+import re
 import secrets
 
 import stripe
@@ -11,7 +12,10 @@ from werkzeug.exceptions import HTTPException
 import auth
 import config
 import db
-from sms_prompts import build_sms_prompt
+from datetime import datetime, timedelta, timezone
+
+import sms_coach
+from sms_prompts import build_inbound_reply_analysis_prompt, build_sms_prompt
 from sms_provider import SmsProviderError, get_sms_provider, sms_status_callback_url
 from sms_validation import (
     validate_e164_phone,
@@ -571,13 +575,16 @@ def sms_messages():
     provider = get_sms_provider()
     return jsonify({
         "send_configured": provider.is_configured(),
+        "coach_configured": sms_coach.is_configured(),
         "messages": [
             {
                 "id": m["id"],
+                "lead_id": m.get("lead_id"),
                 "persona_name": m.get("persona_name"),
                 "lead_name": m.get("lead_name"),
                 "phone_number": m.get("phone_number"),
                 "lead_type": m.get("lead_type"),
+                "direction": m.get("direction"),
                 "status": m.get("status"),
                 "message_body": m.get("message_body"),
                 "error_message": m.get("error_message"),
@@ -587,6 +594,228 @@ def sms_messages():
             for m in messages
         ],
     })
+
+
+@app.route("/sms/leads")
+@auth.subscription_required
+def sms_leads():
+    user = auth.get_current_user()
+    leads = db.list_leads(user["id"])
+    return jsonify({
+        "leads": [
+            {
+                "id": lead["id"],
+                "name": lead.get("name"),
+                "phone_number": lead.get("phone_number"),
+                "lead_type": lead.get("lead_type"),
+                "property_interest": lead.get("property_interest"),
+                "status": lead.get("status"),
+                "next_action": lead.get("next_action"),
+                "follow_up_at": lead.get("follow_up_at"),
+                "message_count": lead.get("message_count") or 0,
+                "updated_at": lead.get("updated_at"),
+            }
+            for lead in leads
+        ]
+    })
+
+
+@app.route("/sms/leads/<int:lead_id>")
+@auth.subscription_required
+def sms_lead_detail(lead_id):
+    user = auth.get_current_user()
+    lead = db.get_lead(lead_id, user["id"])
+    if not lead:
+        return jsonify({"error": "Lead not found."}), 404
+    return jsonify({"lead": lead})
+
+
+@app.route("/sms/leads/<int:lead_id>/messages")
+@auth.subscription_required
+def sms_lead_messages(lead_id):
+    user = auth.get_current_user()
+    lead = db.get_lead(lead_id, user["id"])
+    if not lead:
+        return jsonify({"error": "Lead not found."}), 404
+    messages = db.list_lead_messages(user["id"], lead_id)
+    return jsonify({
+        "lead": {
+            "id": lead["id"],
+            "name": lead.get("name"),
+            "phone_number": lead.get("phone_number"),
+            "status": lead.get("status"),
+            "next_action": lead.get("next_action"),
+            "follow_up_at": lead.get("follow_up_at"),
+        },
+        "messages": [
+            {
+                "id": m["id"],
+                "direction": m.get("direction"),
+                "status": m.get("status"),
+                "message_body": m.get("message_body"),
+                "created_at": m.get("created_at"),
+                "sent_at": m.get("sent_at"),
+            }
+            for m in messages
+        ],
+    })
+
+
+@app.route("/sms/inbox")
+@auth.subscription_required
+def sms_inbox():
+    user = auth.get_current_user()
+    insights = db.list_pending_insights(user["id"])
+    return jsonify({
+        "coach_configured": sms_coach.is_configured(),
+        "items": [
+            {
+                "id": item["id"],
+                "lead_id": item["lead_id"],
+                "lead_name": item.get("lead_name"),
+                "phone_number": item.get("phone_number"),
+                "lead_status": item.get("lead_status"),
+                "inbound_body": item.get("inbound_body"),
+                "summary": item.get("summary"),
+                "intent": item.get("intent"),
+                "next_best_step": item.get("next_best_step"),
+                "recommended_action": item.get("recommended_action"),
+                "suggested_reply": item.get("suggested_reply"),
+                "home_value_pitch": item.get("home_value_pitch"),
+                "confidence_score": item.get("confidence_score"),
+                "requires_manual_review": bool(item.get("requires_manual_review")),
+                "escalation_topics": [
+                    t for t in str(item.get("escalation_topics") or "").split(",") if t
+                ],
+                "suggested_message_id": item.get("suggested_message_id"),
+                "created_at": item.get("created_at"),
+            }
+            for item in insights
+        ],
+    })
+
+
+@app.route("/sms/suggestions/<int:insight_id>/dismiss", methods=["POST"])
+@auth.subscription_required
+def dismiss_sms_suggestion(insight_id):
+    user = auth.get_current_user()
+    insight = db.get_insight(insight_id, user["id"])
+    if not insight:
+        return jsonify({"error": "Suggestion not found."}), 404
+    db.update_insight_status(insight_id, user["id"], "dismissed")
+    if insight.get("suggested_message_id"):
+        db.update_sms_message_send_result(
+            insight["suggested_message_id"],
+            status="dismissed",
+            error_message="Dismissed by agent.",
+        )
+    return jsonify({"ok": True, "status": "dismissed"})
+
+
+@app.route("/sms/suggestions/<int:insight_id>/send", methods=["POST"])
+@auth.subscription_required
+@limiter.limit(lambda: f"{config.SMS_DAILY_LIMIT} per day", key_func=_user_rate_limit_key)
+def send_sms_suggestion(insight_id):
+    """Agent-approved send of a Claude-suggested reply. Never auto-sends."""
+    user = auth.get_current_user()
+    data = request.get_json(silent=True) or {}
+    if not data.get("compliance_confirmed"):
+        return jsonify({"error": "Confirm that this lead consented to receive SMS before sending."}), 400
+
+    insight = db.get_insight(insight_id, user["id"])
+    if not insight or insight.get("status") != "pending":
+        return jsonify({"error": "Suggestion not found or already handled."}), 404
+
+    if insight.get("requires_manual_review") and not data.get("force_send_after_review"):
+        return jsonify({
+            "error": (
+                "This reply was escalated for manual handling "
+                "(legal, financing, negotiation, fair housing, complaint, or uncertain facts). "
+                "Review carefully, then confirm send again."
+            ),
+            "requires_manual_review": True,
+            "escalation_topics": [
+                t for t in str(insight.get("escalation_topics") or "").split(",") if t
+            ],
+        }), 409
+
+    message_body = str(data.get("message_body") or insight.get("suggested_reply") or "").strip()[:480]
+    if not message_body:
+        return jsonify({"error": "Suggested reply is empty."}), 400
+
+    use_pitch = bool(data.get("use_home_value_pitch"))
+    if use_pitch and insight.get("home_value_pitch"):
+        message_body = str(insight["home_value_pitch"]).strip()[:480]
+
+    lead = db.get_lead(insight["lead_id"], user["id"])
+    if not lead:
+        return jsonify({"error": "Lead not found."}), 404
+    if (lead.get("opt_out_status") or "active") == "opted_out":
+        return jsonify({"error": "This lead opted out. Do not send SMS."}), 403
+
+    message_id = insight.get("suggested_message_id")
+    if message_id:
+        db.update_sms_message_send_result(message_id, status="draft", error_message=None)
+        db.update_sms_message_body(message_id, user["id"], message_body, direction="outbound")
+        db.update_sms_compliance(
+            message_id,
+            user["id"],
+            consent_status="confirmed",
+            opt_out_status=lead.get("opt_out_status") or "active",
+        )
+    else:
+        message_id = db.create_sms_message(
+            user_id=user["id"],
+            persona_id=None,
+            provider=config.SMS_PROVIDER,
+            data={
+                "lead_name": lead.get("name"),
+                "phone_number": lead.get("phone_number"),
+                "lead_type": lead.get("lead_type"),
+                "property_interest": lead.get("property_interest"),
+                "message_body": message_body,
+            },
+            status="draft",
+            lead_id=lead["id"],
+            direction="outbound",
+            consent_status="confirmed",
+            opt_out_status=lead.get("opt_out_status") or "active",
+        )
+
+    provider = get_sms_provider()
+    if not provider.is_configured():
+        return jsonify({"error": "Twilio SMS is not configured."}), 503
+
+    try:
+        result = provider.send_sms(
+            lead["phone_number"],
+            message_body,
+            status_callback=sms_status_callback_url(),
+        )
+        db.update_sms_message_send_result(
+            message_id,
+            provider_message_id=result["provider_message_id"],
+            status=result.get("status") or "queued",
+        )
+        db.set_lead_consent(lead["id"], user["id"], "confirmed")
+        db.touch_lead_outbound(lead["id"], user["id"])
+        db.update_insight_status(insight_id, user["id"], "sent")
+        db.record_tool_usage(user["id"], "ai_sms", "suggestion_sent")
+        return jsonify({
+            "ok": True,
+            "id": message_id,
+            "lead_id": lead["id"],
+            "status": result.get("status") or "queued",
+            "provider_message_id": result["provider_message_id"],
+            "message_body": message_body,
+            "consent_status": "confirmed",
+            "opt_out_status": lead.get("opt_out_status") or "active",
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+        }), 201
+    except SmsProviderError as exc:
+        logger.warning("Suggested SMS send failed code=%s", getattr(exc, "provider_code", None))
+        db.update_sms_message_send_result(message_id, status="failed", error_message=str(exc))
+        return jsonify({"error": str(exc)}), 503
 
 
 @app.route("/sms/generate", methods=["POST"])
@@ -605,7 +834,7 @@ def generate_sms():
 
     try:
         message = client.messages.create(
-            model="claude-opus-4-6",
+            model=config.CLAUDE_MODEL,
             max_tokens=300,
             messages=[{"role": "user", "content": build_sms_prompt(persona, cleaned)}],
         )
@@ -631,12 +860,20 @@ def send_sms_message():
     if not persona:
         return jsonify({"error": "Selected persona was not found."}), 404
 
+    lead_id = db.upsert_lead(user["id"], cleaned["phone_number"], cleaned, source="sms")
+    # validate_sms_send_payload already required compliance_confirmed.
+    consent_status = "confirmed"
+    db.set_lead_consent(lead_id, user["id"], "confirmed")
     message_id = db.create_sms_message(
         user_id=user["id"],
         persona_id=persona["id"],
         provider=config.SMS_PROVIDER,
         data=cleaned,
         status="draft",
+        lead_id=lead_id,
+        direction="outbound",
+        consent_status=consent_status,
+        opt_out_status="active",
     )
     db.record_tool_usage(user["id"], "ai_sms", "saved")
 
@@ -644,6 +881,7 @@ def send_sms_message():
     if not cleaned.get("send_now"):
         return jsonify({
             "id": message_id,
+            "lead_id": lead_id,
             "status": "draft",
             "message_body": cleaned["message_body"],
             "send_configured": provider.is_configured(),
@@ -657,6 +895,7 @@ def send_sms_message():
         )
         return jsonify({
             "id": message_id,
+            "lead_id": lead_id,
             "status": "draft",
             "message_body": cleaned["message_body"],
             "send_configured": False,
@@ -674,9 +913,11 @@ def send_sms_message():
             provider_message_id=result["provider_message_id"],
             status=result.get("status") or "queued",
         )
+        db.touch_lead_outbound(lead_id, user["id"])
         db.record_tool_usage(user["id"], "ai_sms", "sent")
         return jsonify({
             "id": message_id,
+            "lead_id": lead_id,
             "status": result.get("status") or "queued",
             "provider_message_id": result["provider_message_id"],
             "message_body": cleaned["message_body"],
@@ -745,28 +986,179 @@ def sms_test_send():
 @limiter.exempt
 @validate_twilio_request
 def sms_inbound_webhook():
-    """Twilio inbound SMS webhook. Do not point Twilio here until this route is public."""
+    """
+    Phase 1 inbound CRM webhook.
+    Match TopAI user + lead by Twilio recipient (To) and sender (From).
+    Save inbound message to conversation history and draft a Claude recommendation for agent approval.
+    Never auto-sends.
+    """
     from_number, from_error = validate_e164_phone(request.form.get("From"))
+    to_number, to_error = validate_e164_phone(request.form.get("To"))
     body = str(request.form.get("Body") or "").strip()[:1500]
     message_sid = str(request.form.get("MessageSid") or "").strip() or None
 
-    if from_error or not body:
-        # Acknowledge Twilio even on bad payloads to avoid retries storms.
+    if from_error or to_error or not body:
+        return _twiml_empty_response()
+
+    # Recipient must be this app's configured Twilio number.
+    configured_to = (config.TWILIO_PHONE_NUMBER or "").strip()
+    if not configured_to or to_number != configured_to:
+        logger.warning("Inbound SMS ignored: recipient number does not match configured Twilio number")
         return _twiml_empty_response()
 
     owner_id = db.find_sms_user_by_phone(from_number)
-    if owner_id:
-        try:
-            db.create_inbound_sms_message(
-                user_id=owner_id,
-                phone_number=from_number,
-                message_body=body,
-                provider_message_id=message_sid,
+    if not owner_id:
+        return _twiml_empty_response()
+
+    try:
+        seed = db.last_outbound_seed_for_phone(owner_id, from_number)
+        lead_id = db.upsert_lead(owner_id, from_number, seed, source="sms")
+        lead = db.get_lead(lead_id, owner_id)
+        opted_out = _looks_like_opt_out(body)
+        inbound_id = db.create_inbound_sms_message(
+            user_id=owner_id,
+            phone_number=from_number,
+            message_body=body,
+            provider_message_id=message_sid,
+            lead_id=lead_id,
+            lead_name=(lead or {}).get("name"),
+            opt_out_status="opted_out" if opted_out else "active",
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        if opted_out:
+            db.mark_lead_opt_out(lead_id, owner_id)
+        else:
+            db.update_lead_from_analysis(
+                lead_id,
+                owner_id,
+                status="replied",
+                last_inbound_at=now,
             )
-        except Exception:
-            logger.exception("Failed to persist inbound SMS")
+        _analyze_inbound_and_coach(owner_id, lead_id, inbound_id, body, opted_out=opted_out)
+    except Exception:
+        logger.exception("Failed to process inbound SMS")
 
     return _twiml_empty_response()
+
+
+def _looks_like_opt_out(body):
+    text = re.sub(r"[^a-z\s]", "", (body or "").strip().lower())
+    tokens = set(text.split())
+    return bool(tokens & {"stop", "unsubscribe", "cancel", "end", "quit"})
+
+
+def _analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_out=False):
+    """Claude coaching. Stores a suggested draft only — never auto-sends."""
+    lead = db.get_lead(lead_id, user_id)
+    if not lead:
+        return
+
+    conversation = db.list_lead_messages(user_id, lead_id)
+    if not sms_coach.is_configured():
+        db.create_lead_insight(
+            lead_id,
+            user_id,
+            inbound_id,
+            {
+                "summary": "Lead replied. Claude analysis is not configured.",
+                "intent": "unknown",
+                "next_best_step": "Review the inbound message and reply manually.",
+                "recommended_action": "Open the conversation and draft a reply.",
+                "suggested_reply": "",
+                "home_value_pitch": None,
+                "confidence_score": 0.0,
+                "requires_manual_review": True,
+                "escalation_topics": [],
+                "raw_json": None,
+            },
+            model="none",
+        )
+        return
+
+    try:
+        analysis = sms_coach.analyze_inbound_reply(
+            build_inbound_reply_analysis_prompt(lead, conversation, inbound_body)
+        )
+    except sms_coach.SmsCoachError as exc:
+        logger.warning("Claude inbound analysis failed: %s", type(exc).__name__)
+        db.create_lead_insight(
+            lead_id,
+            user_id,
+            inbound_id,
+            {
+                "summary": "Lead replied. Automatic analysis failed; review manually.",
+                "intent": "unknown",
+                "next_best_step": "Review the inbound message and reply manually.",
+                "recommended_action": "Open the conversation and draft a reply.",
+                "suggested_reply": "",
+                "home_value_pitch": None,
+                "confidence_score": 0.0,
+                "requires_manual_review": True,
+                "escalation_topics": [],
+                "raw_json": None,
+            },
+            model=config.CLAUDE_MODEL,
+        )
+        return
+
+    if opted_out:
+        analysis["lead_status"] = "do_not_contact"
+        analysis["requires_manual_review"] = True
+        analysis["recommended_action"] = "Do not send further SMS. Lead opted out."
+        analysis["suggested_reply"] = ""
+
+    follow_up_at = (
+        datetime.now(timezone.utc) + timedelta(days=analysis["follow_up_days"])
+    ).isoformat()
+    note_bits = [analysis.get("summary"), analysis.get("intent"), analysis.get("next_best_step")]
+    notes = " | ".join(bit for bit in note_bits if bit)[:1500] or None
+    db.update_lead_from_analysis(
+        lead_id,
+        user_id,
+        status=analysis.get("lead_status") or "replied",
+        notes=notes,
+        next_action=analysis.get("recommended_action") or analysis.get("next_best_step"),
+        follow_up_at=None if opted_out else follow_up_at,
+        last_inbound_at=datetime.now(timezone.utc).isoformat(),
+    )
+    if not opted_out:
+        db.create_follow_up(
+            lead_id,
+            user_id,
+            follow_up_at,
+            analysis.get("next_best_step") or "Follow up with lead",
+        )
+
+    suggested_id = None
+    if analysis.get("suggested_reply") and not opted_out:
+        suggested_id = db.create_sms_message(
+            user_id=user_id,
+            persona_id=None,
+            provider=config.SMS_PROVIDER,
+            data={
+                "lead_name": lead.get("name"),
+                "phone_number": lead.get("phone_number"),
+                "lead_type": lead.get("lead_type"),
+                "property_interest": lead.get("property_interest"),
+                "message_body": analysis["suggested_reply"],
+                "notes": "Claude suggested reply pending agent approval",
+            },
+            status="suggested",
+            lead_id=lead_id,
+            direction="suggested",
+            consent_status="unknown",
+            opt_out_status=lead.get("opt_out_status") or "active",
+        )
+
+    db.create_lead_insight(
+        lead_id,
+        user_id,
+        inbound_id,
+        analysis,
+        suggested_message_id=suggested_id,
+        model=config.CLAUDE_MODEL,
+    )
+    db.record_tool_usage(user_id, "ai_sms", "inbound_analyzed")
 
 
 @app.route("/webhook/sms/status", methods=["POST"])
@@ -903,7 +1295,7 @@ def generate():
         return jsonify({"error": error}), 400
     try:
         message = client.messages.create(
-            model="claude-opus-4-6",
+            model=config.CLAUDE_MODEL,
             max_tokens=1500,
             messages=[{"role": "user", "content": build_listing_prompt(cleaned)}],
         )
@@ -931,7 +1323,7 @@ def generate_script():
         return jsonify({"error": error}), 400
     try:
         message = client.messages.create(
-            model="claude-opus-4-6",
+            model=config.CLAUDE_MODEL,
             max_tokens=1200,
             messages=[{"role": "user", "content": build_script_prompt(cleaned)}],
         )

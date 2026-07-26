@@ -288,7 +288,7 @@
     <div class="card">
       <h2>AI SMS Assistant</h2>
       <div class="notice">
-        Use consent-based one-to-one SMS only. You are responsible for TCPA, DNC, carrier rules, brokerage policy, and local regulations. Include opt-out language when required.
+        Use consent-based one-to-one SMS only. You are responsible for TCPA, DNC, carrier rules, brokerage policy, and local regulations. Include opt-out language when required. When a lead replies, TopAI drafts a suggested response for your review — nothing is sent until you click Send.
       </div>
       <form id="sms-form">
         <div class="form-group"><label>Persona</label><select name="persona_id" id="sms-persona" required><option value="">Loading personas...</option></select></div>
@@ -319,6 +319,25 @@
         </div>
         <p class="muted" id="sms-config-note" style="font-size:12px;margin-top:10px;"></p>
       </form>
+    </div>
+    <div class="card results-panel">
+      <h2>Needs your review</h2>
+      <p class="muted" style="font-size:13px;margin-bottom:10px;">Claude summarizes inbound replies and drafts responses. You must approve before Send.</p>
+      <div class="placeholder" id="sms-inbox-placeholder">
+        <p>No inbound replies waiting<br/>for review yet.</p>
+      </div>
+      <div class="call-history" id="sms-inbox" style="display:none;"></div>
+    </div>
+    <div class="card results-panel">
+      <h2>CRM leads</h2>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Select lead to view conversation</label>
+        <select id="sms-lead-select"><option value="">Loading leads...</option></select>
+      </div>
+      <div class="call-history" id="sms-thread" style="display:none;"></div>
+      <div class="placeholder" id="sms-thread-placeholder">
+        <p>Select a lead to view<br/>conversation history.</p>
+      </div>
     </div>
     <div class="card results-panel">
       <h2>Recent SMS</h2>
@@ -406,7 +425,7 @@
   }
 
   async function loadSmsData() {
-    await Promise.all([loadVoicePersonas(), loadSmsMessages()]);
+    await Promise.all([loadVoicePersonas(), loadSmsMessages(), loadSmsInbox(), loadSmsLeads()]);
   }
 
   function updateSmsCharCount() {
@@ -425,9 +444,13 @@
       const data = await fetchJson('/sms/messages', {cache: 'no-store'});
       if (!data) return;
       if (note) {
-        note.textContent = data.send_configured
-          ? 'Twilio SMS sending is configured. Generated messages can be sent directly.'
-          : 'Twilio is not configured yet. You can still generate and save SMS drafts. Sending uses the Twilio API key variables configured in Railway.';
+        const sendNote = data.send_configured
+          ? 'Twilio SMS sending is configured.'
+          : 'Twilio is not configured yet. You can still generate and save SMS drafts.';
+        const coachNote = data.coach_configured
+          ? ' Claude inbound coaching is enabled via ANTHROPIC_API_KEY.'
+          : ' Add ANTHROPIC_API_KEY in Railway to enable Claude inbound coaching.';
+        note.textContent = sendNote + coachNote;
       }
       if (!data.messages.length) {
         history.style.display = 'none';
@@ -438,7 +461,7 @@
         const err = msg.error_message ? `<div class="call-meta">${escapeHtml(msg.error_message)}</div>` : '';
         return `<div class="call-item">
           <strong>${escapeHtml(msg.lead_name || 'Lead')} - ${escapeHtml(msg.status)}</strong>
-          <div class="call-meta">${escapeHtml(msg.persona_name || 'AI SMS Assistant')} | ${escapeHtml(msg.phone_number)}</div>
+          <div class="call-meta">${escapeHtml(msg.direction || 'outbound')} | ${escapeHtml(msg.phone_number)}</div>
           <div class="call-summary">${escapeHtml(msg.message_body || '')}</div>
           ${err}
         </div>`;
@@ -449,6 +472,157 @@
       history.style.display = 'none';
       placeholder.style.display = 'flex';
       placeholder.innerHTML = `<p>${err.message}</p>`;
+    }
+  }
+
+  async function loadSmsInbox() {
+    const inbox = document.getElementById('sms-inbox');
+    const placeholder = document.getElementById('sms-inbox-placeholder');
+    if (!inbox || !placeholder) return;
+    try {
+      const data = await fetchJson('/sms/inbox', {cache: 'no-store'});
+      if (!data) return;
+      if (!data.items.length) {
+        inbox.style.display = 'none';
+        placeholder.style.display = 'flex';
+        return;
+      }
+      inbox.innerHTML = data.items.map(item => {
+        const confidence = (typeof item.confidence_score === 'number')
+          ? `${Math.round(item.confidence_score * 100)}%`
+          : 'n/a';
+        const topics = (item.escalation_topics || []).join(', ');
+        const escalate = item.requires_manual_review
+          ? `<div class="call-meta" style="color:#b45309;margin-top:8px;"><strong>Manual review required</strong>${topics ? ` · ${escapeHtml(topics)}` : ''}. Edit carefully before sending.</div>`
+          : '';
+        const pitch = item.home_value_pitch
+          ? `<div class="call-meta" style="margin-top:8px;"><strong>Home-value pitch option:</strong> ${escapeHtml(item.home_value_pitch)}</div>
+             <button type="button" class="btn-generate" style="margin-top:8px;padding:8px 12px;font-size:12px;" onclick="sendSmsSuggestion(${item.id}, true, ${item.requires_manual_review ? 'true' : 'false'})">Send home-value pitch</button>`
+          : '';
+        return `<div class="call-item">
+          <strong>${escapeHtml(item.lead_name || 'Lead')} replied</strong>
+          <div class="call-meta">${escapeHtml(item.phone_number)} · ${escapeHtml(item.lead_status || '')} · confidence ${confidence}</div>
+          <div class="call-summary"><strong>Lead said:</strong> ${escapeHtml(item.inbound_body || '')}</div>
+          <div class="call-summary"><strong>Summary:</strong> ${escapeHtml(item.summary || '')}</div>
+          <div class="call-summary"><strong>Intent:</strong> ${escapeHtml(item.intent || '')}</div>
+          <div class="call-summary"><strong>Next step:</strong> ${escapeHtml(item.next_best_step || '')}</div>
+          <div class="call-summary"><strong>Recommended action:</strong> ${escapeHtml(item.recommended_action || '')}</div>
+          ${escalate}
+          <label class="checkbox-row" style="margin-top:10px;">
+            <input type="checkbox" id="suggest-consent-${item.id}" />
+            <span>I confirm consent before sending this reply.</span>
+          </label>
+          <textarea id="suggest-body-${item.id}" maxlength="480" style="width:100%;min-height:80px;margin-top:8px;padding:10px;border:1.5px solid #dde3f0;border-radius:8px;">${escapeHtml(item.suggested_reply || '')}</textarea>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+            <button type="button" class="btn-generate" style="padding:8px 12px;font-size:12px;" onclick="sendSmsSuggestion(${item.id}, false, ${item.requires_manual_review ? 'true' : 'false'})">Approve &amp; Send</button>
+            <button type="button" class="logout-btn" style="padding:8px 12px;" onclick="dismissSmsSuggestion(${item.id})">Dismiss</button>
+            <button type="button" class="billing-link" style="padding:8px 12px;" onclick="openSmsLead(${item.lead_id})">View conversation</button>
+          </div>
+          ${pitch}
+        </div>`;
+      }).join('');
+      placeholder.style.display = 'none';
+      inbox.style.display = 'flex';
+    } catch (err) {
+      inbox.style.display = 'none';
+      placeholder.style.display = 'flex';
+      placeholder.innerHTML = `<p>${err.message}</p>`;
+    }
+  }
+
+  async function loadSmsLeads() {
+    const select = document.getElementById('sms-lead-select');
+    if (!select) return;
+    try {
+      const data = await fetchJson('/sms/leads', {cache: 'no-store'});
+      if (!data) return;
+      if (!data.leads.length) {
+        select.innerHTML = '<option value="">No leads yet</option>';
+        return;
+      }
+      const current = select.value;
+      select.innerHTML = '<option value="">Select a lead...</option>' + data.leads.map(lead =>
+        `<option value="${lead.id}">${escapeHtml(lead.name || 'Lead')} · ${escapeHtml(lead.phone_number)} · ${escapeHtml(lead.status)}</option>`
+      ).join('');
+      if (current) select.value = current;
+      select.onchange = () => {
+        if (select.value) openSmsLead(select.value);
+      };
+    } catch (err) {
+      select.innerHTML = '<option value="">Leads unavailable</option>';
+    }
+  }
+
+  async function openSmsLead(leadId) {
+    const select = document.getElementById('sms-lead-select');
+    const thread = document.getElementById('sms-thread');
+    const placeholder = document.getElementById('sms-thread-placeholder');
+    if (select) select.value = String(leadId);
+    if (!thread || !placeholder) return;
+    try {
+      const data = await fetchJson(`/sms/leads/${leadId}/messages`, {cache: 'no-store'});
+      if (!data) return;
+      if (!data.messages.length) {
+        thread.style.display = 'none';
+        placeholder.style.display = 'flex';
+        placeholder.innerHTML = '<p>No messages for this lead yet.</p>';
+        return;
+      }
+      thread.innerHTML = data.messages.map(msg => {
+        const who = msg.direction === 'inbound' ? 'Lead' : (msg.direction === 'suggested' ? 'Suggested' : 'You');
+        return `<div class="call-item">
+          <strong>${who} · ${escapeHtml(msg.status)}</strong>
+          <div class="call-meta">${escapeHtml((msg.created_at || '').slice(0, 16).replace('T', ' '))} UTC</div>
+          <div class="call-summary">${escapeHtml(msg.message_body || '')}</div>
+        </div>`;
+      }).join('');
+      placeholder.style.display = 'none';
+      thread.style.display = 'flex';
+    } catch (err) {
+      thread.style.display = 'none';
+      placeholder.style.display = 'flex';
+      placeholder.innerHTML = `<p>${err.message}</p>`;
+    }
+  }
+
+  async function dismissSmsSuggestion(insightId) {
+    try {
+      await fetchJson(`/sms/suggestions/${insightId}/dismiss`, {method: 'POST'});
+      await loadSmsData();
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  async function sendSmsSuggestion(insightId, usePitch, requiresManual) {
+    const consent = document.getElementById(`suggest-consent-${insightId}`);
+    if (!consent || !consent.checked) {
+      alert('Confirm lead consent before sending.');
+      return;
+    }
+    if (requiresManual) {
+      const ok = confirm('This reply was escalated for manual handling. Confirm you reviewed it and still want to send?');
+      if (!ok) return;
+    }
+    const bodyEl = document.getElementById(`suggest-body-${insightId}`);
+    try {
+      const res = await fetch(`/sms/suggestions/${insightId}/send`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          compliance_confirmed: true,
+          message_body: bodyEl ? bodyEl.value : '',
+          use_home_value_pitch: !!usePitch,
+          force_send_after_review: !!requiresManual
+        })
+      });
+      if (res.status === 401) { handle401(); return; }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Send failed.');
+      await loadSmsData();
+      alert('Reply sent.');
+    } catch (err) {
+      alert(err.message);
     }
   }
 

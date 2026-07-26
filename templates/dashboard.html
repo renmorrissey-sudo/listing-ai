@@ -116,6 +116,50 @@
       </div>
     </section>
 
+    <section class="card" style="margin-bottom:18px;">
+      <h2>CRM leads</h2>
+      <p class="muted" style="margin-bottom:12px;">TopAI remembers every lead you text and tracks replies, follow-ups, and suggested next steps.</p>
+      <div class="metrics-row">
+        <div class="metric"><div class="k">Total leads</div><div class="v">{{ metrics.crm.leads_total }}</div></div>
+        <div class="metric"><div class="k">Replied</div><div class="v">{{ metrics.crm.leads_replied }}</div></div>
+        <div class="metric"><div class="k">Nurture</div><div class="v">{{ metrics.crm.leads_nurture }}</div></div>
+      </div>
+      <div class="metrics-row" style="margin-top:10px;">
+        <div class="metric"><div class="k">Hot</div><div class="v">{{ metrics.crm.leads_hot }}</div></div>
+        <div class="metric"><div class="k">Follow-ups due</div><div class="v">{{ metrics.crm.follow_ups_due }}</div></div>
+        <div class="metric"><div class="k">Pending reviews</div><div class="v">{{ metrics.crm.pending_suggestions }}</div></div>
+      </div>
+      {% if metrics.crm.recent_leads %}
+      <ul class="activity" style="margin-top:14px;">
+        {% for lead in metrics.crm.recent_leads %}
+        <li>
+          <strong>{{ lead.name or 'Lead' }}</strong>
+          <span class="pill">{{ lead.status }}</span>
+          <div class="muted" style="margin-top:4px;">{{ lead.phone_number }}{% if lead.follow_up_at %} · follow-up {{ lead.follow_up_at[:10] }}{% endif %}</div>
+          {% if lead.next_action %}
+          <div style="margin-top:6px;">{{ lead.next_action[:180] }}{% if lead.next_action|length > 180 %}…{% endif %}</div>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty">No CRM leads yet. Send an SMS to create a lead record.</p>
+      {% endif %}
+      {% if metrics.crm.due_follow_ups %}
+      <h3 style="margin:16px 0 8px;font-size:15px;">Due follow-ups</h3>
+      <ul class="activity">
+        {% for item in metrics.crm.due_follow_ups %}
+        <li>
+          <strong>{{ item.lead_name or 'Lead' }}</strong>
+          <div class="muted" style="margin-top:4px;">{{ item.phone_number }} · due {{ item.due_at[:10] }}</div>
+          {% if item.reason %}<div style="margin-top:6px;">{{ item.reason[:160] }}{% if item.reason|length > 160 %}…{% endif %}</div>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      <a class="cta" href="/#sms">Open AI SMS Assistant / CRM</a>
+    </section>
+
     <div class="grid">
       <section>
         <div class="card">

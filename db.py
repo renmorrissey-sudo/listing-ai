@@ -97,8 +97,10 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 persona_id INTEGER,
+                lead_id INTEGER,
                 provider TEXT NOT NULL DEFAULT 'twilio',
                 provider_message_id TEXT,
+                direction TEXT NOT NULL DEFAULT 'outbound',
                 lead_name TEXT,
                 phone_number TEXT NOT NULL,
                 lead_type TEXT,
@@ -114,10 +116,93 @@ def init_db():
             """
         )
         conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS leads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                name TEXT,
+                phone_number TEXT NOT NULL,
+                lead_type TEXT,
+                property_interest TEXT,
+                status TEXT NOT NULL DEFAULT 'new',
+                source TEXT NOT NULL DEFAULT 'sms',
+                notes TEXT,
+                next_action TEXT,
+                follow_up_at TEXT,
+                last_inbound_at TEXT,
+                last_outbound_at TEXT,
+                consent_status TEXT NOT NULL DEFAULT 'unknown',
+                opt_out_status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(user_id, phone_number)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS lead_follow_ups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                due_at TEXT NOT NULL,
+                reason TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS lead_insights (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                inbound_message_id INTEGER,
+                suggested_message_id INTEGER,
+                summary TEXT,
+                intent TEXT,
+                next_best_step TEXT,
+                recommended_action TEXT,
+                suggested_reply TEXT,
+                home_value_pitch TEXT,
+                confidence_score REAL,
+                requires_manual_review INTEGER NOT NULL DEFAULT 0,
+                escalation_topics TEXT,
+                model TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                raw_json TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        _ensure_column(conn, "sms_messages", "lead_id", "INTEGER")
+        _ensure_column(conn, "sms_messages", "direction", "TEXT DEFAULT 'outbound'")
+        _ensure_column(conn, "sms_messages", "consent_status", "TEXT DEFAULT 'unknown'")
+        _ensure_column(conn, "sms_messages", "opt_out_status", "TEXT DEFAULT 'active'")
+        _ensure_column(conn, "leads", "consent_status", "TEXT DEFAULT 'unknown'")
+        _ensure_column(conn, "leads", "opt_out_status", "TEXT DEFAULT 'active'")
+        _ensure_column(conn, "lead_insights", "intent", "TEXT")
+        _ensure_column(conn, "lead_insights", "confidence_score", "REAL")
+        _ensure_column(conn, "lead_insights", "requires_manual_review", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "lead_insights", "escalation_topics", "TEXT")
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_sms_messages_user_created ON sms_messages(user_id, created_at DESC)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_sms_messages_provider_id ON sms_messages(provider_message_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sms_messages_lead_created ON sms_messages(lead_id, created_at ASC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_leads_user_updated ON leads(user_id, updated_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lead_follow_ups_user_due ON lead_follow_ups(user_id, due_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lead_insights_user_status ON lead_insights(user_id, status, created_at DESC)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_created ON tool_usage(user_id, created_at DESC)"
@@ -126,6 +211,12 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_tool ON tool_usage(user_id, tool_key)"
         )
         _ensure_default_voice_personas(conn)
+
+
+def _ensure_column(conn, table, column, definition):
+    cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _ensure_default_voice_personas(conn):
@@ -376,20 +467,259 @@ def list_voice_calls(user_id, limit=20):
         return [dict(row) for row in rows]
 
 
-def create_sms_message(user_id, persona_id, provider, data, status="draft"):
+def upsert_lead(user_id, phone_number, data=None, source="sms"):
+    data = data or {}
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT * FROM leads WHERE user_id = ? AND phone_number = ?",
+            (user_id, phone_number),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE leads
+                SET name = COALESCE(?, name),
+                    lead_type = COALESCE(?, lead_type),
+                    property_interest = COALESCE(?, property_interest),
+                    notes = COALESCE(?, notes),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    data.get("lead_name") or data.get("name"),
+                    data.get("lead_type"),
+                    data.get("property_interest"),
+                    data.get("notes"),
+                    now,
+                    existing["id"],
+                ),
+            )
+            return existing["id"]
+        cur = conn.execute(
+            """
+            INSERT INTO leads
+                (user_id, name, phone_number, lead_type, property_interest, status, source,
+                 notes, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'new', ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                data.get("lead_name") or data.get("name") or "Lead",
+                phone_number,
+                data.get("lead_type"),
+                data.get("property_interest"),
+                source,
+                data.get("notes"),
+                now,
+                now,
+            ),
+        )
+        return cur.lastrowid
+
+
+def get_lead(lead_id, user_id):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM leads WHERE id = ? AND user_id = ?",
+            (lead_id, user_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_lead_by_phone(user_id, phone_number):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM leads WHERE user_id = ? AND phone_number = ?",
+            (user_id, phone_number),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_leads(user_id, limit=50):
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT l.*,
+                   (SELECT COUNT(*) FROM sms_messages sm WHERE sm.lead_id = l.id) AS message_count
+            FROM leads l
+            WHERE l.user_id = ?
+            ORDER BY l.updated_at DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def update_lead_from_analysis(lead_id, user_id, *, status=None, notes=None, next_action=None, follow_up_at=None, last_inbound_at=None):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE leads
+            SET status = COALESCE(?, status),
+                notes = COALESCE(?, notes),
+                next_action = COALESCE(?, next_action),
+                follow_up_at = COALESCE(?, follow_up_at),
+                last_inbound_at = COALESCE(?, last_inbound_at),
+                updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (status, notes, next_action, follow_up_at, last_inbound_at, now, lead_id, user_id),
+        )
+
+
+def touch_lead_outbound(lead_id, user_id):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE leads
+            SET last_outbound_at = ?,
+                status = CASE WHEN status = 'new' THEN 'contacted' ELSE status END,
+                updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (now, now, lead_id, user_id),
+        )
+
+
+def create_follow_up(lead_id, user_id, due_at, reason):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO lead_follow_ups (lead_id, user_id, due_at, reason, status, created_at)
+            VALUES (?, ?, ?, ?, 'pending', ?)
+            """,
+            (lead_id, user_id, due_at, reason, now),
+        )
+        return cur.lastrowid
+
+
+def list_due_follow_ups(user_id, limit=20):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT f.*, l.name AS lead_name, l.phone_number, l.status AS lead_status
+            FROM lead_follow_ups f
+            JOIN leads l ON l.id = f.lead_id
+            WHERE f.user_id = ? AND f.status = 'pending' AND f.due_at <= ?
+            ORDER BY f.due_at ASC
+            LIMIT ?
+            """,
+            (user_id, now, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def create_lead_insight(lead_id, user_id, inbound_message_id, analysis, suggested_message_id=None, model="claude"):
+    now = datetime.now(timezone.utc).isoformat()
+    topics = analysis.get("escalation_topics") or []
+    if isinstance(topics, list):
+        topics_value = ",".join(topics)
+    else:
+        topics_value = str(topics or "")
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO lead_insights
+                (lead_id, user_id, inbound_message_id, suggested_message_id, summary, intent, next_best_step,
+                 recommended_action, suggested_reply, home_value_pitch, confidence_score,
+                 requires_manual_review, escalation_topics, model, status, raw_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+            """,
+            (
+                lead_id,
+                user_id,
+                inbound_message_id,
+                suggested_message_id,
+                analysis.get("summary"),
+                analysis.get("intent"),
+                analysis.get("next_best_step"),
+                analysis.get("recommended_action"),
+                analysis.get("suggested_reply"),
+                analysis.get("home_value_pitch"),
+                analysis.get("confidence_score"),
+                1 if analysis.get("requires_manual_review") else 0,
+                topics_value,
+                model,
+                analysis.get("raw_json"),
+                now,
+            ),
+        )
+        return cur.lastrowid
+
+
+def list_pending_insights(user_id, limit=20):
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT i.*, l.name AS lead_name, l.phone_number, l.status AS lead_status,
+                   sm.message_body AS inbound_body
+            FROM lead_insights i
+            JOIN leads l ON l.id = i.lead_id
+            LEFT JOIN sms_messages sm ON sm.id = i.inbound_message_id
+            WHERE i.user_id = ? AND i.status = 'pending'
+            ORDER BY i.created_at DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_insight(insight_id, user_id):
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT i.*, l.name AS lead_name, l.phone_number, l.lead_type, l.property_interest
+            FROM lead_insights i
+            JOIN leads l ON l.id = i.lead_id
+            WHERE i.id = ? AND i.user_id = ?
+            """,
+            (insight_id, user_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def update_insight_status(insight_id, user_id, status):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE lead_insights SET status = ? WHERE id = ? AND user_id = ?",
+            (status, insight_id, user_id),
+        )
+
+
+def create_sms_message(
+    user_id,
+    persona_id,
+    provider,
+    data,
+    status="draft",
+    lead_id=None,
+    direction="outbound",
+    consent_status="unknown",
+    opt_out_status="active",
+):
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
         cur = conn.execute(
             """
             INSERT INTO sms_messages
-                (user_id, persona_id, provider, lead_name, phone_number, lead_type,
-                 property_interest, desired_outcome, notes, message_body, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (user_id, persona_id, lead_id, provider, direction, lead_name, phone_number, lead_type,
+                 property_interest, desired_outcome, notes, message_body, status, consent_status,
+                 opt_out_status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
                 persona_id,
+                lead_id,
                 provider,
+                direction,
                 data.get("lead_name"),
                 data.get("phone_number"),
                 data.get("lead_type"),
@@ -398,10 +728,66 @@ def create_sms_message(user_id, persona_id, provider, data, status="draft"):
                 data.get("notes"),
                 data.get("message_body"),
                 status,
+                consent_status,
+                opt_out_status,
                 now,
             ),
         )
         return cur.lastrowid
+
+
+def mark_lead_opt_out(lead_id, user_id):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE leads
+            SET opt_out_status = 'opted_out',
+                status = 'do_not_contact',
+                next_action = 'Do not contact — lead opted out',
+                updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (now, lead_id, user_id),
+        )
+
+
+def set_lead_consent(lead_id, user_id, consent_status="confirmed"):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE leads
+            SET consent_status = ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (consent_status, now, lead_id, user_id),
+        )
+
+
+def update_sms_message_body(message_id, user_id, message_body, direction="outbound"):
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE sms_messages
+            SET message_body = ?, direction = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (message_body, direction, message_id, user_id),
+        )
+
+
+def update_sms_compliance(message_id, user_id, consent_status=None, opt_out_status=None):
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE sms_messages
+            SET consent_status = COALESCE(?, consent_status),
+                opt_out_status = COALESCE(?, opt_out_status)
+            WHERE id = ? AND user_id = ?
+            """,
+            (consent_status, opt_out_status, message_id, user_id),
+        )
 
 
 def update_sms_message_send_result(message_id, provider_message_id=None, status="sent", error_message=None):
@@ -442,11 +828,22 @@ def find_sms_user_by_phone(phone_number):
     if not phone_number:
         return None
     with get_db() as conn:
+        lead = conn.execute(
+            """
+            SELECT user_id FROM leads
+            WHERE phone_number = ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (phone_number,),
+        ).fetchone()
+        if lead:
+            return lead["user_id"]
         row = conn.execute(
             """
             SELECT user_id
             FROM sms_messages
-            WHERE phone_number = ? AND status != 'received'
+            WHERE phone_number = ? AND status != 'received' AND user_id IS NOT NULL
             ORDER BY created_at DESC
             LIMIT 1
             """,
@@ -455,17 +852,25 @@ def find_sms_user_by_phone(phone_number):
         return row["user_id"] if row else None
 
 
-def create_inbound_sms_message(user_id, phone_number, message_body, provider_message_id=None):
+def create_inbound_sms_message(
+    user_id,
+    phone_number,
+    message_body,
+    provider_message_id=None,
+    lead_id=None,
+    lead_name=None,
+    opt_out_status="active",
+):
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
         cur = conn.execute(
             """
             INSERT INTO sms_messages
-                (user_id, persona_id, provider, provider_message_id, lead_name, phone_number,
-                 message_body, status, created_at)
-            VALUES (?, NULL, 'twilio', ?, NULL, ?, ?, 'received', ?)
+                (user_id, persona_id, lead_id, provider, provider_message_id, direction, lead_name,
+                 phone_number, message_body, status, consent_status, opt_out_status, created_at)
+            VALUES (?, NULL, ?, 'twilio', ?, 'inbound', ?, ?, ?, 'received', 'unknown', ?, ?)
             """,
-            (user_id, provider_message_id, phone_number, message_body, now),
+            (user_id, lead_id, provider_message_id, lead_name, phone_number, message_body, opt_out_status, now),
         )
         return cur.lastrowid
 
@@ -484,6 +889,46 @@ def list_sms_messages(user_id, limit=20):
             (user_id, limit),
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+def list_lead_messages(user_id, lead_id, limit=100):
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT sm.*, vp.name AS persona_name
+            FROM sms_messages sm
+            LEFT JOIN voice_personas vp ON vp.id = sm.persona_id
+            WHERE sm.user_id = ? AND sm.lead_id = ?
+            ORDER BY sm.created_at ASC
+            LIMIT ?
+            """,
+            (user_id, lead_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_sms_message(message_id, user_id):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM sms_messages WHERE id = ? AND user_id = ?",
+            (message_id, user_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def last_outbound_seed_for_phone(user_id, phone_number):
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT lead_name, lead_type, property_interest, notes, desired_outcome
+            FROM sms_messages
+            WHERE user_id = ? AND phone_number = ? AND status != 'received'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (user_id, phone_number),
+        ).fetchone()
+        return dict(row) if row else {}
 
 
 def record_tool_usage(user_id, tool_key, event_type="generated", metadata=None):
@@ -654,6 +1099,55 @@ def get_dashboard_metrics(user_id):
             (user_id,),
         ).fetchall()
 
+        leads_total = conn.execute(
+            "SELECT COUNT(*) AS count FROM leads WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()["count"]
+        leads_replied = conn.execute(
+            "SELECT COUNT(*) AS count FROM leads WHERE user_id = ? AND status = 'replied'",
+            (user_id,),
+        ).fetchone()["count"]
+        leads_nurture = conn.execute(
+            "SELECT COUNT(*) AS count FROM leads WHERE user_id = ? AND status = 'nurture'",
+            (user_id,),
+        ).fetchone()["count"]
+        leads_hot = conn.execute(
+            "SELECT COUNT(*) AS count FROM leads WHERE user_id = ? AND status = 'hot'",
+            (user_id,),
+        ).fetchone()["count"]
+        pending_suggestions = conn.execute(
+            "SELECT COUNT(*) AS count FROM lead_insights WHERE user_id = ? AND status = 'pending'",
+            (user_id,),
+        ).fetchone()["count"]
+        follow_ups_due = conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM lead_follow_ups
+            WHERE user_id = ? AND status = 'pending' AND due_at <= ?
+            """,
+            (user_id, now.isoformat()),
+        ).fetchone()["count"]
+        recent_leads = conn.execute(
+            """
+            SELECT id, name, phone_number, status, next_action, follow_up_at, updated_at
+            FROM leads
+            WHERE user_id = ?
+            ORDER BY updated_at DESC
+            LIMIT 8
+            """,
+            (user_id,),
+        ).fetchall()
+        due_follow_ups = conn.execute(
+            """
+            SELECT f.id, f.due_at, f.reason, l.name AS lead_name, l.phone_number, l.id AS lead_id
+            FROM lead_follow_ups f
+            JOIN leads l ON l.id = f.lead_id
+            WHERE f.user_id = ? AND f.status = 'pending' AND f.due_at <= ?
+            ORDER BY f.due_at ASC
+            LIMIT 8
+            """,
+            (user_id, now.isoformat()),
+        ).fetchall()
+
     content_pieces = (listing_total * 3) + (scripts_total * 3)
     return {
         "overview": {
@@ -661,10 +1155,21 @@ def get_dashboard_metrics(user_id):
             "script_generations": scripts_total,
             "ai_calls": calls_total,
             "sms_messages": sms_total,
+            "leads_total": leads_total,
             "appointments_requested": calls_appointments,
             "content_pieces": content_pieces,
             "activity_7d": listing_7d + scripts_7d + calls_7d + sms_7d,
             "activity_30d": listing_30d + scripts_30d + calls_30d + sms_30d,
+        },
+        "crm": {
+            "leads_total": leads_total,
+            "leads_replied": leads_replied,
+            "leads_nurture": leads_nurture,
+            "leads_hot": leads_hot,
+            "pending_suggestions": pending_suggestions,
+            "follow_ups_due": follow_ups_due,
+            "recent_leads": [dict(row) for row in recent_leads],
+            "due_follow_ups": [dict(row) for row in due_follow_ups],
         },
         "tools": {
             "listing_generator": {
