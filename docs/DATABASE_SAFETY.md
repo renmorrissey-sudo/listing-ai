@@ -108,10 +108,11 @@ python -m migrations.runner
 ```
 
 - Location: `migrations/versions/`
-- Order: `001_baseline` (raw autocommit Postgres DDL) → verify via fresh connection → stamp → `002` → `003`
+- Order: `001_baseline` → same-txn verify → stamp → **commit** → post-commit fresh-connection verify → `002` → `003`
 - Rules: forward-only, additive, versioned, reviewed, non-destructive
-- Postgres baseline DDL uses the raw psycopg connection (`migrations/pg_ddl.py`), not the SQLite compat binder
-- `001` is stamped only after required tables exist on a **new** connection (`pg_catalog.pg_class` check)
+- **Transaction owner:** `migrations/runner.py` only. Migration modules must not set `autocommit`, BEGIN, COMMIT, or ROLLBACK.
+- Postgres DDL uses raw psycopg execute helpers (`migrations/pg_ddl.py`) inside the runner transaction (CREATE TABLE/INDEX are transactional)
+- `001` is stamped only after required tables exist in the current transaction; the whole unit commits atomically (or rolls back with no ledger row)
 - If `001_baseline` was falsely recorded but base tables are missing **and the DB has no app data**, startup clears **only** `schema_migrations` rows and re-applies baseline — never on a non-empty database, never `DROP` user tables
 - New columns: additive migrations use `ADD COLUMN IF NOT EXISTS` / existence checks
 

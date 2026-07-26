@@ -1,4 +1,10 @@
-"""Apply forward-only pending migrations. Never resets or downgrades."""
+"""Apply forward-only pending migrations. Never resets or downgrades.
+
+The runner exclusively owns PostgreSQL transaction boundaries:
+  begin (implicit) → migration DDL/DML → verify → stamp → commit
+On failure: rollback and do not record the migration.
+Individual migration modules must not toggle autocommit or commit/rollback.
+"""
 
 from __future__ import annotations
 
@@ -54,20 +60,15 @@ def _ensure_migrations_table(conn):
     if conn.engine == "postgres":
         from migrations.pg_ddl import pg_execute
 
-        previous = conn._raw.autocommit
-        conn._raw.autocommit = True
-        try:
-            pg_execute(
-                conn,
-                """
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    version TEXT PRIMARY KEY,
-                    applied_at TEXT NOT NULL
-                )
-                """,
+        pg_execute(
+            conn,
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
             )
-        finally:
-            conn._raw.autocommit = previous
+            """,
+        )
     else:
         conn.execute(
             """
@@ -113,14 +114,10 @@ def verify_baseline_tables(conn):
 
 
 def _database_is_empty_of_app_data(conn) -> bool:
-    """True when no application base tables exist (or they exist but have zero rows).
-
-    Used only to decide whether it is safe to clear a false 001 stamp.
-    """
+    """True when no application base tables exist (or they exist but have zero rows)."""
     existing_app_tables = [t for t in APP_DATA_TABLES if _table_exists(conn, t)]
     if not existing_app_tables:
         return True
-    # If any app table exists, require zero rows across all existing app tables.
     for table in existing_app_tables:
         row = conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()
         count = int(row["c"] if isinstance(row, dict) else row[0])
@@ -133,16 +130,11 @@ def _stamp(conn, version: str):
     if conn.engine == "postgres":
         from migrations.pg_ddl import pg_execute
 
-        previous = conn._raw.autocommit
-        conn._raw.autocommit = True
-        try:
-            pg_execute(
-                conn,
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (%s, %s)",
-                (version, _now()),
-            )
-        finally:
-            conn._raw.autocommit = previous
+        pg_execute(
+            conn,
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (%s, %s)",
+            (version, _now()),
+        )
     else:
         conn.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
@@ -155,12 +147,7 @@ def _clear_migration_bookkeeping(conn):
     if conn.engine == "postgres":
         from migrations.pg_ddl import pg_execute
 
-        previous = conn._raw.autocommit
-        conn._raw.autocommit = True
-        try:
-            pg_execute(conn, "DELETE FROM schema_migrations")
-        finally:
-            conn._raw.autocommit = previous
+        pg_execute(conn, "DELETE FROM schema_migrations")
     else:
         conn.execute("DELETE FROM schema_migrations")
 
@@ -192,33 +179,31 @@ def _repair_false_baseline_stamp(conn, applied):
         file=sys.stderr,
     )
     _clear_migration_bookkeeping(conn)
-    if conn.engine != "postgres":
-        conn.commit()
+    conn.commit()
     return set()
 
 
 def _acquire_lock(conn):
+    """Session-level advisory lock (survives commits; does not require autocommit)."""
     if conn.engine == "postgres":
         from migrations.pg_ddl import pg_execute
 
-        previous = conn._raw.autocommit
-        conn._raw.autocommit = True
-        try:
-            pg_execute(conn, "SELECT pg_advisory_lock(%s)", (872364001,))
-        finally:
-            conn._raw.autocommit = previous
+        pg_execute(conn, "SELECT pg_advisory_lock(%s)", (872364001,))
+        conn.commit()
 
 
 def _release_lock(conn):
     if conn.engine == "postgres":
         from migrations.pg_ddl import pg_execute
 
-        previous = conn._raw.autocommit
-        conn._raw.autocommit = True
         try:
             pg_execute(conn, "SELECT pg_advisory_unlock(%s)", (872364001,))
-        finally:
-            conn._raw.autocommit = previous
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
 
 def _expected_versions():
@@ -249,7 +234,7 @@ def log_migration_state(applied):
 
 
 def _verify_baseline_on_fresh_connection():
-    """Verify tables via a brand-new connection (catches non-persisted DDL)."""
+    """Post-commit check: tables must be visible on a new connection."""
     verify_conn = connect()
     try:
         verify_baseline_tables(verify_conn)
@@ -258,33 +243,29 @@ def _verify_baseline_on_fresh_connection():
 
 
 def _apply_migration(conn, mod):
-    """Run one migration; stamp only after success (+ fresh baseline verify for 001)."""
+    """One migration, one transaction: DDL → verify → stamp → commit (or rollback)."""
     version = mod.VERSION
     try:
         if conn.engine == "postgres":
             mod.upgrade_postgres(conn)
         else:
             mod.upgrade_sqlite(conn)
-            try:
-                conn.commit()
-            except Exception:
-                pass
 
         if version == "001_baseline":
-            # Same-connection check.
             verify_baseline_tables(conn)
-            # Fresh-connection check — proves DDL persisted outside this session.
-            _verify_baseline_on_fresh_connection()
 
         _stamp(conn, version)
-        if conn.engine != "postgres":
-            conn.commit()
+        conn.commit()
     except Exception:
         try:
             conn.rollback()
         except Exception:
             pass
         raise
+
+    # After successful commit only — other sessions must see baseline tables.
+    if version == "001_baseline":
+        _verify_baseline_on_fresh_connection()
 
 
 def apply_pending_migrations():
@@ -299,18 +280,21 @@ def apply_pending_migrations():
 
     conn = connect()
     try:
+        # Runner owns transaction mode. Never leave this True during migrations.
         if conn.engine == "postgres" and hasattr(conn._raw, "autocommit"):
-            conn._raw.autocommit = False
+            if conn._raw.autocommit:
+                conn._raw.autocommit = False
 
         _acquire_lock(conn)
         _ensure_migrations_table(conn)
-        if conn.engine != "postgres":
-            conn.commit()
+        conn.commit()
 
         applied = _applied_versions(conn)
+        # Reading applied versions opens a transaction; commit before repair/apply.
+        conn.commit()
+
         applied = _repair_false_baseline_stamp(conn, applied)
 
-        # Never skip 001 when baseline tables are missing (even if stamped).
         if "001_baseline" in applied:
             missing = [t for t in missing_baseline_tables(conn) if t != "schema_migrations"]
             if missing:
@@ -318,6 +302,7 @@ def apply_pending_migrations():
                     "001_baseline is marked applied but required tables are still "
                     f"missing: {', '.join(missing)}"
                 )
+            conn.commit()
 
         for module_name in MIGRATION_MODULES:
             mod = import_module(module_name)
@@ -331,10 +316,8 @@ def apply_pending_migrations():
             logger.info("Applied migration %s", version)
             print(f"Applied migration {version}", file=sys.stderr)
 
-            if version == "001_baseline":
-                _verify_baseline_on_fresh_connection()
-
         verify_baseline_tables(conn)
+        conn.commit()
         log_migration_state(applied)
     except MigrationBootstrapError:
         try:

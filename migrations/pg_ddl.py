@@ -1,15 +1,14 @@
-"""Raw PostgreSQL DDL helpers for migrations (bypass CompatConnection quirks)."""
+"""Raw PostgreSQL DDL helpers for migrations (bypass CompatConnection quirks).
+
+These helpers execute SQL on the underlying psycopg connection but must never
+toggle autocommit or manage transactions — that is owned by migrations.runner.
+"""
 
 from __future__ import annotations
 
 
 def pg_execute(conn, sql: str, params=None):
-    """Execute SQL on the underlying psycopg connection.
-
-    Important: do not route DDL through CompatConnection.execute with an empty
-    params tuple — that path has failed to persist tables in production while
-    still allowing the migration to be stamped.
-    """
+    """Execute SQL on the underlying psycopg connection within the current txn."""
     raw = getattr(conn, "_raw", conn)
     if params is None:
         cur = raw.execute(sql)

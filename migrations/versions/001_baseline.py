@@ -290,30 +290,29 @@ POSTGRES_INDEXES = [
 
 
 def upgrade_postgres(conn):
-    """Create the full application schema using raw psycopg DDL + autocommit."""
+    """Create the full application schema inside the runner-owned transaction.
+
+    Must not toggle autocommit, BEGIN, COMMIT, or ROLLBACK — the migration
+    runner exclusively controls transaction boundaries. Ordinary CREATE TABLE /
+    CREATE INDEX statements are transactional in PostgreSQL.
+    """
     from migrations.pg_ddl import pg_execute, pg_table_exists
 
-    raw = conn._raw
-    previous_autocommit = raw.autocommit
-    raw.autocommit = True
     created = []
-    try:
-        for table in POSTGRES_TABLE_ORDER:
-            ddl = POSTGRES_TABLES[table]
-            print(f"001_baseline: CREATE TABLE {table}", file=sys.stderr)
-            pg_execute(conn, ddl)
-            if not pg_table_exists(conn, table):
-                raise RuntimeError(
-                    f"001_baseline failed: CREATE TABLE {table} did not create a "
-                    f"public base table (to_regclass/pg_class check failed)."
-                )
-            created.append(table)
+    for table in POSTGRES_TABLE_ORDER:
+        ddl = POSTGRES_TABLES[table]
+        print(f"001_baseline: CREATE TABLE {table}", file=sys.stderr)
+        pg_execute(conn, ddl)
+        if not pg_table_exists(conn, table):
+            raise RuntimeError(
+                f"001_baseline failed: CREATE TABLE {table} did not create a "
+                f"public base table (pg_class check failed in current transaction)."
+            )
+        created.append(table)
 
-        for index_name, ddl in POSTGRES_INDEXES:
-            print(f"001_baseline: CREATE INDEX {index_name}", file=sys.stderr)
-            pg_execute(conn, ddl)
-    finally:
-        raw.autocommit = previous_autocommit
+    for index_name, ddl in POSTGRES_INDEXES:
+        print(f"001_baseline: CREATE INDEX {index_name}", file=sys.stderr)
+        pg_execute(conn, ddl)
 
     print(
         "001_baseline: created tables: " + ", ".join(created),
