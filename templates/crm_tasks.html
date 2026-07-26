@@ -38,8 +38,9 @@
     <p class="muted">Overdue, due today, and upcoming follow-through work.</p>
     <div id="flash" class="flash"></div>
 
-    <div class="card">
-      <h2>Create task</h2>
+    <div class="card" id="task-form-card">
+      <h2 id="task-form-title">Create task</h2>
+      <input type="hidden" id="task-edit-id" value="" />
       <div class="row">
         <input id="task-title" placeholder="Task title" style="min-width:220px;" />
         <select id="task-type">
@@ -49,8 +50,10 @@
           {% for p in priorities %}<option value="{{ p }}" {% if p == 'normal' %}selected{% endif %}>{{ p }}</option>{% endfor %}
         </select>
         <input id="task-due" type="datetime-local" />
-        <button class="btn" type="button" onclick="createTask()">Add task</button>
+        <button class="btn" type="button" id="task-save-btn" onclick="saveTask()">Add task</button>
+        <button class="btn secondary" type="button" id="task-cancel-edit-btn" style="display:none;" onclick="resetTaskForm()">Cancel edit</button>
       </div>
+      <p class="muted" id="task-edit-hint" style="display:none;margin:10px 0 0;">Editing an existing task. Save to apply changes.</p>
     </div>
 
     {% macro task_table(title, items, empty) %}
@@ -67,6 +70,17 @@
             <td class="muted">{{ (task.due_at or '—')[:16] }}</td>
             <td><span class="pill">{{ task.priority }}</span></td>
             <td class="row">
+              <button
+                class="btn secondary"
+                type="button"
+                data-task-id="{{ task.id }}"
+                data-title="{{ task.title|e }}"
+                data-task-type="{{ task.task_type }}"
+                data-priority="{{ task.priority }}"
+                data-due-at="{{ task.due_at or '' }}"
+                data-lead-id="{{ task.lead_id or '' }}"
+                onclick="startEditTask(this)"
+              >Edit</button>
               <button class="btn" type="button" onclick="completeTask({{ task.id }})">Complete</button>
               <button class="btn secondary" type="button" onclick="cancelTask({{ task.id }})">Cancel</button>
             </td>
@@ -91,25 +105,65 @@
       el.className = err ? 'flash err' : 'flash';
       el.style.display = 'block';
     }
-    async function createTask() {
+
+    function toDatetimeLocalValue(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return '';
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    function resetTaskForm() {
+      document.getElementById('task-edit-id').value = '';
+      document.getElementById('task-title').value = '';
+      document.getElementById('task-type').value = 'general_follow_up';
+      document.getElementById('task-priority').value = 'normal';
+      document.getElementById('task-due').value = '';
+      document.getElementById('task-form-title').textContent = 'Create task';
+      document.getElementById('task-save-btn').textContent = 'Add task';
+      document.getElementById('task-cancel-edit-btn').style.display = 'none';
+      document.getElementById('task-edit-hint').style.display = 'none';
+    }
+
+    function startEditTask(btn) {
+      document.getElementById('task-edit-id').value = btn.dataset.taskId || '';
+      document.getElementById('task-title').value = btn.dataset.title || '';
+      document.getElementById('task-type').value = btn.dataset.taskType || 'general_follow_up';
+      document.getElementById('task-priority').value = btn.dataset.priority || 'normal';
+      document.getElementById('task-due').value = toDatetimeLocalValue(btn.dataset.dueAt || '');
+      document.getElementById('task-form-title').textContent = 'Edit task';
+      document.getElementById('task-save-btn').textContent = 'Save changes';
+      document.getElementById('task-cancel-edit-btn').style.display = 'inline-block';
+      document.getElementById('task-edit-hint').style.display = 'block';
+      document.getElementById('task-form-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      document.getElementById('task-title').focus();
+    }
+
+    async function saveTask() {
       const title = document.getElementById('task-title').value.trim();
       if (!title) return showFlash('Title required', true);
       const dueLocal = document.getElementById('task-due').value;
       const due_at = dueLocal ? new Date(dueLocal).toISOString() : null;
-      const res = await fetch('/api/crm/tasks', {
-        method: 'POST',
+      const editId = document.getElementById('task-edit-id').value.trim();
+      const payload = {
+        title,
+        task_type: document.getElementById('task-type').value,
+        priority: document.getElementById('task-priority').value,
+        due_at,
+      };
+      const url = editId ? `/api/crm/tasks/${editId}` : '/api/crm/tasks';
+      const method = editId ? 'PATCH' : 'POST';
+      const res = await fetch(url, {
+        method,
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          title,
-          task_type: document.getElementById('task-type').value,
-          priority: document.getElementById('task-priority').value,
-          due_at,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) return showFlash(data.error || 'Failed', true);
       location.reload();
     }
+
     async function completeTask(id) {
       const res = await fetch(`/api/crm/tasks/${id}/complete`, {method: 'POST'});
       if (!res.ok) {

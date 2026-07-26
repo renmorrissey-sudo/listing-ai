@@ -284,6 +284,23 @@ def api_tasks():
     return jsonify({"ok": True, "id": task_id}), 201
 
 
+@crm_bp.route("/api/crm/tasks/<int:task_id>", methods=["GET", "PATCH", "POST"])
+@auth.subscription_required
+def api_task_detail(task_id):
+    user = auth.get_current_user()
+    if request.method == "GET":
+        task = crm_db.get_task(user["id"], task_id)
+        if not task:
+            return jsonify({"error": "Task not found."}), 404
+        return jsonify({"task": task})
+    data = request.get_json(silent=True) or {}
+    task, error = crm_db.update_task(user["id"], task_id, data)
+    if error:
+        status = 404 if "not found" in error.lower() else 400
+        return jsonify({"error": error}), status
+    return jsonify({"ok": True, "task": task})
+
+
 @crm_bp.route("/api/crm/tasks/<int:task_id>/complete", methods=["POST"])
 @auth.subscription_required
 def api_complete_task(task_id):

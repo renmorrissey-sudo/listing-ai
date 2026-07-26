@@ -315,6 +315,83 @@ def list_tasks(user_id, bucket="all", limit=100):
         return [dict(r) for r in rows]
 
 
+def get_task(user_id, task_id):
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT t.*, l.name AS lead_name, l.phone_number
+            FROM tasks t
+            LEFT JOIN leads l ON l.id = t.lead_id
+            WHERE t.id = ? AND t.user_id = ?
+            """,
+            (task_id, user_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def update_task(user_id, task_id, data):
+    title = str(data.get("title") or "").strip()[:200]
+    if not title:
+        return None, "Task title is required."
+    task_type = data.get("task_type") if data.get("task_type") in TASK_TYPES else "general_follow_up"
+    priority = data.get("priority") if data.get("priority") in PRIORITIES else "normal"
+    due_at = data.get("due_at")
+    if due_at == "":
+        due_at = None
+    description = str(data.get("description") or "")[:2000]
+    lead_id = data.get("lead_id")
+    if lead_id in ("", None):
+        lead_id = None
+    elif lead_id is not None:
+        try:
+            lead_id = int(lead_id)
+        except (TypeError, ValueError):
+            return None, "Invalid lead."
+        with get_db() as conn:
+            lead = conn.execute(
+                "SELECT id FROM leads WHERE id = ? AND user_id = ?",
+                (lead_id, user_id),
+            ).fetchone()
+            if not lead:
+                return None, "Lead not found."
+
+    now = _now()
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT * FROM tasks WHERE id = ? AND user_id = ?",
+            (task_id, user_id),
+        ).fetchone()
+        if not existing:
+            return None, "Task not found."
+        # Keep existing lead when not provided in payload
+        if "lead_id" not in data:
+            lead_id = existing["lead_id"]
+        conn.execute(
+            """
+            UPDATE tasks
+            SET title = ?, description = ?, due_at = ?, priority = ?, task_type = ?,
+                lead_id = ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (title, description, due_at, priority, task_type, lead_id, now, task_id, user_id),
+        )
+    activity_lead = lead_id or existing["lead_id"]
+    if activity_lead:
+        add_lead_activity(
+            activity_lead,
+            user_id,
+            "task_updated",
+            f"Task updated: {title}",
+            {
+                "task_id": task_id,
+                "task_type": task_type,
+                "due_at": due_at,
+                "priority": priority,
+            },
+        )
+    return get_task(user_id, task_id), None
+
+
 def complete_task(user_id, task_id):
     now = _now()
     with get_db() as conn:

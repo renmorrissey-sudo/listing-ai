@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Tutorial - {{ product_name }}</title>
   <meta name="robots" content="noindex" />
-  <meta name="description" content="Subscriber tutorial for using TopAI Real Estate Tools: Listing Generator, Cold Call Scripts, and AI Calling Assistant." />
+  <meta name="description" content="Subscriber tutorial for TopAI Real Estate Tools: Listing Generator, Cold Call Scripts, AI Calling, AI SMS, and CRM lead workflow." />
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; line-height: 1.65; }
@@ -20,8 +20,8 @@
     .public-nav { background: #eef2f7; border-bottom: 1px solid #dde4f0; padding: 9px 32px; font-size: 13px; }
     .public-nav a { color: #445; text-decoration: none; margin-right: 18px; font-weight: 600; }
     .public-nav a:hover, .public-nav a.active { color: #4f8ef7; }
-    .tool-nav { background: #232344; display: flex; padding: 0 32px; gap: 4px; }
-    .tool-nav a { padding: 12px 20px; font-size: 13px; font-weight: 600; color: #8899bb; text-decoration: none; border-bottom: 3px solid transparent; }
+    .tool-nav { background: #232344; display: flex; padding: 0 32px; gap: 4px; overflow-x: auto; }
+    .tool-nav a { padding: 12px 20px; font-size: 13px; font-weight: 600; color: #8899bb; text-decoration: none; border-bottom: 3px solid transparent; white-space: nowrap; }
     .tool-nav a:hover { color: #ccd; }
     .tool-nav a.active { color: #4f8ef7; border-bottom-color: #4f8ef7; }
     main { max-width: 920px; margin: 28px auto 40px; padding: 0 20px; }
@@ -66,6 +66,9 @@
 
   <div class="public-nav">
     <a href="/dashboard">Dashboard</a>
+    <a href="/crm/leads">Leads</a>
+    <a href="/crm/tasks">Tasks</a>
+    <a href="/crm/needs-attention">Needs Attention</a>
     <a href="/tutorial" class="active">Tutorial</a>
     <a href="/terms">Terms</a>
     <a href="/privacy">Privacy</a>
@@ -75,6 +78,9 @@
 
   <nav class="tool-nav">
     <a href="/dashboard">Dashboard</a>
+    <a href="/crm/leads">Leads</a>
+    <a href="/crm/tasks">Tasks</a>
+    <a href="/crm/needs-attention">Needs Attention</a>
     <a href="/">Listing Generator</a>
     <a href="/#coldcall">Cold Call Scripts</a>
     <a href="/#voice">AI Calling Assistant</a>
@@ -85,15 +91,17 @@
   <main>
     <section class="hero">
       <h1>How to use your TopAI tools</h1>
-      <p class="muted">This tutorial is for paid subscribers. Follow each section to generate listing marketing content, prospecting scripts, and consent-based AI follow-up calls.</p>
+      <p class="muted">This tutorial is for paid subscribers. Learn listing marketing, prospecting scripts, consent-based AI calls and SMS, plus the CRM workflow for leads, follow-ups, tasks, and appointments.</p>
       <div class="toc">
         <a href="#listing">1. Listing Generator</a>
         <a href="#scripts">2. Cold Call Scripts</a>
         <a href="#calling">3. AI Calling Assistant</a>
         <a href="#sms">4. AI SMS Assistant</a>
+        <a href="#crm">5. CRM &amp; Lead Workflow</a>
+        <a href="#workflow">6. Recommended workflow</a>
       </div>
       <a class="cta" href="/">Open the tools</a>
-      <a class="cta secondary" href="#listing">Start with Listing Generator</a>
+      <a class="cta secondary" href="#crm">Jump to CRM</a>
     </section>
 
     <section class="section" id="listing">
@@ -187,7 +195,7 @@
     <section class="section" id="sms">
       <div class="badge">Tool 4</div>
       <h2>AI SMS Assistant</h2>
-      <p class="muted">Use this for consent-based one-to-one text outreach. Generate a short SMS, edit it, then send through Twilio when configured.</p>
+      <p class="muted">Use this for consent-based one-to-one text outreach. Generate a short SMS, edit it, then send through Twilio when configured. When a lead replies, Claude coaches you — you always approve before anything is sent or applied.</p>
 
       <h3>Before you start</h3>
       <ul>
@@ -196,37 +204,129 @@
         <li>Include opt-out language when required.</li>
       </ul>
 
-      <h3>Step-by-step</h3>
+      <h3>Send an outbound SMS</h3>
       <ol>
         <li>Choose <strong>AI SMS Assistant</strong>.</li>
         <li>Select a persona and enter the lead phone number.</li>
         <li>Add lead type, property interest, desired outcome, and notes.</li>
         <li>Click <strong>Generate SMS</strong>, then edit the draft if needed.</li>
         <li>Confirm compliance and click <strong>Send SMS</strong>.</li>
-        <li>When a lead replies, open <strong>Needs your review</strong> — Claude summarizes the reply, suggests the next action, and drafts a response.</li>
-        <li>Edit if needed, confirm consent, then click <strong>Approve &amp; Send</strong>. TopAI never auto-sends AI replies.</li>
-        <li>Track leads on <strong>Leads</strong>, work items on <strong>Tasks</strong>, and the <strong>Needs Attention</strong> queue from the Dashboard nav.</li>
-        <li>Open a lead to change status, schedule follow-ups, create tasks, and record appointment outcomes.</li>
-        <li>In the AI SMS inbox, approve Claude suggestions for status, follow-up, tasks, or appointment separately from Approve &amp; Send for the SMS draft.</li>
+        <li>Sending creates or updates a CRM lead for that phone number.</li>
       </ol>
 
-      <div class="tip">Tip: Claude recommendations never auto-apply. Status, follow-ups, tasks, and appointments require your approval. STOP/opt-out sets Do Not Contact, cancels pending drafts, and blocks further SMS. Escalated topics require manual review before send.</div>
+      <h3>When a lead replies</h3>
+      <ol>
+        <li>Open <strong>Needs your review</strong> in the AI SMS panel (also surfaced on Dashboard and Needs Attention).</li>
+        <li>Read Claude’s summary, intent, recommended next action, and draft reply.</li>
+        <li>Edit the draft if needed, confirm consent, then click <strong>Approve &amp; Send</strong>.</li>
+        <li>If Claude suggests a status, follow-up, tasks, or appointment, use those <strong>Approve</strong> buttons separately — they do not apply until you click them.</li>
+        <li>Use <strong>View conversation</strong> or <strong>Open CRM lead</strong> to see the full thread and lead record.</li>
+      </ol>
+
+      <h3>Opt-out and escalations</h3>
+      <ul>
+        <li>If the lead texts STOP, UNSUBSCRIBE, CANCEL, END, or QUIT, TopAI marks them <strong>Do Not Contact</strong>, cancels pending draft replies, and blocks further SMS.</li>
+        <li>Legal, financing, negotiation, fair housing, complaint, or uncertain property-fact topics require manual review before you can send.</li>
+      </ul>
+
+      <div class="tip">Tip: TopAI never auto-sends AI replies and never auto-applies Claude’s CRM suggestions. You stay in control of every message and every pipeline change.</div>
       <a class="cta" href="/#sms">Go to AI SMS Assistant</a>
-      <a class="cta" href="/crm/leads" style="margin-left:8px;">Open CRM Leads</a>
+      <a class="cta secondary" href="#crm">Learn the CRM workflow</a>
     </section>
 
-    <section class="section">
+    <section class="section" id="crm">
+      <div class="badge">CRM</div>
+      <h2>CRM &amp; Lead Workflow</h2>
+      <p class="muted">Manage every SMS lead in one place: statuses, follow-ups, tasks, appointments, a Needs Attention queue, and a pipeline view on the Dashboard. Times are stored in UTC and shown in your browser’s local time where formatted.</p>
+
+      <h3>Where to find CRM</h3>
+      <ul>
+        <li><strong>Dashboard</strong> — pipeline stage counts, overdue follow-ups, drafts awaiting approval, and Needs Attention highlights.</li>
+        <li><strong>Leads</strong> — filterable lead list; open any lead for the full record.</li>
+        <li><strong>Tasks</strong> — overdue, due today, and upcoming work.</li>
+        <li><strong>Needs Attention</strong> — prioritized queue of items that need you now.</li>
+        <li><strong>AI SMS</strong> — conversation history plus Claude approve cards.</li>
+      </ul>
+
+      <h3>Lead statuses</h3>
+      <p class="muted">Each lead has a status you control. Change it from the lead detail page.</p>
+      <ul>
+        <li>New → Attempting Contact → Contacted → Qualified</li>
+        <li>Appointment Scheduled → Appointment Completed</li>
+        <li>Nurture → Under Contract → Closed Won / Closed Lost</li>
+        <li><strong>Do Not Contact</strong> — protected; automation cannot remove it after an opt-out</li>
+      </ul>
+      <p class="muted">Every status change is written to the lead’s activity timeline.</p>
+
+      <h3>Lead detail page</h3>
+      <ol>
+        <li>Open <strong>Leads</strong>, then click <strong>Open</strong> on a lead.</li>
+        <li>Use quick actions: <strong>Draft SMS</strong>, <strong>Call</strong>, create a task, schedule a follow-up, or schedule an appointment.</li>
+        <li>Change status with the status dropdown and <strong>Save status</strong>.</li>
+        <li>Scroll the activity timeline for SMS events, Claude insights, status changes, and completed work.</li>
+      </ol>
+
+      <h3>Follow-ups</h3>
+      <ol>
+        <li>On the lead page, use quick picks: Tomorrow, +3 days, +1 week, +2 weeks, or +30 days.</li>
+        <li>Add a short reason so you know why you’re circling back.</li>
+        <li>Mark complete or dismiss when done. Overdue follow-ups appear in Needs Attention.</li>
+      </ol>
+
+      <h3>Tasks</h3>
+      <ol>
+        <li>Create tasks from the lead page or from <strong>Tasks</strong> (call, send SMS, CMA, consultation, and more).</li>
+        <li>Set due date and priority when needed.</li>
+        <li>Complete or cancel from the Tasks page or the lead record. Completing a task logs activity on the lead.</li>
+      </ol>
+
+      <h3>Appointments</h3>
+      <ol>
+        <li>Schedule an appointment on the lead page (type + start time).</li>
+        <li>After the meeting, record an <strong>outcome</strong> (for example follow-up required, showing scheduled, not ready).</li>
+        <li>Past appointments without an outcome show up in Needs Attention until you record one.</li>
+      </ol>
+
+      <h3>Needs Attention queue</h3>
+      <p class="muted">Open this page daily. Items are prioritized (urgent / high first) and can include:</p>
+      <ul>
+        <li>Unreviewed inbound SMS or draft replies awaiting approval</li>
+        <li>High intent, appointment requested, sensitive topic, or low AI confidence</li>
+        <li>Overdue follow-ups or tasks</li>
+        <li>Failed / undelivered SMS</li>
+        <li>Missing appointment outcomes</li>
+        <li>Opt-out requests</li>
+      </ul>
+      <p class="muted">Click <strong>Resolve</strong> when handled. Opt-out, delivery failure, and sensitive-topic items require a short resolution reason.</p>
+
+      <h3>Approving Claude CRM suggestions</h3>
+      <ol>
+        <li>In the AI SMS inbox, review each suggestion card (status, follow-up, tasks, appointment).</li>
+        <li>Click <strong>Approve</strong> only for the items you want applied.</li>
+        <li>Leave the rest dismissed or handle them manually on the lead page.</li>
+      </ol>
+
+      <div class="tip">Tip: Start each day on Dashboard → Needs Attention, clear the queue, then work your Tasks and follow-ups. Keep Do Not Contact leads untouched for SMS.</div>
+      <a class="cta" href="/crm/leads">Open Leads</a>
+      <a class="cta secondary" href="/crm/needs-attention">Open Needs Attention</a>
+      <a class="cta secondary" href="/dashboard">Open Dashboard</a>
+    </section>
+
+    <section class="section" id="workflow">
       <h2>Recommended workflow</h2>
       <ol>
         <li>Generate listing, social, and email drafts for a property.</li>
         <li>Publish or send the reviewed marketing copy.</li>
         <li>Generate call scripts for your target farm or lead type.</li>
         <li>Use AI Calling Assistant for consented follow-up calls.</li>
-        <li>Use AI SMS Assistant for short consented text follow-ups.</li>
-        <li>Review summaries and book the appointments that come back.</li>
+        <li>Use AI SMS Assistant for short consented text follow-ups (creates CRM leads).</li>
+        <li>When leads reply, approve Claude’s draft SMS and any status / follow-up / task / appointment suggestions you want.</li>
+        <li>Work the Needs Attention queue, complete tasks, and record appointment outcomes.</li>
+        <li>Watch pipeline stages on the Dashboard as leads move toward Closed Won.</li>
       </ol>
       <p class="muted">Need help? Email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.</p>
       <a class="cta" href="/">Back to your tools</a>
+      <a class="cta secondary" href="/crm/leads">Go to CRM Leads</a>
     </section>
   </main>
 

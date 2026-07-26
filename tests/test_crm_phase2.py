@@ -64,6 +64,32 @@ def test_task_complete_creates_activity(two_users):
     assert any(a["event_type"] == "task_completed" for a in activities)
 
 
+def test_task_update(two_users):
+    u1, _ = two_users
+    lead_id = _lead(u1)
+    task_id, err = crm_db.create_task(
+        u1, {"title": "Old title", "lead_id": lead_id, "task_type": "call", "priority": "normal"}
+    )
+    assert err is None
+    due = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+    task, err = crm_db.update_task(
+        u1,
+        task_id,
+        {
+            "title": "Updated title",
+            "task_type": "prepare_cma",
+            "priority": "high",
+            "due_at": due,
+        },
+    )
+    assert err is None
+    assert task["title"] == "Updated title"
+    assert task["task_type"] == "prepare_cma"
+    assert task["priority"] == "high"
+    activities = crm_db.list_lead_activities(u1, lead_id)
+    assert any(a["event_type"] == "task_updated" for a in activities)
+
+
 def test_appointment_outcome_required_for_resolve_path(two_users):
     u1, _ = two_users
     lead_id = _lead(u1)
