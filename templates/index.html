@@ -196,6 +196,9 @@
   <button class="tool-nav-btn" data-tool="voice" onclick="switchTool('voice', this)">AI Calling Assistant</button>
   <button class="tool-nav-btn" data-tool="sms" onclick="switchTool('sms', this)">AI SMS Assistant</button>
   <a class="tool-nav-btn nav-subscriber" id="dashboard-tool-link" href="/dashboard" style="display:none; text-decoration:none;">Dashboard</a>
+  <a class="tool-nav-btn nav-subscriber" id="crm-leads-tool-link" href="/crm/leads" style="display:none; text-decoration:none;">Leads</a>
+  <a class="tool-nav-btn nav-subscriber" id="crm-tasks-tool-link" href="/crm/tasks" style="display:none; text-decoration:none;">Tasks</a>
+  <a class="tool-nav-btn nav-subscriber" id="crm-needs-tool-link" href="/crm/needs-attention" style="display:none; text-decoration:none;">Needs Attention</a>
   <a class="tool-nav-btn nav-subscriber" id="tutorial-tool-link" href="/tutorial" style="display:none; text-decoration:none;">Tutorial</a>
 </nav>
 
@@ -499,6 +502,34 @@
           ? `<div class="call-meta" style="margin-top:8px;"><strong>Home-value pitch option:</strong> ${escapeHtml(item.home_value_pitch)}</div>
              <button type="button" class="btn-generate" style="margin-top:8px;padding:8px 12px;font-size:12px;" onclick="sendSmsSuggestion(${item.id}, true, ${item.requires_manual_review ? 'true' : 'false'})">Send home-value pitch</button>`
           : '';
+        const statusCard = item.suggested_lead_status
+          ? `<div class="call-summary" style="margin-top:10px;padding:10px;background:#f8fafc;border-radius:8px;">
+               <strong>Suggested status:</strong> ${escapeHtml(item.suggested_lead_status_label || item.suggested_lead_status)}
+               <div style="margin-top:8px;"><button type="button" class="btn-generate" style="padding:8px 12px;font-size:12px;" onclick="approveCrmSuggestion(${item.id}, 'status')">Approve status</button></div>
+             </div>`
+          : '';
+        const fuCard = item.suggested_follow_up_at
+          ? `<div class="call-summary" style="margin-top:10px;padding:10px;background:#f8fafc;border-radius:8px;">
+               <strong>Suggested follow-up:</strong> ${escapeHtml(String(item.suggested_follow_up_at).slice(0,16))} UTC
+               <div class="call-meta">${escapeHtml(item.suggested_follow_up_reason || '')}</div>
+               <div style="margin-top:8px;"><button type="button" class="btn-generate" style="padding:8px 12px;font-size:12px;" onclick="approveCrmSuggestion(${item.id}, 'follow-up')">Approve follow-up</button></div>
+             </div>`
+          : '';
+        const tasks = Array.isArray(item.suggested_tasks) ? item.suggested_tasks : [];
+        const tasksCard = tasks.length
+          ? `<div class="call-summary" style="margin-top:10px;padding:10px;background:#f8fafc;border-radius:8px;">
+               <strong>Suggested tasks:</strong>
+               <ul style="margin:6px 0 0;padding-left:18px;">${tasks.map(t => `<li>${escapeHtml((t && t.title) || t || '')}</li>`).join('')}</ul>
+               <div style="margin-top:8px;"><button type="button" class="btn-generate" style="padding:8px 12px;font-size:12px;" onclick="approveCrmSuggestion(${item.id}, 'tasks')">Approve tasks</button></div>
+             </div>`
+          : '';
+        const apptCard = item.appointment_requested
+          ? `<div class="call-summary" style="margin-top:10px;padding:10px;background:#f8fafc;border-radius:8px;">
+               <strong>Appointment requested</strong>
+               <div class="call-meta">Claude suggested scheduling — confirm time on the lead page if needed.</div>
+               <div style="margin-top:8px;"><button type="button" class="btn-generate" style="padding:8px 12px;font-size:12px;" onclick="approveCrmSuggestion(${item.id}, 'appointment')">Approve appointment</button></div>
+             </div>`
+          : '';
         return `<div class="call-item">
           <strong>${escapeHtml(item.lead_name || 'Lead')} replied</strong>
           <div class="call-meta">${escapeHtml(item.phone_number)} · ${escapeHtml(item.lead_status || '')} · confidence ${confidence}</div>
@@ -508,6 +539,7 @@
           <div class="call-summary"><strong>Next step:</strong> ${escapeHtml(item.next_best_step || '')}</div>
           <div class="call-summary"><strong>Recommended action:</strong> ${escapeHtml(item.recommended_action || '')}</div>
           ${escalate}
+          ${statusCard}${fuCard}${tasksCard}${apptCard}
           <label class="checkbox-row" style="margin-top:10px;">
             <input type="checkbox" id="suggest-consent-${item.id}" />
             <span>I confirm consent before sending this reply.</span>
@@ -517,6 +549,7 @@
             <button type="button" class="btn-generate" style="padding:8px 12px;font-size:12px;" onclick="sendSmsSuggestion(${item.id}, false, ${item.requires_manual_review ? 'true' : 'false'})">Approve &amp; Send</button>
             <button type="button" class="logout-btn" style="padding:8px 12px;" onclick="dismissSmsSuggestion(${item.id})">Dismiss</button>
             <button type="button" class="billing-link" style="padding:8px 12px;" onclick="openSmsLead(${item.lead_id})">View conversation</button>
+            <a class="billing-link" style="padding:8px 12px;" href="/crm/leads/${item.lead_id}">Open CRM lead</a>
           </div>
           ${pitch}
         </div>`;
@@ -588,6 +621,31 @@
   async function dismissSmsSuggestion(insightId) {
     try {
       await fetchJson(`/sms/suggestions/${insightId}/dismiss`, {method: 'POST'});
+      await loadSmsData();
+    } catch (err) {
+      alert(err.message);
+    }
+  }
+
+  async function approveCrmSuggestion(insightId, kind) {
+    const paths = {
+      status: `/api/crm/insights/${insightId}/approve-status`,
+      'follow-up': `/api/crm/insights/${insightId}/approve-follow-up`,
+      tasks: `/api/crm/insights/${insightId}/approve-tasks`,
+      appointment: `/api/crm/insights/${insightId}/approve-appointment`,
+    };
+    const path = paths[kind];
+    if (!path) return;
+    try {
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({}),
+      });
+      if (res.status === 401) { handle401(); return; }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Approve failed.');
+      alert('Suggestion approved and applied.');
       await loadSmsData();
     } catch (err) {
       alert(err.message);

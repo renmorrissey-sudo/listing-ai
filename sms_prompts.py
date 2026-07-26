@@ -11,22 +11,28 @@ def build_inbound_reply_analysis_prompt(lead, conversation, inbound_text):
 Return ONLY JSON with these keys:
 - summary: concise summary of the lead's message
 - intent: inferred intent in a short phrase
-- next_best_step: what the agent should do next
-- recommended_action: concrete next action recommendation
-- suggested_reply: one SMS draft for agent approval (under 420 chars). If escalation is required, draft a brief acknowledgment that the agent will follow up personally.
+- recommended_next_action: concrete next action for the agent
+- draft_reply: one SMS draft for agent approval (under 420 chars). If escalation is required, draft a brief acknowledgment that the agent will follow up personally.
+- confidence: number from 0 to 1
+- sensitive_topic: true if legal/financing/negotiation/fair housing/complaint/uncertain facts apply
+- suggested_lead_status: one of new, attempting_contact, contacted, qualified, appointment_scheduled, appointment_completed, nurture, under_contract, closed_won, closed_lost, do_not_contact (suggestion only — never applied automatically)
+- suggested_follow_up_at: ISO-8601 UTC datetime string or null
+- suggested_follow_up_reason: short reason for the follow-up
+- suggested_tasks: array of up to 5 objects {{title, task_type, due_at}} (suggestions only)
+- appointment_requested: true if the lead asked to meet/call/show
+- appointment_details: object with type/time hints or null
+- needs_attention_reasons: array of reason codes if the agent should review urgently
 - home_value_pitch: optional SMS pitching a home-value / seller consultation if relevant, else empty string
-- confidence_score: number from 0 to 1 for how confident you are in the interpretation
 - escalation_topics: array subset of [legal, financing, negotiation, fair_housing, complaint, uncertain_property_fact]
 - requires_manual_review: true if any escalation topic applies, confidence is low, or the reply is ambiguous/sensitive
-- lead_status: one of new, contacted, replied, nurture, hot, closed, do_not_contact
-- follow_up_days: integer 1-180 for when to follow up
 
 RULES:
 - Do not auto-send anything; this is advice for agent approval only.
+- Do not assume status, follow-up, tasks, or appointments will be applied — agent must approve.
 - Be compliant and professional.
 - Escalate legal, financing, negotiation, fair-housing, complaint, and uncertain property-fact topics for manual handling.
 - If the lead is months away or must sell first, prefer nurture + schedule follow-up and consider a home-value pitch.
-- If they ask to stop/unsubscribe, use do_not_contact and a polite acknowledgment draft.
+- If they ask to stop/unsubscribe, suggest do_not_contact and leave draft_reply empty.
 
 LEAD:
 - Name: {lead.get("name") or "Lead"}

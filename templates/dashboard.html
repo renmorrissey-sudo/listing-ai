@@ -73,6 +73,9 @@
 
   <div class="public-nav">
     <a href="/dashboard" class="active">Dashboard</a>
+    <a href="/crm/leads">Leads</a>
+    <a href="/crm/tasks">Tasks</a>
+    <a href="/crm/needs-attention">Needs Attention</a>
     <a href="/tutorial">Tutorial</a>
     <a href="/terms">Terms</a>
     <a href="/privacy">Privacy</a>
@@ -82,6 +85,9 @@
 
     <nav class="tool-nav">
     <a href="/dashboard" class="active">Dashboard</a>
+    <a href="/crm/leads">Leads</a>
+    <a href="/crm/tasks">Tasks</a>
+    <a href="/crm/needs-attention">Needs Attention</a>
     <a href="/">Listing Generator</a>
     <a href="/#coldcall">Cold Call Scripts</a>
     <a href="/#voice">AI Calling Assistant</a>
@@ -117,15 +123,54 @@
     </section>
 
     <section class="card" style="margin-bottom:18px;">
-      <h2>CRM leads</h2>
-      <p class="muted" style="margin-bottom:12px;">TopAI remembers every lead you text and tracks replies, follow-ups, and suggested next steps.</p>
+      <h2>Pipeline</h2>
+      <p class="muted" style="margin-bottom:12px;">Lead workflow metrics. Claude suggestions never auto-apply — approve them from AI SMS or the lead record.</p>
       <div class="metrics-row">
-        <div class="metric"><div class="k">Total leads</div><div class="v">{{ metrics.crm.leads_total }}</div></div>
-        <div class="metric"><div class="k">Replied</div><div class="v">{{ metrics.crm.leads_replied }}</div></div>
-        <div class="metric"><div class="k">Nurture</div><div class="v">{{ metrics.crm.leads_nurture }}</div></div>
+        <div class="metric"><div class="k">Active leads</div><div class="v">{{ pipeline.active_leads }}</div></div>
+        <div class="metric"><div class="k">Needs attention</div><div class="v">{{ pipeline.needs_attention }}</div></div>
+        <div class="metric"><div class="k">Overdue follow-ups</div><div class="v">{{ pipeline.overdue_follow_ups }}</div></div>
       </div>
       <div class="metrics-row" style="margin-top:10px;">
-        <div class="metric"><div class="k">Hot</div><div class="v">{{ metrics.crm.leads_hot }}</div></div>
+        <div class="metric"><div class="k">Tasks today</div><div class="v">{{ pipeline.tasks_due_today }}</div></div>
+        <div class="metric"><div class="k">Appts today</div><div class="v">{{ pipeline.appointments_today }}</div></div>
+        <div class="metric"><div class="k">Drafts awaiting</div><div class="v">{{ pipeline.drafts_awaiting_approval }}</div></div>
+      </div>
+      <div class="metrics-row" style="margin-top:10px;">
+        {% for stage in pipeline.pipeline_stages %}
+        <div class="metric"><div class="k">{{ stage.label }}</div><div class="v">{{ stage.count }}</div></div>
+        {% endfor %}
+      </div>
+      <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
+        <a class="cta" href="/crm/leads">Open leads</a>
+        <a class="cta" href="/crm/needs-attention">Needs Attention</a>
+        <a class="cta" href="/crm/tasks">Tasks</a>
+        <a class="cta" href="/#sms">AI SMS inbox</a>
+      </div>
+    </section>
+
+    <section class="card" style="margin-bottom:18px;">
+      <h2>Needs Attention</h2>
+      {% if needs_attention %}
+      <ul class="activity">
+        {% for item in needs_attention %}
+        <li>
+          <strong>{{ item.lead_name or 'Lead' }}</strong>
+          <span class="pill">{{ item.priority }}</span>
+          <div class="muted" style="margin-top:4px;">{{ item.reason_text }} · {{ item.phone_number }}</div>
+          <a class="cta" style="margin-top:8px;" href="/crm/leads/{{ item.lead_id }}">Open lead</a>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty">No open attention items.</p>
+      {% endif %}
+    </section>
+
+    <section class="card" style="margin-bottom:18px;">
+      <h2>CRM leads</h2>
+      <p class="muted" style="margin-bottom:12px;">Recent leads and due follow-ups from your SMS conversations.</p>
+      <div class="metrics-row">
+        <div class="metric"><div class="k">Total leads</div><div class="v">{{ metrics.crm.leads_total }}</div></div>
         <div class="metric"><div class="k">Follow-ups due</div><div class="v">{{ metrics.crm.follow_ups_due }}</div></div>
         <div class="metric"><div class="k">Pending reviews</div><div class="v">{{ metrics.crm.pending_suggestions }}</div></div>
       </div>
@@ -133,8 +178,8 @@
       <ul class="activity" style="margin-top:14px;">
         {% for lead in metrics.crm.recent_leads %}
         <li>
-          <strong>{{ lead.name or 'Lead' }}</strong>
-          <span class="pill">{{ lead.status }}</span>
+          <strong><a href="/crm/leads/{{ lead.id }}" style="color:inherit;text-decoration:none;">{{ lead.name or 'Lead' }}</a></strong>
+          <span class="pill">{{ status_label(lead.status) if status_label else lead.status }}</span>
           <div class="muted" style="margin-top:4px;">{{ lead.phone_number }}{% if lead.follow_up_at %} · follow-up {{ lead.follow_up_at[:10] }}{% endif %}</div>
           {% if lead.next_action %}
           <div style="margin-top:6px;">{{ lead.next_action[:180] }}{% if lead.next_action|length > 180 %}…{% endif %}</div>
@@ -157,7 +202,6 @@
         {% endfor %}
       </ul>
       {% endif %}
-      <a class="cta" href="/#sms">Open AI SMS Assistant / CRM</a>
     </section>
 
     <div class="grid">

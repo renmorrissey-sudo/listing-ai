@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Leads - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+</head>
+<body>
+  <header>
+    <div>
+      <div class="logo">TopAI <span>Real Estate Tools</span></div>
+      <div class="tagline">CRM leads</div>
+    </div>
+    <div class="subscriber-info">
+      <span class="subscriber-email">&#10003; {{ email }}</span>
+      {% if has_billing_portal %}<a class="billing-link" href="/billing/portal">Manage billing</a>{% endif %}
+      <button class="logout-btn" type="button" onclick="doLogout()">Sign out</button>
+    </div>
+  </header>
+  <div class="public-nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/crm/leads" class="active">Leads</a>
+    <a href="/crm/tasks">Tasks</a>
+    <a href="/crm/needs-attention">Needs Attention</a>
+    <a href="/#sms">AI SMS</a>
+  </div>
+  <nav class="tool-nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/crm/leads" class="active">Leads</a>
+    <a href="/crm/tasks">Tasks</a>
+    <a href="/crm/needs-attention">Needs Attention</a>
+    <a href="/#sms">AI SMS Assistant</a>
+  </nav>
+  <main>
+    <h1>Leads</h1>
+    <p class="muted">Filter and open lead records. Status changes are always agent-controlled.</p>
+    <form class="filters" method="get" action="/crm/leads">
+      <select name="status">
+        <option value="">All statuses</option>
+        {% for slug, label in statuses %}
+        <option value="{{ slug }}" {% if status_filter == slug %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <input name="source" placeholder="Source" value="{{ source_filter }}" />
+      <button class="btn" type="submit">Filter</button>
+    </form>
+    <div class="card">
+      {% if leads %}
+      <table>
+        <thead>
+          <tr><th>Lead</th><th>Status</th><th>Follow-up</th><th>Next action</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for lead in leads %}
+          <tr>
+            <td>
+              <strong>{{ lead.name or 'Lead' }}</strong>
+              <div class="muted">{{ lead.phone_number }} · {{ lead.message_count or 0 }} msgs</div>
+            </td>
+            <td><span class="pill">{{ status_label(lead.status) }}</span></td>
+            <td class="muted">{{ (lead.next_follow_up_at or lead.follow_up_at or '—')[:16] }}</td>
+            <td>{{ (lead.next_action or '—')[:80] }}</td>
+            <td><a class="cta" href="/crm/leads/{{ lead.id }}">Open</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">No leads match this filter. Send an SMS to create a lead.</p>
+      {% endif %}
+    </div>
+  </main>
+  <script>
+    async function doLogout() {
+      await fetch('/logout', {method: 'POST'});
+      window.location.href = '/';
+    }
+  </script>
+</body>
+</html>

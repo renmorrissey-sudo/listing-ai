@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tasks - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+</head>
+<body>
+  <header>
+    <div>
+      <div class="logo">TopAI <span>Real Estate Tools</span></div>
+      <div class="tagline">CRM tasks</div>
+    </div>
+    <div class="subscriber-info">
+      <span class="subscriber-email">&#10003; {{ email }}</span>
+      {% if has_billing_portal %}<a class="billing-link" href="/billing/portal">Manage billing</a>{% endif %}
+      <button class="logout-btn" type="button" onclick="doLogout()">Sign out</button>
+    </div>
+  </header>
+  <div class="public-nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/crm/leads">Leads</a>
+    <a href="/crm/tasks" class="active">Tasks</a>
+    <a href="/crm/needs-attention">Needs Attention</a>
+    <a href="/#sms">AI SMS</a>
+  </div>
+  <nav class="tool-nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/crm/leads">Leads</a>
+    <a href="/crm/tasks" class="active">Tasks</a>
+    <a href="/crm/needs-attention">Needs Attention</a>
+    <a href="/#sms">AI SMS Assistant</a>
+  </nav>
+  <main>
+    <h1>Tasks</h1>
+    <p class="muted">Overdue, due today, and upcoming follow-through work.</p>
+    <div id="flash" class="flash"></div>
+
+    <div class="card">
+      <h2>Create task</h2>
+      <div class="row">
+        <input id="task-title" placeholder="Task title" style="min-width:220px;" />
+        <select id="task-type">
+          {% for t in task_types %}<option value="{{ t }}">{{ t.replace('_',' ') }}</option>{% endfor %}
+        </select>
+        <select id="task-priority">
+          {% for p in priorities %}<option value="{{ p }}" {% if p == 'normal' %}selected{% endif %}>{{ p }}</option>{% endfor %}
+        </select>
+        <input id="task-due" type="datetime-local" />
+        <button class="btn" type="button" onclick="createTask()">Add task</button>
+      </div>
+    </div>
+
+    {% macro task_table(title, items, empty) %}
+    <div class="card">
+      <h2>{{ title }}</h2>
+      {% if items %}
+      <table>
+        <thead><tr><th>Task</th><th>Lead</th><th>Due</th><th>Priority</th><th></th></tr></thead>
+        <tbody>
+          {% for task in items %}
+          <tr>
+            <td><strong>{{ task.title }}</strong><div class="muted">{{ task.task_type }}</div></td>
+            <td>{% if task.lead_id %}<a href="/crm/leads/{{ task.lead_id }}">{{ task.lead_name or 'Lead' }}</a>{% else %}—{% endif %}</td>
+            <td class="muted">{{ (task.due_at or '—')[:16] }}</td>
+            <td><span class="pill">{{ task.priority }}</span></td>
+            <td class="row">
+              <button class="btn" type="button" onclick="completeTask({{ task.id }})">Complete</button>
+              <button class="btn secondary" type="button" onclick="cancelTask({{ task.id }})">Cancel</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">{{ empty }}</p>
+      {% endif %}
+    </div>
+    {% endmacro %}
+
+    {{ task_table('Overdue', overdue, 'No overdue tasks.') }}
+    {{ task_table('Due today', today, 'Nothing due today.') }}
+    {{ task_table('Upcoming', upcoming, 'No upcoming tasks.') }}
+  </main>
+  <script>
+    function showFlash(msg, err) {
+      const el = document.getElementById('flash');
+      el.textContent = msg;
+      el.className = err ? 'flash err' : 'flash';
+      el.style.display = 'block';
+    }
+    async function createTask() {
+      const title = document.getElementById('task-title').value.trim();
+      if (!title) return showFlash('Title required', true);
+      const dueLocal = document.getElementById('task-due').value;
+      const due_at = dueLocal ? new Date(dueLocal).toISOString() : null;
+      const res = await fetch('/api/crm/tasks', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          title,
+          task_type: document.getElementById('task-type').value,
+          priority: document.getElementById('task-priority').value,
+          due_at,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) return showFlash(data.error || 'Failed', true);
+      location.reload();
+    }
+    async function completeTask(id) {
+      const res = await fetch(`/api/crm/tasks/${id}/complete`, {method: 'POST'});
+      if (!res.ok) {
+        const data = await res.json();
+        return showFlash(data.error || 'Failed', true);
+      }
+      location.reload();
+    }
+    async function cancelTask(id) {
+      const res = await fetch(`/api/crm/tasks/${id}/cancel`, {method: 'POST'});
+      if (!res.ok) {
+        const data = await res.json();
+        return showFlash(data.error || 'Failed', true);
+      }
+      location.reload();
+    }
+    async function doLogout() {
+      await fetch('/logout', {method: 'POST'});
+      window.location.href = '/';
+    }
+  </script>
+</body>
+</html>

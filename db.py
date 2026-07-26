@@ -186,6 +186,106 @@ def init_db():
         _ensure_column(conn, "lead_insights", "confidence_score", "REAL")
         _ensure_column(conn, "lead_insights", "requires_manual_review", "INTEGER DEFAULT 0")
         _ensure_column(conn, "lead_insights", "escalation_topics", "TEXT")
+        _ensure_column(conn, "users", "role", "TEXT DEFAULT 'agent'")
+        _ensure_column(conn, "leads", "priority", "TEXT DEFAULT 'normal'")
+        _ensure_column(conn, "leads", "assigned_user_id", "INTEGER")
+        _ensure_column(conn, "leads", "next_follow_up_at", "TEXT")
+        _ensure_column(conn, "leads", "follow_up_reason", "TEXT")
+        _ensure_column(conn, "leads", "follow_up_priority", "TEXT DEFAULT 'normal'")
+        _ensure_column(conn, "leads", "follow_up_completed_at", "TEXT")
+        _ensure_column(conn, "leads", "follow_up_created_by", "INTEGER")
+        _ensure_column(conn, "lead_follow_ups", "priority", "TEXT DEFAULT 'normal'")
+        _ensure_column(conn, "lead_follow_ups", "created_by", "INTEGER")
+        _ensure_column(conn, "lead_follow_ups", "completed_at", "TEXT")
+        _ensure_column(conn, "sms_messages", "approved_by_user_id", "INTEGER")
+        _ensure_column(conn, "sms_messages", "consent_source", "TEXT")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS lead_activities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lead_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                actor_user_id INTEGER,
+                event_type TEXT NOT NULL,
+                summary TEXT,
+                payload_json TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                lead_id INTEGER,
+                assigned_user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT,
+                due_at TEXT,
+                priority TEXT NOT NULL DEFAULT 'normal',
+                status TEXT NOT NULL DEFAULT 'open',
+                task_type TEXT NOT NULL DEFAULT 'general_follow_up',
+                completed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS appointments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                lead_id INTEGER NOT NULL,
+                appointment_type TEXT NOT NULL DEFAULT 'phone_call',
+                start_at TEXT NOT NULL,
+                end_at TEXT,
+                location TEXT,
+                notes TEXT,
+                status TEXT NOT NULL DEFAULT 'scheduled',
+                outcome TEXT,
+                outcome_notes TEXT,
+                next_action TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS needs_attention (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                lead_id INTEGER NOT NULL,
+                reason_code TEXT NOT NULL,
+                reason_text TEXT,
+                priority TEXT NOT NULL DEFAULT 'normal',
+                source_ref_type TEXT,
+                source_ref_id INTEGER,
+                status TEXT NOT NULL DEFAULT 'open',
+                resolution_reason TEXT,
+                created_at TEXT NOT NULL,
+                resolved_at TEXT,
+                resolved_by INTEGER
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT,
+                link TEXT,
+                lead_id INTEGER,
+                read_at TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_sms_messages_user_created ON sms_messages(user_id, created_at DESC)"
         )
@@ -209,6 +309,21 @@ def init_db():
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_tool ON tool_usage(user_id, tool_key)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lead_activities_lead ON lead_activities(lead_id, created_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_user_due ON tasks(user_id, due_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_appointments_user_start ON appointments(user_id, start_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_needs_attention_user_status ON needs_attention(user_id, status, created_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC)"
         )
         _ensure_default_voice_personas(conn)
 
@@ -745,11 +860,52 @@ def mark_lead_opt_out(lead_id, user_id):
             SET opt_out_status = 'opted_out',
                 status = 'do_not_contact',
                 next_action = 'Do not contact — lead opted out',
+                next_follow_up_at = NULL,
+                follow_up_reason = NULL,
                 updated_at = ?
             WHERE id = ? AND user_id = ?
             """,
             (now, lead_id, user_id),
         )
+        conn.execute(
+            """
+            UPDATE sms_messages
+            SET status = 'cancelled',
+                error_message = 'Cancelled — lead opted out',
+                direction = 'suggested'
+            WHERE lead_id = ? AND user_id = ? AND status = 'suggested'
+            """,
+            (lead_id, user_id),
+        )
+        conn.execute(
+            """
+            UPDATE lead_insights
+            SET status = 'dismissed'
+            WHERE lead_id = ? AND user_id = ? AND status = 'pending'
+            """,
+            (lead_id, user_id),
+        )
+
+
+def cancel_suggested_sms_for_lead(lead_id, user_id, reason="Cancelled"):
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE sms_messages
+            SET status = 'cancelled', error_message = ?
+            WHERE lead_id = ? AND user_id = ? AND status = 'suggested'
+            """,
+            (reason[:500], lead_id, user_id),
+        )
+
+
+def get_sms_message_by_provider_id(provider_message_id):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM sms_messages WHERE provider_message_id = ? LIMIT 1",
+            (provider_message_id,),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def set_lead_consent(lead_id, user_id, consent_status="confirmed"):

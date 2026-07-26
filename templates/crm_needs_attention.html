@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Needs Attention - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+</head>
+<body>
+  <header>
+    <div>
+      <div class="logo">TopAI <span>Real Estate Tools</span></div>
+      <div class="tagline">Needs Attention queue</div>
+    </div>
+    <div class="subscriber-info">
+      <span class="subscriber-email">&#10003; {{ email }}</span>
+      {% if has_billing_portal %}<a class="billing-link" href="/billing/portal">Manage billing</a>{% endif %}
+      <button class="logout-btn" type="button" onclick="doLogout()">Sign out</button>
+    </div>
+  </header>
+  <div class="public-nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/crm/leads">Leads</a>
+    <a href="/crm/tasks">Tasks</a>
+    <a href="/crm/needs-attention" class="active">Needs Attention</a>
+    <a href="/#sms">AI SMS</a>
+  </div>
+  <nav class="tool-nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/crm/leads">Leads</a>
+    <a href="/crm/tasks">Tasks</a>
+    <a href="/crm/needs-attention" class="active">Needs Attention</a>
+    <a href="/#sms">AI SMS Assistant</a>
+  </nav>
+  <main>
+    <h1>Needs Attention</h1>
+    <p class="muted">Inbound reviews, overdue work, sensitive topics, and delivery issues. Opt-out and sensitive items require a resolution reason.</p>
+    <div id="flash" class="flash"></div>
+    <div class="card">
+      {% if items %}
+      <table>
+        <thead><tr><th>Priority</th><th>Lead</th><th>Reason</th><th>Created</th><th>Resolve</th></tr></thead>
+        <tbody>
+          {% for item in items %}
+          <tr>
+            <td><span class="pill {% if item.priority in ['high','urgent'] %}warn{% endif %}">{{ item.priority }}</span></td>
+            <td>
+              <a href="/crm/leads/{{ item.lead_id }}"><strong>{{ item.lead_name or 'Lead' }}</strong></a>
+              <div class="muted">{{ item.phone_number }} · {{ item.lead_status }}</div>
+            </td>
+            <td>{{ item.reason_text or reason_labels.get(item.reason_code, item.reason_code) }}</td>
+            <td class="muted">{{ (item.created_at or '')[:16] }}</td>
+            <td>
+              <div class="row">
+                <input id="reason-{{ item.id }}" placeholder="Resolution reason" style="min-width:160px;" />
+                <button class="btn" type="button" onclick="resolveItem({{ item.id }})">Resolve</button>
+                <a class="btn secondary" href="/crm/leads/{{ item.lead_id }}">Open lead</a>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">Queue is clear. Nice work.</p>
+      {% endif %}
+    </div>
+  </main>
+  <script>
+    function showFlash(msg, err) {
+      const el = document.getElementById('flash');
+      el.textContent = msg;
+      el.className = err ? 'flash err' : 'flash';
+      el.style.display = 'block';
+    }
+    async function resolveItem(id) {
+      const reason = document.getElementById(`reason-${id}`).value.trim();
+      const res = await fetch(`/api/crm/needs-attention/${id}/resolve`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({resolution_reason: reason}),
+      });
+      const data = await res.json();
+      if (!res.ok) return showFlash(data.error || 'Failed', true);
+      location.reload();
+    }
+    async function doLogout() {
+      await fetch('/logout', {method: 'POST'});
+      window.location.href = '/';
+    }
+  </script>
+</body>
+</html>

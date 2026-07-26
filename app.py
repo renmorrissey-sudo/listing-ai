@@ -11,10 +11,13 @@ from werkzeug.exceptions import HTTPException
 
 import auth
 import config
+import crm_db
 import db
 from datetime import datetime, timedelta, timezone
 
 import sms_coach
+from crm import crm_bp
+from crm_constants import status_label
 from sms_prompts import build_inbound_reply_analysis_prompt, build_sms_prompt
 from sms_provider import SmsProviderError, get_sms_provider, sms_status_callback_url
 from sms_validation import (
@@ -42,6 +45,7 @@ app.config["SESSION_COOKIE_SECURE"] = config.IS_PRODUCTION
 app.config["PERMANENT_SESSION_LIFETIME"] = 86400 * 14
 
 db.init_db()
+app.register_blueprint(crm_bp)
 client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 if config.STRIPE_SECRET_KEY:
@@ -664,34 +668,50 @@ def sms_lead_messages(lead_id):
 @app.route("/sms/inbox")
 @auth.subscription_required
 def sms_inbox():
+    import json as _json
+
     user = auth.get_current_user()
     insights = db.list_pending_insights(user["id"])
+    items = []
+    for item in insights:
+        raw = {}
+        try:
+            raw = _json.loads(item.get("raw_json") or "{}")
+        except (TypeError, _json.JSONDecodeError):
+            raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        items.append({
+            "id": item["id"],
+            "lead_id": item["lead_id"],
+            "lead_name": item.get("lead_name"),
+            "phone_number": item.get("phone_number"),
+            "lead_status": item.get("lead_status"),
+            "inbound_body": item.get("inbound_body"),
+            "summary": item.get("summary"),
+            "intent": item.get("intent"),
+            "next_best_step": item.get("next_best_step") or raw.get("recommended_next_action"),
+            "recommended_action": item.get("recommended_action") or raw.get("recommended_next_action"),
+            "suggested_reply": item.get("suggested_reply") or raw.get("draft_reply"),
+            "home_value_pitch": item.get("home_value_pitch") or raw.get("home_value_pitch"),
+            "confidence_score": item.get("confidence_score") if item.get("confidence_score") is not None else raw.get("confidence"),
+            "requires_manual_review": bool(item.get("requires_manual_review")),
+            "escalation_topics": [
+                t for t in str(item.get("escalation_topics") or "").split(",") if t
+            ],
+            "suggested_message_id": item.get("suggested_message_id"),
+            "created_at": item.get("created_at"),
+            "suggested_lead_status": raw.get("suggested_lead_status") or "",
+            "suggested_lead_status_label": status_label(raw.get("suggested_lead_status")) if raw.get("suggested_lead_status") else "",
+            "suggested_follow_up_at": raw.get("suggested_follow_up_at"),
+            "suggested_follow_up_reason": raw.get("suggested_follow_up_reason") or "",
+            "suggested_tasks": raw.get("suggested_tasks") or [],
+            "appointment_requested": bool(raw.get("appointment_requested")),
+            "appointment_details": raw.get("appointment_details"),
+        })
     return jsonify({
         "coach_configured": sms_coach.is_configured(),
-        "items": [
-            {
-                "id": item["id"],
-                "lead_id": item["lead_id"],
-                "lead_name": item.get("lead_name"),
-                "phone_number": item.get("phone_number"),
-                "lead_status": item.get("lead_status"),
-                "inbound_body": item.get("inbound_body"),
-                "summary": item.get("summary"),
-                "intent": item.get("intent"),
-                "next_best_step": item.get("next_best_step"),
-                "recommended_action": item.get("recommended_action"),
-                "suggested_reply": item.get("suggested_reply"),
-                "home_value_pitch": item.get("home_value_pitch"),
-                "confidence_score": item.get("confidence_score"),
-                "requires_manual_review": bool(item.get("requires_manual_review")),
-                "escalation_topics": [
-                    t for t in str(item.get("escalation_topics") or "").split(",") if t
-                ],
-                "suggested_message_id": item.get("suggested_message_id"),
-                "created_at": item.get("created_at"),
-            }
-            for item in insights
-        ],
+        "items": items,
     })
 
 
@@ -1027,12 +1047,34 @@ def sms_inbound_webhook():
         now = datetime.now(timezone.utc).isoformat()
         if opted_out:
             db.mark_lead_opt_out(lead_id, owner_id)
+            crm_db.add_lead_activity(
+                lead_id,
+                owner_id,
+                "opt_out",
+                "Lead opted out via SMS keyword",
+                {"body_preview": body[:120]},
+            )
+            crm_db.upsert_needs_attention(
+                owner_id, lead_id, "opt_out", priority="urgent", source_ref_type="sms", source_ref_id=inbound_id
+            )
         else:
+            # Deterministic inbound touch only — Claude suggestions are never auto-applied.
+            # DNC / opted-out leads cannot leave that status via automation.
             db.update_lead_from_analysis(
                 lead_id,
                 owner_id,
-                status="replied",
                 last_inbound_at=now,
+            )
+            if (lead or {}).get("opt_out_status") != "opted_out":
+                crm_db.set_lead_status(
+                    owner_id, lead_id, "contacted", from_automation=True
+                )
+            crm_db.add_lead_activity(
+                lead_id,
+                owner_id,
+                "sms_inbound",
+                "Inbound SMS received",
+                {"message_id": inbound_id},
             )
         _analyze_inbound_and_coach(owner_id, lead_id, inbound_id, body, opted_out=opted_out)
     except Exception:
@@ -1048,14 +1090,41 @@ def _looks_like_opt_out(body):
 
 
 def _analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_out=False):
-    """Claude coaching. Stores a suggested draft only — never auto-sends."""
+    """Claude coaching. Stores recommendations + draft only — never auto-sends or auto-applies CRM changes."""
     lead = db.get_lead(lead_id, user_id)
     if not lead:
         return
 
     conversation = db.list_lead_messages(user_id, lead_id)
+    if opted_out:
+        insight_id = db.create_lead_insight(
+            lead_id,
+            user_id,
+            inbound_id,
+            {
+                "summary": "Lead opted out.",
+                "intent": "opt_out",
+                "next_best_step": "Do not send further SMS.",
+                "recommended_action": "Do not send further SMS. Lead opted out.",
+                "suggested_reply": "",
+                "home_value_pitch": None,
+                "confidence_score": 1.0,
+                "requires_manual_review": True,
+                "escalation_topics": [],
+                "raw_json": None,
+            },
+            model="system",
+        )
+        crm_db.apply_coach_queue_flags(
+            user_id,
+            lead_id,
+            {"requires_manual_review": True, "needs_attention_reasons": ["opt_out"]},
+            insight_id=insight_id,
+        )
+        return
+
     if not sms_coach.is_configured():
-        db.create_lead_insight(
+        insight_id = db.create_lead_insight(
             lead_id,
             user_id,
             inbound_id,
@@ -1073,6 +1142,9 @@ def _analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted
             },
             model="none",
         )
+        crm_db.apply_coach_queue_flags(
+            user_id, lead_id, {"requires_manual_review": True}, insight_id=insight_id
+        )
         return
 
     try:
@@ -1081,7 +1153,7 @@ def _analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted
         )
     except sms_coach.SmsCoachError as exc:
         logger.warning("Claude inbound analysis failed: %s", type(exc).__name__)
-        db.create_lead_insight(
+        insight_id = db.create_lead_insight(
             lead_id,
             user_id,
             inbound_id,
@@ -1099,38 +1171,31 @@ def _analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted
             },
             model=config.CLAUDE_MODEL,
         )
+        crm_db.apply_coach_queue_flags(
+            user_id, lead_id, {"requires_manual_review": True}, insight_id=insight_id
+        )
         return
 
-    if opted_out:
-        analysis["lead_status"] = "do_not_contact"
-        analysis["requires_manual_review"] = True
-        analysis["recommended_action"] = "Do not send further SMS. Lead opted out."
-        analysis["suggested_reply"] = ""
-
-    follow_up_at = (
-        datetime.now(timezone.utc) + timedelta(days=analysis["follow_up_days"])
-    ).isoformat()
-    note_bits = [analysis.get("summary"), analysis.get("intent"), analysis.get("next_best_step")]
+    # Store recommendation text on the lead for visibility — do NOT apply status/follow-up/tasks.
+    note_bits = [
+        analysis.get("summary"),
+        analysis.get("intent"),
+        analysis.get("recommended_next_action") or analysis.get("next_best_step"),
+    ]
     notes = " | ".join(bit for bit in note_bits if bit)[:1500] or None
     db.update_lead_from_analysis(
         lead_id,
         user_id,
-        status=analysis.get("lead_status") or "replied",
         notes=notes,
-        next_action=analysis.get("recommended_action") or analysis.get("next_best_step"),
-        follow_up_at=None if opted_out else follow_up_at,
+        next_action=analysis.get("recommended_next_action")
+        or analysis.get("recommended_action")
+        or analysis.get("next_best_step"),
         last_inbound_at=datetime.now(timezone.utc).isoformat(),
     )
-    if not opted_out:
-        db.create_follow_up(
-            lead_id,
-            user_id,
-            follow_up_at,
-            analysis.get("next_best_step") or "Follow up with lead",
-        )
 
     suggested_id = None
-    if analysis.get("suggested_reply") and not opted_out:
+    draft = analysis.get("draft_reply") or analysis.get("suggested_reply")
+    if draft:
         suggested_id = db.create_sms_message(
             user_id=user_id,
             persona_id=None,
@@ -1140,7 +1205,7 @@ def _analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted
                 "phone_number": lead.get("phone_number"),
                 "lead_type": lead.get("lead_type"),
                 "property_interest": lead.get("property_interest"),
-                "message_body": analysis["suggested_reply"],
+                "message_body": draft,
                 "notes": "Claude suggested reply pending agent approval",
             },
             status="suggested",
@@ -1150,7 +1215,7 @@ def _analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted
             opt_out_status=lead.get("opt_out_status") or "active",
         )
 
-    db.create_lead_insight(
+    insight_id = db.create_lead_insight(
         lead_id,
         user_id,
         inbound_id,
@@ -1158,6 +1223,18 @@ def _analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted
         suggested_message_id=suggested_id,
         model=config.CLAUDE_MODEL,
     )
+    crm_db.add_lead_activity(
+        lead_id,
+        user_id,
+        "insight_created",
+        "Claude coaching recommendation ready for review",
+        {
+            "insight_id": insight_id,
+            "suggested_lead_status": analysis.get("suggested_lead_status"),
+            "confidence": analysis.get("confidence_score"),
+        },
+    )
+    crm_db.apply_coach_queue_flags(user_id, lead_id, analysis, insight_id=insight_id)
     db.record_tool_usage(user_id, "ai_sms", "inbound_analyzed")
 
 
@@ -1189,6 +1266,24 @@ def sms_status_webhook():
             status=mapped,
             error_message=error_message,
         )
+        if mapped == "failed":
+            msg = db.get_sms_message_by_provider_id(message_sid)
+            if msg and msg.get("user_id") and msg.get("lead_id"):
+                crm_db.upsert_needs_attention(
+                    msg["user_id"],
+                    msg["lead_id"],
+                    "delivery_failed",
+                    priority="high",
+                    source_ref_type="sms",
+                    source_ref_id=msg.get("id"),
+                )
+                crm_db.add_lead_activity(
+                    msg["lead_id"],
+                    msg["user_id"],
+                    "sms_delivery_failed",
+                    "SMS delivery failed",
+                    {"provider_message_id": message_sid, "error_code": error_code},
+                )
     return jsonify({"received": True}), 200
 
 
@@ -1266,11 +1361,18 @@ def dashboard():
     if not user or not auth.user_has_active_subscription(user):
         return redirect(url_for("index"))
     metrics = db.get_dashboard_metrics(user["id"])
+    pipeline = crm_db.get_pipeline_metrics(user["id"])
+    needs = crm_db.list_needs_attention(user["id"])[:8]
+    notifications = crm_db.list_notifications(user["id"], unread_only=True, limit=8)
     return render_template(
         "dashboard.html",
         email=user["email"],
         has_billing_portal=bool(user.get("stripe_customer_id")),
         metrics=metrics,
+        pipeline=pipeline,
+        needs_attention=needs,
+        notifications=notifications,
+        status_label=status_label,
     )
 
 

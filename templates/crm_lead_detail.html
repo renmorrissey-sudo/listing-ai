@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ lead.name or 'Lead' }} - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+</head>
+<body>
+  <header>
+    <div>
+      <div class="logo">TopAI <span>Real Estate Tools</span></div>
+      <div class="tagline">Lead detail</div>
+    </div>
+    <div class="subscriber-info">
+      <span class="subscriber-email">&#10003; {{ email }}</span>
+      {% if has_billing_portal %}<a class="billing-link" href="/billing/portal">Manage billing</a>{% endif %}
+      <button class="logout-btn" type="button" onclick="doLogout()">Sign out</button>
+    </div>
+  </header>
+  <div class="public-nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/crm/leads" class="active">Leads</a>
+    <a href="/crm/tasks">Tasks</a>
+    <a href="/crm/needs-attention">Needs Attention</a>
+    <a href="/#sms">AI SMS</a>
+  </div>
+  <nav class="tool-nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/crm/leads" class="active">Leads</a>
+    <a href="/crm/tasks">Tasks</a>
+    <a href="/crm/needs-attention">Needs Attention</a>
+    <a href="/#sms">AI SMS Assistant</a>
+  </nav>
+  <main>
+    <p class="muted"><a href="/crm/leads">← All leads</a></p>
+    <div id="flash" class="flash"></div>
+    <div class="card">
+      <h1>{{ lead.name or 'Lead' }}</h1>
+      <div class="muted">{{ lead.phone_number }} · {{ lead.lead_type or 'N/A' }} · {{ lead.source or 'sms' }}</div>
+      <div class="status-hero">{{ status_label(lead.status) }}</div>
+      {% if lead.opt_out_status == 'opted_out' %}<span class="pill danger">Opted out — Do Not Contact</span>{% endif %}
+      <p>{% if lead.next_action %}<strong>Next action:</strong> {{ lead.next_action }}{% endif %}</p>
+      <p class="muted">{% if lead.next_follow_up_at or lead.follow_up_at %}Follow-up: {{ (lead.next_follow_up_at or lead.follow_up_at)[:16] }} UTC{% if lead.follow_up_reason %} — {{ lead.follow_up_reason }}{% endif %}{% else %}No follow-up scheduled{% endif %}</p>
+
+      <div class="quick-actions">
+        <a class="btn" href="/#sms">Draft SMS</a>
+        <a class="btn secondary" href="tel:{{ lead.phone_number }}">Call</a>
+        <button class="btn secondary" type="button" onclick="document.getElementById('task-panel').scrollIntoView()">Create Task</button>
+        <button class="btn secondary" type="button" onclick="document.getElementById('fu-panel').scrollIntoView()">Schedule Follow-Up</button>
+        <button class="btn secondary" type="button" onclick="document.getElementById('appt-panel').scrollIntoView()">Schedule Appointment</button>
+      </div>
+
+      <div class="row" style="margin-top:12px;">
+        <label><strong>Change status</strong></label>
+        <select id="status-select">
+          {% for slug, label in statuses %}
+          <option value="{{ slug }}" {% if lead.status == slug or (lead.status in ['replied','hot'] and slug == 'contacted') %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <button class="btn" type="button" onclick="setStatus()">Save status</button>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div>
+        <div class="card" id="fu-panel">
+          <h2>Follow-up</h2>
+          <div class="quick-actions">
+            <button class="btn secondary" type="button" onclick="quickFollowUp('tomorrow')">Tomorrow</button>
+            <button class="btn secondary" type="button" onclick="quickFollowUp('3d')">+3 days</button>
+            <button class="btn secondary" type="button" onclick="quickFollowUp('1w')">+1 week</button>
+            <button class="btn secondary" type="button" onclick="quickFollowUp('2w')">+2 weeks</button>
+            <button class="btn secondary" type="button" onclick="quickFollowUp('30d')">+30 days</button>
+          </div>
+          <div class="row">
+            <input id="fu-reason" placeholder="Reason" value="Follow up" />
+            <button class="btn" type="button" onclick="completeFollowUp()">Mark complete</button>
+            <button class="btn secondary" type="button" onclick="dismissFollowUp()">Dismiss</button>
+          </div>
+        </div>
+
+        <div class="card" id="task-panel">
+          <h2>Tasks</h2>
+          <div class="row">
+            <input id="task-title" placeholder="Task title" />
+            <select id="task-type">{% for t in task_types %}<option value="{{ t }}">{{ t.replace('_',' ') }}</option>{% endfor %}</select>
+            <button class="btn" type="button" onclick="createTask()">Add</button>
+          </div>
+          {% if tasks %}
+          <ul class="timeline">
+            {% for task in tasks %}
+            <li>
+              <strong>{{ task.title }}</strong> <span class="pill">{{ task.status }}</span>
+              <div class="muted">{{ task.task_type }} · due {{ (task.due_at or '—')[:16] }}</div>
+              {% if task.status in ['open','in_progress'] %}
+              <button class="btn" style="margin-top:6px;" type="button" onclick="completeTask({{ task.id }})">Complete</button>
+              {% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}<p class="empty">No tasks yet.</p>{% endif %}
+        </div>
+
+        <div class="card" id="appt-panel">
+          <h2>Appointments</h2>
+          <div class="row">
+            <select id="appt-type">{% for t in appointment_types %}<option value="{{ t }}">{{ t.replace('_',' ') }}</option>{% endfor %}</select>
+            <input id="appt-start" type="datetime-local" />
+            <button class="btn" type="button" onclick="createAppt()">Schedule</button>
+          </div>
+          {% if appointments %}
+          <ul class="timeline">
+            {% for appt in appointments %}
+            <li>
+              <strong>{{ appt.appointment_type.replace('_',' ') }}</strong> · {{ (appt.start_at or '')[:16] }}
+              <div class="muted">{{ appt.status }}{% if appt.outcome %} · outcome: {{ appt.outcome }}{% endif %}</div>
+              {% if not appt.outcome and appt.status in ['scheduled','confirmed','completed'] %}
+              <div class="row" style="margin-top:6px;">
+                <select id="outcome-{{ appt.id }}">
+                  {% for o in appointment_outcomes %}<option value="{{ o }}">{{ o.replace('_',' ') }}</option>{% endfor %}
+                </select>
+                <button class="btn" type="button" onclick="recordOutcome({{ appt.id }})">Save outcome</button>
+              </div>
+              {% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}<p class="empty">No appointments yet.</p>{% endif %}
+        </div>
+
+        {% if needs %}
+        <div class="card">
+          <h2>Open Needs Attention</h2>
+          <ul class="timeline">
+            {% for item in needs %}
+            <li>
+              <span class="pill warn">{{ item.priority }}</span> {{ item.reason_text }}
+              <div class="row" style="margin-top:6px;">
+                <input id="na-{{ item.id }}" placeholder="Resolution reason" />
+                <button class="btn" type="button" onclick="resolveNeed({{ item.id }})">Resolve</button>
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+      </div>
+
+      <div>
+        <div class="card">
+          <h2>Activity timeline</h2>
+          {% if activities %}
+          <ul class="timeline">
+            {% for a in activities %}
+            <li>
+              <strong>{{ a.event_type.replace('_',' ') }}</strong>
+              <div>{{ a.summary }}</div>
+              <div class="muted">{{ (a.created_at or '')[:16] }} UTC</div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}<p class="empty">No activity yet.</p>{% endif %}
+        </div>
+        <div class="card">
+          <h2>Recent SMS</h2>
+          {% if messages %}
+          <ul class="timeline">
+            {% for m in messages[-12:] %}
+            <li>
+              <span class="pill">{{ m.direction or m.status }}</span>
+              <div>{{ m.message_body }}</div>
+              <div class="muted">{{ (m.created_at or '')[:16] }}</div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}<p class="empty">No messages yet.</p>{% endif %}
+        </div>
+      </div>
+    </div>
+  </main>
+  <script>
+    const leadId = {{ lead.id }};
+    function showFlash(msg, err) {
+      const el = document.getElementById('flash');
+      el.textContent = msg;
+      el.className = err ? 'flash err' : 'flash';
+      el.style.display = 'block';
+    }
+    async function setStatus() {
+      const status = document.getElementById('status-select').value;
+      const res = await fetch(`/api/crm/leads/${leadId}/status`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({status}),
+      });
+      const data = await res.json();
+      if (!res.ok) return showFlash(data.error || 'Failed', true);
+      location.reload();
+    }
+    async function quickFollowUp(pick) {
+      const reason = document.getElementById('fu-reason').value || 'Follow up';
+      const res = await fetch(`/api/crm/leads/${leadId}/follow-up`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({quick_pick: pick, reason}),
+      });
+      const data = await res.json();
+      if (!res.ok) return showFlash(data.error || 'Failed', true);
+      location.reload();
+    }
+    async function completeFollowUp() {
+      const res = await fetch(`/api/crm/leads/${leadId}/follow-up/complete`, {method: 'POST'});
+      const data = await res.json();
+      if (!res.ok) return showFlash(data.error || 'Failed', true);
+      location.reload();
+    }
+    async function dismissFollowUp() {
+      const res = await fetch(`/api/crm/leads/${leadId}/follow-up/dismiss`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({reason: 'Dismissed by agent'}),
+      });
+      if (!res.ok) return showFlash('Failed', true);
+      location.reload();
+    }
+    async function createTask() {
+      const title = document.getElementById('task-title').value.trim();
+      if (!title) return showFlash('Task title required', true);
+      const res = await fetch('/api/crm/tasks', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({title, lead_id: leadId, task_type: document.getElementById('task-type').value}),
+      });
+      const data = await res.json();
+      if (!res.ok) return showFlash(data.error || 'Failed', true);
+      location.reload();
+    }
+    async function completeTask(id) {
+      const res = await fetch(`/api/crm/tasks/${id}/complete`, {method: 'POST'});
+      if (!res.ok) return showFlash('Failed', true);
+      location.reload();
+    }
+    async function createAppt() {
+      const startLocal = document.getElementById('appt-start').value;
+      if (!startLocal) return showFlash('Start time required', true);
+      const res = await fetch('/api/crm/appointments', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          lead_id: leadId,
+          appointment_type: document.getElementById('appt-type').value,
+          start_at: new Date(startLocal).toISOString(),
+          set_status: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) return showFlash(data.error || 'Failed', true);
+      location.reload();
+    }
+    async function recordOutcome(id) {
+      const outcome = document.getElementById(`outcome-${id}`).value;
+      const res = await fetch(`/api/crm/appointments/${id}/outcome`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({outcome}),
+      });
+      const data = await res.json();
+      if (!res.ok) return showFlash(data.error || 'Failed', true);
+      location.reload();
+    }
+    async function resolveNeed(id) {
+      const reason = document.getElementById(`na-${id}`).value.trim();
+      const res = await fetch(`/api/crm/needs-attention/${id}/resolve`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({resolution_reason: reason}),
+      });
+      const data = await res.json();
+      if (!res.ok) return showFlash(data.error || 'Failed', true);
+      location.reload();
+    }
+    async function doLogout() {
+      await fetch('/logout', {method: 'POST'});
+      window.location.href = '/';
+    }
+  </script>
+</body>
+</html>
