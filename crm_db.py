@@ -519,7 +519,7 @@ def create_appointment(user_id, data):
         "appointment_upcoming",
         "Appointment scheduled",
         f"Starts {start_at[:16].replace('T', ' ')} UTC",
-        link=f"/crm/leads/{lead_id}",
+        link=f"/crm/leads/{lead_id}" if lead_id else "/crm/leads",
         lead_id=lead_id,
     )
     return appt_id, None
@@ -789,6 +789,9 @@ def refresh_needs_attention(user_id, local_date=None):
 
 
 def create_notification(user_id, ntype, title, body="", link=None, lead_id=None):
+    # Guard against f"/crm/leads/{None}" → "/crm/leads/None".
+    if isinstance(link, str) and link.rstrip("/").endswith("/None"):
+        link = "/crm/leads" if link.startswith("/crm/leads") else None
     with get_db() as conn:
         cur = conn.execute(
             """

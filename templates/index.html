@@ -656,7 +656,7 @@
             <button type="button" class="btn-generate" style="padding:8px 12px;font-size:12px;" onclick="sendSmsSuggestion(${item.id}, false, ${item.requires_manual_review ? 'true' : 'false'})">Approve &amp; Send</button>
             <button type="button" class="logout-btn" style="padding:8px 12px;" onclick="dismissSmsSuggestion(${item.id})">Dismiss</button>
             <button type="button" class="billing-link" style="padding:8px 12px;" onclick="openSmsLead(${item.lead_id})">View conversation</button>
-            <a class="billing-link" style="padding:8px 12px;" href="/crm/leads/${item.lead_id}">Open CRM lead</a>
+            ${item.lead_id ? `<a class="billing-link" style="padding:8px 12px;" href="/crm/leads/${item.lead_id}">Open CRM lead</a>` : ''}
           </div>
           ${pitch}
         </div>`;

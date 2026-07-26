@@ -157,7 +157,13 @@
           <strong>{{ item.lead_name or 'Lead' }}</strong>
           <span class="pill">{{ item.priority }}</span>
           <div class="muted" style="margin-top:4px;">{{ item.reason_text }} · {{ item.phone_number }}</div>
+          {% if item.lead_id %}
           <a class="cta" style="margin-top:8px;" href="/crm/leads/{{ item.lead_id }}">Open lead</a>
+          {% elif item.reason_code == 'task_overdue' %}
+          <a class="cta" style="margin-top:8px;" href="/crm/tasks">Open tasks</a>
+          {% else %}
+          <a class="cta" style="margin-top:8px;" href="/crm/needs-attention">View queue</a>
+          {% endif %}
         </li>
         {% endfor %}
       </ul>
