@@ -1,8 +1,22 @@
 import json
+import logging
 import urllib.error
 import urllib.request
 
 import config
+
+logger = logging.getLogger(__name__)
+
+VAPI_VARIABLE_KEYS = (
+    "agent_name",
+    "brokerage_name",
+    "company_name",
+    "lead_name",
+    "call_purpose",
+    "lead_context",
+    "property_interest",
+    "desired_outcome",
+)
 
 
 class VoiceProviderError(Exception):
@@ -14,51 +28,97 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def build_vapi_variable_values(profile, call_data):
+    """Build assistantOverrides.variableValues from business profile + call/lead form."""
+    profile = profile or {}
+    call_data = call_data or {}
+    return {
+        "agent_name": str(profile.get("agent_name") or "").strip(),
+        "brokerage_name": str(profile.get("brokerage_name") or "").strip(),
+        "company_name": str(profile.get("company_name") or "").strip(),
+        "lead_name": str(call_data.get("lead_name") or "").strip(),
+        "call_purpose": str(call_data.get("call_purpose") or "").strip(),
+        "lead_context": str(
+            call_data.get("lead_context") or call_data.get("notes") or ""
+        ).strip(),
+        "property_interest": str(call_data.get("property_interest") or "").strip(),
+        "desired_outcome": str(call_data.get("desired_outcome") or "").strip(),
+    }
+
+
+def validate_vapi_variable_values(variable_values):
+    """Block calls missing agent_name, lead_name, or both brokerage and company names."""
+    values = variable_values or {}
+    agent_name = str(values.get("agent_name") or "").strip()
+    lead_name = str(values.get("lead_name") or "").strip()
+    brokerage_name = str(values.get("brokerage_name") or "").strip()
+    company_name = str(values.get("company_name") or "").strip()
+
+    missing = []
+    if not agent_name:
+        missing.append("agent name (save it in your business profile)")
+    if not lead_name:
+        missing.append("lead name")
+    if not brokerage_name and not company_name:
+        missing.append(
+            "brokerage name or company name (save at least one in your business profile)"
+        )
+    if not missing:
+        return None
+    return "Cannot start call. Missing required information: " + "; ".join(missing) + "."
+
+
+def log_variable_values_presence(variable_values):
+    """Log only variable names and presence flags — never values, phones, or secrets."""
+    values = variable_values or {}
+    presence = {key: bool(str(values.get(key) or "").strip()) for key in VAPI_VARIABLE_KEYS}
+    logger.info("Vapi variableValues presence: %s", presence)
+
+
 class VapiVoiceProvider:
     api_url = "https://api.vapi.ai/call"
 
     def __init__(self):
         self.api_key = config.VOICE_PROVIDER_API_KEY
-        self.assistant_id = config.VOICE_DEFAULT_ASSISTANT_ID
+        self.assistant_id = (
+            config.REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID
+            or config.VOICE_DEFAULT_ASSISTANT_ID
+        )
         self.phone_number_id = config.VOICE_PHONE_NUMBER_ID
 
     def is_configured(self):
-        return bool(self.api_key and self.phone_number_id)
+        return bool(self.api_key and self.phone_number_id and self.assistant_id)
 
-    def start_outbound_call(self, call_id, call_data, persona, prompt):
+    def start_outbound_call(self, call_id, call_data, persona, prompt, variable_values=None):
         if not self.is_configured():
-            raise VoiceProviderError("AI calling is not configured yet. Add your voice provider API key and phone number in Railway.")
+            raise VoiceProviderError(
+                "AI calling is not configured yet. Add your voice provider API key, "
+                "phone number ID, and REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID in Railway."
+            )
+
+        values = variable_values or build_vapi_variable_values({}, call_data)
+        validation_error = validate_vapi_variable_values(values)
+        if validation_error:
+            raise VoiceProviderError(validation_error)
+
+        log_variable_values_presence(values)
 
         payload = {
+            "assistantId": self.assistant_id,
             "phoneNumberId": self.phone_number_id,
             "customer": {
                 "number": call_data["phone_number"],
-                "name": call_data.get("lead_name") or "Lead",
-                "numberE164CheckEnabled": True,
+                "name": values.get("lead_name") or "Lead",
+            },
+            "assistantOverrides": {
+                "variableValues": {key: values.get(key, "") for key in VAPI_VARIABLE_KEYS},
             },
             "metadata": {
                 "topai_call_id": str(call_id),
-                "persona_id": str(persona["id"]),
+                "persona_id": str(persona["id"]) if persona else "",
                 "lead_type": call_data.get("lead_type", ""),
             },
         }
-
-        if self.assistant_id:
-            payload["assistantId"] = self.assistant_id
-        else:
-            payload["assistant"] = {
-                "name": f"TopAI {persona['name']}",
-                "firstMessage": f"Hi, this is an AI assistant calling on behalf of the real estate team. Is this {call_data.get('lead_name') or 'the person I am trying to reach'}?",
-                "model": {
-                    "provider": "openai",
-                    "model": "gpt-4o-mini",
-                    "messages": [{"role": "system", "content": prompt}],
-                },
-                "artifactPlan": {
-                    "recordingEnabled": True,
-                    "transcriptPlan": {"enabled": True},
-                },
-            }
 
         request = urllib.request.Request(
             self.api_url,
@@ -76,7 +136,14 @@ class VapiVoiceProvider:
                 result = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
-            raise VoiceProviderError(f"Voice provider rejected the call request: {detail}") from exc
+            logger.warning(
+                "Vapi call create rejected status=%s body_length=%s",
+                exc.code,
+                len(detail or ""),
+            )
+            raise VoiceProviderError(
+                f"Voice provider rejected the call request (HTTP {exc.code})."
+            ) from exc
         except urllib.error.URLError as exc:
             raise VoiceProviderError("Could not reach the voice provider. Please try again.") from exc
 

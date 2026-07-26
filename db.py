@@ -133,6 +133,45 @@ def set_stripe_customer(user_id, stripe_customer_id):
         )
 
 
+def get_business_profile(user_id):
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT agent_name, brokerage_name, company_name
+            FROM users WHERE id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        return {
+            "agent_name": (data.get("agent_name") or "").strip(),
+            "brokerage_name": (data.get("brokerage_name") or "").strip(),
+            "company_name": (data.get("company_name") or "").strip(),
+        }
+
+
+def update_business_profile(user_id, agent_name=None, brokerage_name=None, company_name=None):
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE users
+            SET agent_name = ?,
+                brokerage_name = ?,
+                company_name = ?
+            WHERE id = ?
+            """,
+            (
+                (agent_name or "").strip()[:120] or None,
+                (brokerage_name or "").strip()[:200] or None,
+                (company_name or "").strip()[:200] or None,
+                user_id,
+            ),
+        )
+    return get_business_profile(user_id)
+
+
 def list_voice_personas(user_id=None):
     with get_db() as conn:
         rows = conn.execute(

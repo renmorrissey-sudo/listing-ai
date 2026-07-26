@@ -29,7 +29,14 @@ from sms_validation import (
 from twilio_security import validate_twilio_request
 from validation import validate_listing_payload, validate_script_payload
 from voice_prompts import build_voice_call_prompt
-from voice_provider import VoiceProviderError, get_voice_provider, normalize_voice_webhook
+from voice_provider import (
+    VoiceProviderError,
+    build_vapi_variable_values,
+    get_voice_provider,
+    log_variable_values_presence,
+    normalize_voice_webhook,
+    validate_vapi_variable_values,
+)
 from voice_validation import validate_voice_call_payload, validate_voice_persona_payload
 
 config.validate_config()
@@ -534,6 +541,28 @@ def voice_call_recording(call_id):
     return redirect(download_url, code=302)
 
 
+@app.route("/account/business-profile", methods=["GET", "PUT"])
+@auth.subscription_required
+def business_profile():
+    user = auth.get_current_user()
+    if request.method == "GET":
+        profile = db.get_business_profile(user["id"]) or {
+            "agent_name": "",
+            "brokerage_name": "",
+            "company_name": "",
+        }
+        return jsonify({"profile": profile})
+
+    data = request.get_json(silent=True) or {}
+    profile = db.update_business_profile(
+        user["id"],
+        agent_name=str(data.get("agent_name") or ""),
+        brokerage_name=str(data.get("brokerage_name") or ""),
+        company_name=str(data.get("company_name") or ""),
+    )
+    return jsonify({"ok": True, "profile": profile})
+
+
 @app.route("/voice/calls", methods=["POST"])
 @auth.subscription_required
 @limiter.limit(lambda: f"{config.VOICE_DAILY_CALL_LIMIT} per day", key_func=_user_rate_limit_key)
@@ -548,6 +577,26 @@ def start_voice_call():
     if not persona:
         return jsonify({"error": "Selected persona was not found."}), 404
 
+    # Optional CRM lead enrichment — ownership checked server-side.
+    if cleaned.get("lead_id"):
+        lead = db.get_lead(cleaned["lead_id"], user["id"])
+        if not lead:
+            return jsonify({"error": "Selected lead was not found."}), 404
+        cleaned["lead_name"] = cleaned.get("lead_name") or lead.get("name") or ""
+        cleaned["property_interest"] = (
+            cleaned.get("property_interest") or lead.get("property_interest") or ""
+        )
+        if not cleaned.get("lead_context"):
+            note_bits = [lead.get("notes"), lead.get("next_action"), lead.get("lead_type")]
+            cleaned["lead_context"] = " | ".join(bit for bit in note_bits if bit)[:1500]
+
+    profile = db.get_business_profile(user["id"]) or {}
+    variable_values = build_vapi_variable_values(profile, cleaned)
+    validation_error = validate_vapi_variable_values(variable_values)
+    if validation_error:
+        return jsonify({"error": validation_error}), 400
+    log_variable_values_presence(variable_values)
+
     call_id = db.create_voice_call(
         user_id=user["id"],
         persona_id=persona["id"],
@@ -557,10 +606,12 @@ def start_voice_call():
     )
     prompt = build_voice_call_prompt(persona, cleaned)
     try:
-        result = get_voice_provider().start_outbound_call(call_id, cleaned, persona, prompt)
+        result = get_voice_provider().start_outbound_call(
+            call_id, cleaned, persona, prompt, variable_values=variable_values
+        )
         db.update_voice_call_provider(call_id, result["provider_call_id"], "started")
     except VoiceProviderError as exc:
-        logger.warning("Voice call failed to start: %s", exc)
+        logger.warning("Voice call failed to start: %s", type(exc).__name__)
         db.update_voice_call_provider(call_id, None, "failed")
         return jsonify({"error": str(exc)}), 503
 

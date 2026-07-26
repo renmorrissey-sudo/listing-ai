@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 MIGRATION_MODULES = [
     "migrations.versions.001_baseline",
     "migrations.versions.002_safe_additive_columns",
+    "migrations.versions.003_user_business_profile",
 ]
 
 

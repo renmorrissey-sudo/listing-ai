@@ -241,7 +241,7 @@
           <div class="form-group"><label>Property Type</label><select name="property_type"><option>Single Family</option><option>Condo / Townhome</option><option>Multi-Family</option><option>Luxury Home</option><option>Land / Lot</option></select></div>
           <div class="form-group"><label>Seller Situation</label><select name="situation"><option>General Farming</option><option>Expired Listing</option><option>FSBO (For Sale By Owner)</option><option>Absentee Owner</option><option>Just Sold Nearby</option></select></div>
         </div>
-        <div class="form-group"><label>Your Name</label><input type="text" name="agent_name" placeholder="e.g. Ren Morrissey" /></div>
+        <div class="form-group"><label>Your Name</label><input type="text" name="agent_name" placeholder="Your name" /></div>
         <div class="form-group"><label>Key Benefit to Mention</label><textarea name="key_benefit" placeholder="e.g. I sold 3 homes in your neighborhood this year at above asking price"></textarea></div>
         <div class="error-msg" id="script-error"></div>
         <button type="submit" class="btn-generate" id="script-btn"><div class="spinner" id="script-spinner"></div><span id="script-btn-label">Generate Scripts</span></button>
@@ -258,16 +258,34 @@
       <div class="notice">
         Start with consent-based one-to-one calls only. You are responsible for TCPA, DNC, state recording laws, brokerage policy, and local regulations.
       </div>
+      <div class="notice" style="margin-bottom:14px;">
+        <strong>Business profile</strong> (used on every AI call — saved to your account)
+        <div class="form-row" style="margin-top:10px;">
+          <div class="form-group"><label>Agent name *</label><input type="text" id="profile-agent-name" maxlength="120" placeholder="Your name as said on calls" /></div>
+          <div class="form-group"><label>Brokerage name</label><input type="text" id="profile-brokerage-name" maxlength="200" placeholder="Your brokerage (optional if company set)" /></div>
+        </div>
+        <div class="form-group"><label>Company name</label><input type="text" id="profile-company-name" maxlength="200" placeholder="Your company (optional if brokerage set)" /></div>
+        <p class="muted" style="font-size:12px;margin:0 0 8px;">At least one of brokerage or company is required before starting a call.</p>
+        <button type="button" class="btn-generate" id="profile-save-btn" style="padding:8px 12px;font-size:12px;">Save business profile</button>
+        <div class="error-msg" id="profile-error" style="margin-top:8px;"></div>
+        <div class="muted" id="profile-status" style="font-size:12px;margin-top:8px;"></div>
+      </div>
       <form id="voice-form">
         <div class="form-group"><label>Persona</label><select name="persona_id" id="voice-persona" required><option value="">Loading personas...</option></select></div>
-        <div class="form-row">
-          <div class="form-group"><label>Lead Name</label><input type="text" name="lead_name" placeholder="e.g. Sarah Johnson" maxlength="120" /></div>
-          <div class="form-group"><label>Phone Number *</label><input type="tel" name="phone_number" placeholder="e.g. (555) 123-4567" maxlength="32" required /></div>
+        <div class="form-group">
+          <label>CRM lead (optional)</label>
+          <select name="lead_id" id="voice-lead-select"><option value="">Enter lead details manually...</option></select>
         </div>
-        <div class="form-group"><label>Lead Type</label><input type="text" name="lead_type" placeholder="e.g. buyer lead, open house visitor, seller lead" maxlength="80" /></div>
-        <div class="form-group"><label>Property Interest</label><textarea name="property_interest" maxlength="500" placeholder="e.g. Interested in 3-bedroom homes near downtown under $500k"></textarea></div>
+        <div class="form-row">
+          <div class="form-group"><label>Lead Name *</label><input type="text" name="lead_name" id="voice-lead-name" placeholder="e.g. Sarah Johnson" maxlength="120" required /></div>
+          <div class="form-group"><label>Phone Number *</label><input type="tel" name="phone_number" id="voice-phone" placeholder="e.g. (555) 123-4567" maxlength="32" required /></div>
+        </div>
+        <div class="form-group"><label>Lead Type</label><input type="text" name="lead_type" id="voice-lead-type" placeholder="e.g. buyer lead, open house visitor, seller lead" maxlength="80" /></div>
+        <div class="form-group"><label>Call purpose</label><input type="text" name="call_purpose" maxlength="500" placeholder="e.g. Follow up after an open house and see if they want a buyer consultation" /></div>
+        <div class="form-group"><label>Property Interest</label><textarea name="property_interest" id="voice-property-interest" maxlength="500" placeholder="e.g. Interested in 3-bedroom homes near downtown under $500k"></textarea></div>
         <div class="form-group"><label>Desired Outcome</label><input type="text" name="desired_outcome" maxlength="300" placeholder="e.g. qualify and book a buyer consultation" /></div>
-        <div class="form-group"><label>Agent Notes</label><textarea name="notes" maxlength="1500" placeholder="Any context the AI should know before calling"></textarea></div>
+        <div class="form-group"><label>Lead context</label><textarea name="lead_context" id="voice-lead-context" maxlength="1500" placeholder="What the AI should know about this lead before calling"></textarea></div>
+        <div class="form-group"><label>Agent Notes</label><textarea name="notes" maxlength="1500" placeholder="Optional extra notes (used as lead context if lead context is blank)"></textarea></div>
         <label class="checkbox-row">
           <input type="checkbox" name="compliance_confirmed" value="true" required />
           <span>I confirm this lead gave permission to be contacted and I understand I am responsible for calling, recording, DNC, and brokerage compliance.</span>
@@ -300,7 +318,7 @@
           <div class="form-group"><label>Phone Number *</label><input type="tel" name="phone_number" placeholder="e.g. (555) 123-4567" maxlength="32" required /></div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>Your Name</label><input type="text" name="agent_name" placeholder="e.g. Ren Morrissey" maxlength="120" /></div>
+          <div class="form-group"><label>Your Name</label><input type="text" name="agent_name" placeholder="Your name" maxlength="120" />
           <div class="form-group"><label>Lead Type</label><input type="text" name="lead_type" placeholder="e.g. buyer lead, open house visitor" maxlength="80" /></div>
         </div>
         <div class="form-group"><label>Property Interest</label><textarea name="property_interest" maxlength="500" placeholder="e.g. Looking at 3-bedroom homes near downtown under $500k"></textarea></div>
@@ -411,7 +429,96 @@
   }
 
   async function loadVoiceData() {
-    await Promise.all([loadVoicePersonas(), loadVoiceCalls()]);
+    await Promise.all([loadBusinessProfile(), loadVoicePersonas(), loadVoiceLeads(), loadVoiceCalls()]);
+  }
+
+  let voiceLeadsById = {};
+
+  async function loadVoiceLeads() {
+    const select = document.getElementById('voice-lead-select');
+    if (!select) return;
+    try {
+      const data = await fetchJson('/sms/leads', {cache: 'no-store'});
+      if (!data) return;
+      const current = select.value;
+      voiceLeadsById = {};
+      (data.leads || []).forEach(lead => { voiceLeadsById[String(lead.id)] = lead; });
+      if (!data.leads.length) {
+        select.innerHTML = '<option value="">Enter lead details manually...</option>';
+        return;
+      }
+      select.innerHTML = '<option value="">Enter lead details manually...</option>' + data.leads.map(lead =>
+        `<option value="${lead.id}">${escapeHtml(lead.name || 'Lead')} · ${escapeHtml(lead.phone_number || '')}</option>`
+      ).join('');
+      if (current) select.value = current;
+      select.onchange = () => {
+        const lead = voiceLeadsById[select.value];
+        if (!lead) return;
+        const nameEl = document.getElementById('voice-lead-name');
+        const phoneEl = document.getElementById('voice-phone');
+        const typeEl = document.getElementById('voice-lead-type');
+        const interestEl = document.getElementById('voice-property-interest');
+        const contextEl = document.getElementById('voice-lead-context');
+        if (nameEl) nameEl.value = lead.name || '';
+        if (phoneEl) phoneEl.value = lead.phone_number || '';
+        if (typeEl) typeEl.value = lead.lead_type || '';
+        if (interestEl) interestEl.value = lead.property_interest || '';
+        if (contextEl && !contextEl.value) contextEl.value = lead.next_action || '';
+      };
+    } catch (err) {
+      select.innerHTML = '<option value="">Enter lead details manually...</option>';
+    }
+  }
+
+  async function loadBusinessProfile() {
+    const agentEl = document.getElementById('profile-agent-name');
+    const brokerageEl = document.getElementById('profile-brokerage-name');
+    const companyEl = document.getElementById('profile-company-name');
+    const statusEl = document.getElementById('profile-status');
+    if (!agentEl || !brokerageEl || !companyEl) return;
+    try {
+      const data = await fetchJson('/account/business-profile');
+      if (!data || !data.profile) return;
+      agentEl.value = data.profile.agent_name || '';
+      brokerageEl.value = data.profile.brokerage_name || '';
+      companyEl.value = data.profile.company_name || '';
+      if (statusEl) {
+        const ready = (data.profile.agent_name || '').trim()
+          && ((data.profile.brokerage_name || '').trim() || (data.profile.company_name || '').trim());
+        statusEl.textContent = ready
+          ? 'Business profile loaded. Ready for AI calls.'
+          : 'Save your agent name and brokerage or company before starting a call.';
+      }
+    } catch (err) {
+      if (statusEl) statusEl.textContent = 'Could not load business profile.';
+    }
+  }
+
+  async function saveBusinessProfile() {
+    const errEl = document.getElementById('profile-error');
+    const statusEl = document.getElementById('profile-status');
+    const btn = document.getElementById('profile-save-btn');
+    if (errEl) errEl.textContent = '';
+    if (btn) btn.disabled = true;
+    try {
+      const data = await fetchJson('/account/business-profile', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          agent_name: document.getElementById('profile-agent-name')?.value || '',
+          brokerage_name: document.getElementById('profile-brokerage-name')?.value || '',
+          company_name: document.getElementById('profile-company-name')?.value || '',
+        }),
+      });
+      if (!data || !data.ok) throw new Error((data && data.error) || 'Failed to save profile');
+      if (statusEl) statusEl.textContent = 'Business profile saved.';
+      return true;
+    } catch (err) {
+      if (errEl) errEl.textContent = err.message || 'Failed to save profile';
+      return false;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   async function loadVoicePersonas() {
@@ -865,6 +972,8 @@
     btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Generate Scripts';
   });
 
+  document.getElementById('profile-save-btn')?.addEventListener('click', saveBusinessProfile);
+
   document.getElementById('voice-form').addEventListener('submit', async e => {
     e.preventDefault();
     const btn = document.getElementById('voice-btn');
@@ -872,7 +981,22 @@
     const label = document.getElementById('voice-btn-label');
     const errEl = document.getElementById('voice-error');
     errEl.style.display = 'none';
+    const agentName = (document.getElementById('profile-agent-name')?.value || '').trim();
+    const brokerageName = (document.getElementById('profile-brokerage-name')?.value || '').trim();
+    const companyName = (document.getElementById('profile-company-name')?.value || '').trim();
+    if (!agentName || (!brokerageName && !companyName)) {
+      errEl.textContent = 'Cannot start call. Save your agent name and brokerage or company in your business profile first.';
+      errEl.style.display = 'block';
+      return;
+    }
     btn.disabled = true; spinner.style.display = 'block'; label.textContent = 'Starting...';
+    const profileSaved = await saveBusinessProfile();
+    if (!profileSaved) {
+      errEl.textContent = 'Cannot start call. Save your business profile first.';
+      errEl.style.display = 'block';
+      btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Start Call';
+      return;
+    }
     const data = Object.fromEntries(new FormData(e.target).entries());
     data.compliance_confirmed = Boolean(data.compliance_confirmed);
     try {

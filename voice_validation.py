@@ -7,6 +7,8 @@ VOICE_FIELD_LIMITS = {
     "lead_type": 80,
     "property_interest": 500,
     "desired_outcome": 300,
+    "call_purpose": 500,
+    "lead_context": 1500,
     "notes": 1500,
 }
 
@@ -59,8 +61,21 @@ def validate_voice_call_payload(data):
     except (TypeError, ValueError):
         return None, "Select a valid calling persona."
 
+    lead_id = data.get("lead_id")
+    if lead_id in ("", None):
+        cleaned["lead_id"] = None
+    else:
+        try:
+            cleaned["lead_id"] = int(lead_id)
+        except (TypeError, ValueError):
+            return None, "Invalid lead selection."
+
     if not cleaned.get("lead_name"):
-        cleaned["lead_name"] = "the lead"
+        return None, "Lead name is required."
+    if not cleaned.get("lead_context") and cleaned.get("notes"):
+        cleaned["lead_context"] = cleaned["notes"]
+    if not cleaned.get("call_purpose") and cleaned.get("desired_outcome"):
+        cleaned["call_purpose"] = cleaned["desired_outcome"]
     if not cleaned.get("desired_outcome"):
         cleaned["desired_outcome"] = "qualify the lead and request an appointment"
 
