@@ -83,6 +83,27 @@ def test_task_due_today_uses_calendar_date(two_users):
     assert all(t["id"] != task_id for t in overdue)
 
 
+def test_overdue_task_without_lead_appears_in_needs_attention(two_users):
+    import db as dbmod
+
+    dbmod.init_db()
+    u1, _ = two_users
+    task_id, err = crm_db.create_task(
+        u1,
+        {
+            "title": "CMA created for King's house",
+            "task_type": "prepare_cma",
+            "due_at": "2026-07-25T21:14:00+00:00",
+        },
+    )
+    assert err is None
+    items = crm_db.list_needs_attention(u1, local_date="2026-07-27")
+    match = [i for i in items if i.get("source_ref_type") == "task" and i.get("source_ref_id") == task_id]
+    assert match, "Overdue task without lead should appear in Needs Attention"
+    assert "CMA created for King's house" in (match[0].get("reason_text") or "")
+    assert match[0].get("lead_id") is None
+
+
 def test_task_overdue_requires_prior_calendar_day(two_users):
     u1, _ = two_users
     yesterday_id, err = crm_db.create_task(

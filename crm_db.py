@@ -438,7 +438,7 @@ def complete_task(user_id, task_id):
             f"Task completed: {task['title']}",
             {"task_id": task_id},
         )
-        resolve_needs_attention_by_reason(user_id, task["lead_id"], "task_overdue", "Task completed")
+    resolve_needs_attention_for_source(user_id, "task", task_id, "Task completed")
     return dict(task), None
 
 
@@ -467,6 +467,7 @@ def cancel_task(user_id, task_id):
             f"Task cancelled: {task['title']}",
             {"task_id": task_id},
         )
+    resolve_needs_attention_for_source(user_id, "task", task_id, "Task cancelled")
     return True, None
 
 
@@ -583,19 +584,39 @@ def list_appointments(user_id, lead_id=None, limit=50):
         return [dict(r) for r in rows]
 
 
-def upsert_needs_attention(user_id, lead_id, reason_code, priority="normal", source_ref_type=None, source_ref_id=None):
-    reason_text = NEEDS_ATTENTION_REASONS.get(reason_code, reason_code)
+def upsert_needs_attention(
+    user_id,
+    lead_id,
+    reason_code,
+    priority="normal",
+    source_ref_type=None,
+    source_ref_id=None,
+    reason_text=None,
+):
+    reason_text = (reason_text or NEEDS_ATTENTION_REASONS.get(reason_code, reason_code) or reason_code)[:500]
     priority = priority if priority in PRIORITIES else "normal"
     now = _now()
     with get_db() as conn:
-        existing = conn.execute(
-            """
-            SELECT id FROM needs_attention
-            WHERE user_id = ? AND lead_id = ? AND reason_code = ? AND status = 'open'
-            LIMIT 1
-            """,
-            (user_id, lead_id, reason_code),
-        ).fetchone()
+        existing = None
+        if source_ref_type and source_ref_id is not None:
+            existing = conn.execute(
+                """
+                SELECT id FROM needs_attention
+                WHERE user_id = ? AND reason_code = ? AND status = 'open'
+                  AND source_ref_type = ? AND source_ref_id = ?
+                LIMIT 1
+                """,
+                (user_id, reason_code, source_ref_type, source_ref_id),
+            ).fetchone()
+        elif lead_id is not None:
+            existing = conn.execute(
+                """
+                SELECT id FROM needs_attention
+                WHERE user_id = ? AND lead_id = ? AND reason_code = ? AND status = 'open'
+                LIMIT 1
+                """,
+                (user_id, lead_id, reason_code),
+            ).fetchone()
         if existing:
             return existing["id"]
         cur = conn.execute(
@@ -638,13 +659,14 @@ def resolve_needs_attention(user_id, item_id, resolution_reason=""):
             """,
             (str(resolution_reason or "")[:1000], now, user_id, item_id, user_id),
         )
-    add_lead_activity(
-        item["lead_id"],
-        user_id,
-        "needs_attention_resolved",
-        f"Resolved: {item['reason_text']}",
-        {"item_id": item_id, "reason_code": item["reason_code"], "resolution_reason": resolution_reason},
-    )
+    if item["lead_id"]:
+        add_lead_activity(
+            item["lead_id"],
+            user_id,
+            "needs_attention_resolved",
+            f"Resolved: {item['reason_text']}",
+            {"item_id": item_id, "reason_code": item["reason_code"], "resolution_reason": resolution_reason},
+        )
     return True, None
 
 
@@ -661,15 +683,35 @@ def resolve_needs_attention_by_reason(user_id, lead_id, reason_code, resolution_
         resolve_needs_attention(user_id, row["id"], resolution_reason)
 
 
-def list_needs_attention(user_id, limit=100):
-    refresh_needs_attention(user_id)
+def resolve_needs_attention_for_source(user_id, source_ref_type, source_ref_id, resolution_reason="Resolved"):
     with get_db() as conn:
         rows = conn.execute(
             """
-            SELECT n.*, l.name AS lead_name, l.phone_number, l.status AS lead_status,
-                   l.assigned_user_id, l.next_action
+            SELECT id FROM needs_attention
+            WHERE user_id = ? AND source_ref_type = ? AND source_ref_id = ? AND status = 'open'
+            """,
+            (user_id, source_ref_type, source_ref_id),
+        ).fetchall()
+    for row in rows:
+        resolve_needs_attention(user_id, row["id"], resolution_reason)
+
+
+def list_needs_attention(user_id, limit=100, local_date=None):
+    refresh_needs_attention(user_id, local_date=local_date)
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT n.*,
+                   l.name AS lead_name,
+                   l.phone_number,
+                   l.status AS lead_status,
+                   l.assigned_user_id,
+                   l.next_action,
+                   t.title AS task_title,
+                   t.due_at AS task_due_at
             FROM needs_attention n
-            JOIN leads l ON l.id = n.lead_id
+            LEFT JOIN leads l ON l.id = n.lead_id
+            LEFT JOIN tasks t ON n.source_ref_type = 'task' AND t.id = n.source_ref_id
             WHERE n.user_id = ? AND n.status = 'open'
             ORDER BY
               CASE n.priority
@@ -682,11 +724,12 @@ def list_needs_attention(user_id, limit=100):
         return [dict(r) for r in rows]
 
 
-def refresh_needs_attention(user_id):
+def refresh_needs_attention(user_id, local_date=None):
     """Compute overdue/system queue items for this user."""
     now_dt = datetime.now(timezone.utc)
     now = now_dt.isoformat()
     cutoff = (now_dt - timedelta(hours=FIRST_RESPONSE_HOURS)).isoformat()
+    day = _calendar_day(local_date)
     with get_db() as conn:
         overdue_followups = [dict(r) for r in conn.execute(
             """
@@ -696,15 +739,14 @@ def refresh_needs_attention(user_id):
             """,
             (user_id, now),
         ).fetchall()]
-        today = now_dt.strftime("%Y-%m-%d")
         overdue_tasks = [dict(r) for r in conn.execute(
             """
-            SELECT id, lead_id FROM tasks
+            SELECT id, lead_id, title, due_at FROM tasks
             WHERE user_id = ? AND status IN ('open', 'in_progress')
               AND due_at IS NOT NULL
               AND substr(due_at, 1, 10) < ?
             """,
-            (user_id, today),
+            (user_id, day),
         ).fetchall()]
         missing_outcomes = [dict(r) for r in conn.execute(
             """
@@ -726,11 +768,17 @@ def refresh_needs_attention(user_id):
     for lead in overdue_followups:
         upsert_needs_attention(user_id, lead["id"], "follow_up_overdue", priority="high")
     for task in overdue_tasks:
-        if task["lead_id"]:
-            upsert_needs_attention(
-                user_id, task["lead_id"], "task_overdue", priority="high",
-                source_ref_type="task", source_ref_id=task["id"],
-            )
+        due_label = (task.get("due_at") or "")[:10]
+        title = (task.get("title") or "Task").strip()
+        upsert_needs_attention(
+            user_id,
+            task.get("lead_id"),
+            "task_overdue",
+            priority="high",
+            source_ref_type="task",
+            source_ref_id=task["id"],
+            reason_text=f"Task overdue: {title}" + (f" (due {due_label})" if due_label else ""),
+        )
     for appt in missing_outcomes:
         upsert_needs_attention(
             user_id, appt["lead_id"], "appointment_outcome_missing", priority="high",

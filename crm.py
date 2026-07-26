@@ -139,11 +139,13 @@ def crm_needs_attention_page():
     user = _user_or_redirect()
     if not user:
         return redirect(url_for("index"))
-    items = crm_db.list_needs_attention(user["id"])
+    local_date = (request.args.get("local_date") or "").strip()[:10] or None
+    items = crm_db.list_needs_attention(user["id"], local_date=local_date)
     return render_template(
         "crm_needs_attention.html",
         items=items,
         reason_labels=NEEDS_ATTENTION_REASONS,
+        local_date=local_date or "",
         **_nav_context(user, "needs"),
     )
 
@@ -366,7 +368,8 @@ def api_appointment_outcome(appointment_id):
 @auth.subscription_required
 def api_needs_attention():
     user = auth.get_current_user()
-    return jsonify({"items": crm_db.list_needs_attention(user["id"])})
+    local_date = (request.args.get("local_date") or "").strip()[:10] or None
+    return jsonify({"items": crm_db.list_needs_attention(user["id"], local_date=local_date)})
 
 
 @crm_bp.route("/api/crm/needs-attention/<int:item_id>/resolve", methods=["POST"])

@@ -257,7 +257,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS needs_attention (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
-                lead_id INTEGER NOT NULL,
+                lead_id INTEGER,
                 reason_code TEXT NOT NULL,
                 reason_text TEXT,
                 priority TEXT NOT NULL DEFAULT 'normal',
@@ -271,6 +271,7 @@ def init_db():
             )
             """
         )
+        _ensure_needs_attention_lead_nullable(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS notifications (
@@ -332,6 +333,50 @@ def _ensure_column(conn, table, column, definition):
     cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column not in cols:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _ensure_needs_attention_lead_nullable(conn):
+    """Allow Needs Attention items for overdue tasks with no linked lead."""
+    info = conn.execute("PRAGMA table_info(needs_attention)").fetchall()
+    if not info:
+        return
+    lead_col = next((row for row in info if row[1] == "lead_id"), None)
+    if not lead_col or lead_col[3] == 0:
+        return
+    conn.execute(
+        """
+        CREATE TABLE needs_attention_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            lead_id INTEGER,
+            reason_code TEXT NOT NULL,
+            reason_text TEXT,
+            priority TEXT NOT NULL DEFAULT 'normal',
+            source_ref_type TEXT,
+            source_ref_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'open',
+            resolution_reason TEXT,
+            created_at TEXT NOT NULL,
+            resolved_at TEXT,
+            resolved_by INTEGER
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO needs_attention_new
+            (id, user_id, lead_id, reason_code, reason_text, priority, source_ref_type,
+             source_ref_id, status, resolution_reason, created_at, resolved_at, resolved_by)
+        SELECT id, user_id, lead_id, reason_code, reason_text, priority, source_ref_type,
+               source_ref_id, status, resolution_reason, created_at, resolved_at, resolved_by
+        FROM needs_attention
+        """
+    )
+    conn.execute("DROP TABLE needs_attention")
+    conn.execute("ALTER TABLE needs_attention_new RENAME TO needs_attention")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_needs_attention_user_status ON needs_attention(user_id, status, created_at DESC)"
+    )
 
 
 def _ensure_default_voice_personas(conn):

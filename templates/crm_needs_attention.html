@@ -40,14 +40,22 @@
     <div class="card">
       {% if items %}
       <table>
-        <thead><tr><th>Priority</th><th>Lead</th><th>Reason</th><th>Created</th><th>Resolve</th></tr></thead>
+        <thead><tr><th>Priority</th><th>Item</th><th>Reason</th><th>Created</th><th>Resolve</th></tr></thead>
         <tbody>
           {% for item in items %}
           <tr>
             <td><span class="pill {% if item.priority in ['high','urgent'] %}warn{% endif %}">{{ item.priority }}</span></td>
             <td>
+              {% if item.lead_id %}
               <a href="/crm/leads/{{ item.lead_id }}"><strong>{{ item.lead_name or 'Lead' }}</strong></a>
-              <div class="muted">{{ item.phone_number }} · {{ item.lead_status }}</div>
+              <div class="muted">{{ item.phone_number or '' }}{% if item.lead_status %} · {{ item.lead_status }}{% endif %}</div>
+              {% elif item.task_title %}
+              <strong>{{ item.task_title }}</strong>
+              <div class="muted">Task{% if item.task_due_at %} · due {{ item.task_due_at[:10] }}{% endif %}</div>
+              {% else %}
+              <strong>General</strong>
+              <div class="muted">No linked lead</div>
+              {% endif %}
             </td>
             <td>{{ item.reason_text or reason_labels.get(item.reason_code, item.reason_code) }}</td>
             <td class="muted">{{ (item.created_at or '')[:16] }}</td>
@@ -55,7 +63,11 @@
               <div class="row">
                 <input id="reason-{{ item.id }}" placeholder="Resolution reason" style="min-width:160px;" />
                 <button class="btn" type="button" onclick="resolveItem({{ item.id }})">Resolve</button>
+                {% if item.lead_id %}
                 <a class="btn secondary" href="/crm/leads/{{ item.lead_id }}">Open lead</a>
+                {% elif item.reason_code == 'task_overdue' %}
+                <a class="btn secondary" href="/crm/tasks">Open tasks</a>
+                {% endif %}
               </div>
             </td>
           </tr>
@@ -68,6 +80,15 @@
     </div>
   </main>
   <script>
+    (function ensureLocalDate() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('local_date')) return;
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      params.set('local_date', `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
+      window.location.replace(`${window.location.pathname}?${params.toString()}`);
+    })();
+
     function showFlash(msg, err) {
       const el = document.getElementById('flash');
       el.textContent = msg;
