@@ -1,14 +1,12 @@
-import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import config
+from db_backend import connect as backend_connect
 
 
 def _connect():
-    conn = sqlite3.connect(config.DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return backend_connect()
 
 
 @contextmanager
@@ -17,366 +15,34 @@ def get_db():
     try:
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
 
 def init_db():
+    """Apply forward-only migrations and idempotent product defaults.
+
+    Never rebuilds schema from scratch, never drops tables, never runs demo seeds
+    in production/staging.
+    """
+    from migrations.runner import apply_pending_migrations
+
+    apply_pending_migrations()
     with get_db() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                stripe_customer_id TEXT,
-                subscription_status TEXT NOT NULL DEFAULT 'none',
-                subscription_id TEXT,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS voice_personas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                name TEXT NOT NULL,
-                persona_type TEXT NOT NULL,
-                prompt TEXT NOT NULL,
-                tone TEXT NOT NULL DEFAULT 'professional',
-                goal TEXT NOT NULL,
-                objection_handling_notes TEXT,
-                is_default INTEGER NOT NULL DEFAULT 0,
-                active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS voice_calls (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                persona_id INTEGER,
-                provider TEXT NOT NULL,
-                provider_call_id TEXT,
-                direction TEXT NOT NULL,
-                lead_name TEXT,
-                phone_number TEXT NOT NULL,
-                lead_type TEXT,
-                property_interest TEXT,
-                desired_outcome TEXT,
-                notes TEXT,
-                status TEXT NOT NULL DEFAULT 'queued',
-                outcome TEXT,
-                appointment_requested INTEGER NOT NULL DEFAULT 0,
-                transcript TEXT,
-                summary TEXT,
-                recording_url TEXT,
-                created_at TEXT NOT NULL,
-                completed_at TEXT
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS tool_usage (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                tool_key TEXT NOT NULL,
-                event_type TEXT NOT NULL DEFAULT 'generated',
-                metadata TEXT,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sms_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                persona_id INTEGER,
-                lead_id INTEGER,
-                provider TEXT NOT NULL DEFAULT 'twilio',
-                provider_message_id TEXT,
-                direction TEXT NOT NULL DEFAULT 'outbound',
-                lead_name TEXT,
-                phone_number TEXT NOT NULL,
-                lead_type TEXT,
-                property_interest TEXT,
-                desired_outcome TEXT,
-                notes TEXT,
-                message_body TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'draft',
-                error_message TEXT,
-                created_at TEXT NOT NULL,
-                sent_at TEXT
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS leads (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                name TEXT,
-                phone_number TEXT NOT NULL,
-                lead_type TEXT,
-                property_interest TEXT,
-                status TEXT NOT NULL DEFAULT 'new',
-                source TEXT NOT NULL DEFAULT 'sms',
-                notes TEXT,
-                next_action TEXT,
-                follow_up_at TEXT,
-                last_inbound_at TEXT,
-                last_outbound_at TEXT,
-                consent_status TEXT NOT NULL DEFAULT 'unknown',
-                opt_out_status TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE(user_id, phone_number)
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS lead_follow_ups (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                lead_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                due_at TEXT NOT NULL,
-                reason TEXT,
-                status TEXT NOT NULL DEFAULT 'pending',
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS lead_insights (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                lead_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                inbound_message_id INTEGER,
-                suggested_message_id INTEGER,
-                summary TEXT,
-                intent TEXT,
-                next_best_step TEXT,
-                recommended_action TEXT,
-                suggested_reply TEXT,
-                home_value_pitch TEXT,
-                confidence_score REAL,
-                requires_manual_review INTEGER NOT NULL DEFAULT 0,
-                escalation_topics TEXT,
-                model TEXT,
-                status TEXT NOT NULL DEFAULT 'pending',
-                raw_json TEXT,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        _ensure_column(conn, "sms_messages", "lead_id", "INTEGER")
-        _ensure_column(conn, "sms_messages", "direction", "TEXT DEFAULT 'outbound'")
-        _ensure_column(conn, "sms_messages", "consent_status", "TEXT DEFAULT 'unknown'")
-        _ensure_column(conn, "sms_messages", "opt_out_status", "TEXT DEFAULT 'active'")
-        _ensure_column(conn, "leads", "consent_status", "TEXT DEFAULT 'unknown'")
-        _ensure_column(conn, "leads", "opt_out_status", "TEXT DEFAULT 'active'")
-        _ensure_column(conn, "lead_insights", "intent", "TEXT")
-        _ensure_column(conn, "lead_insights", "confidence_score", "REAL")
-        _ensure_column(conn, "lead_insights", "requires_manual_review", "INTEGER DEFAULT 0")
-        _ensure_column(conn, "lead_insights", "escalation_topics", "TEXT")
-        _ensure_column(conn, "users", "role", "TEXT DEFAULT 'agent'")
-        _ensure_column(conn, "leads", "priority", "TEXT DEFAULT 'normal'")
-        _ensure_column(conn, "leads", "assigned_user_id", "INTEGER")
-        _ensure_column(conn, "leads", "next_follow_up_at", "TEXT")
-        _ensure_column(conn, "leads", "follow_up_reason", "TEXT")
-        _ensure_column(conn, "leads", "follow_up_priority", "TEXT DEFAULT 'normal'")
-        _ensure_column(conn, "leads", "follow_up_completed_at", "TEXT")
-        _ensure_column(conn, "leads", "follow_up_created_by", "INTEGER")
-        _ensure_column(conn, "lead_follow_ups", "priority", "TEXT DEFAULT 'normal'")
-        _ensure_column(conn, "lead_follow_ups", "created_by", "INTEGER")
-        _ensure_column(conn, "lead_follow_ups", "completed_at", "TEXT")
-        _ensure_column(conn, "sms_messages", "approved_by_user_id", "INTEGER")
-        _ensure_column(conn, "sms_messages", "consent_source", "TEXT")
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS lead_activities (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                lead_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                actor_user_id INTEGER,
-                event_type TEXT NOT NULL,
-                summary TEXT,
-                payload_json TEXT,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                lead_id INTEGER,
-                assigned_user_id INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                description TEXT,
-                due_at TEXT,
-                priority TEXT NOT NULL DEFAULT 'normal',
-                status TEXT NOT NULL DEFAULT 'open',
-                task_type TEXT NOT NULL DEFAULT 'general_follow_up',
-                completed_at TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS appointments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                lead_id INTEGER NOT NULL,
-                appointment_type TEXT NOT NULL DEFAULT 'phone_call',
-                start_at TEXT NOT NULL,
-                end_at TEXT,
-                location TEXT,
-                notes TEXT,
-                status TEXT NOT NULL DEFAULT 'scheduled',
-                outcome TEXT,
-                outcome_notes TEXT,
-                next_action TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS needs_attention (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                lead_id INTEGER,
-                reason_code TEXT NOT NULL,
-                reason_text TEXT,
-                priority TEXT NOT NULL DEFAULT 'normal',
-                source_ref_type TEXT,
-                source_ref_id INTEGER,
-                status TEXT NOT NULL DEFAULT 'open',
-                resolution_reason TEXT,
-                created_at TEXT NOT NULL,
-                resolved_at TEXT,
-                resolved_by INTEGER
-            )
-            """
-        )
-        _ensure_needs_attention_lead_nullable(conn)
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS notifications (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                type TEXT NOT NULL,
-                title TEXT NOT NULL,
-                body TEXT,
-                link TEXT,
-                lead_id INTEGER,
-                read_at TEXT,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sms_messages_user_created ON sms_messages(user_id, created_at DESC)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sms_messages_provider_id ON sms_messages(provider_message_id)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_sms_messages_lead_created ON sms_messages(lead_id, created_at ASC)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_leads_user_updated ON leads(user_id, updated_at DESC)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_lead_follow_ups_user_due ON lead_follow_ups(user_id, due_at)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_lead_insights_user_status ON lead_insights(user_id, status, created_at DESC)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_created ON tool_usage(user_id, created_at DESC)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_tool ON tool_usage(user_id, tool_key)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_lead_activities_lead ON lead_activities(lead_id, created_at DESC)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tasks_user_due ON tasks(user_id, due_at)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_appointments_user_start ON appointments(user_id, start_at)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_needs_attention_user_status ON needs_attention(user_id, status, created_at DESC)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC)"
-        )
         _ensure_default_voice_personas(conn)
+        if config.RUN_DEMO_SEED_ON_STARTUP:
+            if config.APP_ENV in {"production", "staging"}:
+                raise RuntimeError("Demo seed refused in production/staging.")
+            _run_demo_seed(conn)
 
 
-def _ensure_column(conn, table, column, definition):
-    cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-    if column not in cols:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-
-
-def _ensure_needs_attention_lead_nullable(conn):
-    """Allow Needs Attention items for overdue tasks with no linked lead."""
-    info = conn.execute("PRAGMA table_info(needs_attention)").fetchall()
-    if not info:
-        return
-    lead_col = next((row for row in info if row[1] == "lead_id"), None)
-    if not lead_col or lead_col[3] == 0:
-        return
-    conn.execute(
-        """
-        CREATE TABLE needs_attention_new (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            lead_id INTEGER,
-            reason_code TEXT NOT NULL,
-            reason_text TEXT,
-            priority TEXT NOT NULL DEFAULT 'normal',
-            source_ref_type TEXT,
-            source_ref_id INTEGER,
-            status TEXT NOT NULL DEFAULT 'open',
-            resolution_reason TEXT,
-            created_at TEXT NOT NULL,
-            resolved_at TEXT,
-            resolved_by INTEGER
-        )
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO needs_attention_new
-            (id, user_id, lead_id, reason_code, reason_text, priority, source_ref_type,
-             source_ref_id, status, resolution_reason, created_at, resolved_at, resolved_by)
-        SELECT id, user_id, lead_id, reason_code, reason_text, priority, source_ref_type,
-               source_ref_id, status, resolution_reason, created_at, resolved_at, resolved_by
-        FROM needs_attention
-        """
-    )
-    conn.execute("DROP TABLE needs_attention")
-    conn.execute("ALTER TABLE needs_attention_new RENAME TO needs_attention")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_needs_attention_user_status ON needs_attention(user_id, status, created_at DESC)"
-    )
+def _run_demo_seed(conn):
+    """Development-only sample data. Never called in production."""
+    # Intentionally empty: do not insert fake paid-user records automatically.
+    return
 
 
 def _ensure_default_voice_personas(conn):

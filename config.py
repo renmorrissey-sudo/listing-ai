@@ -1,5 +1,6 @@
 import os
 import sys
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -15,13 +16,46 @@ def _env_strip(name, default=None):
     return value.strip() if isinstance(value, str) else value
 
 
-ENV = _env("ENV", "development")
-IS_PRODUCTION = ENV == "production"
+def _env_bool(name, default=False):
+    raw = _env(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Environment separation: production | staging | development | test
+APP_ENV = (_env_strip("APP_ENV") or _env_strip("ENV") or "development").lower()
+if APP_ENV not in {"production", "staging", "development", "test"}:
+    print(f"FATAL: APP_ENV must be production|staging|development|test (got {APP_ENV!r})", file=sys.stderr)
+    sys.exit(1)
+
+ENV = APP_ENV  # backward-compatible alias
+IS_PRODUCTION = APP_ENV == "production"
+IS_STAGING = APP_ENV == "staging"
+IS_TEST = APP_ENV == "test"
 
 ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY")
 CLAUDE_MODEL = _env_strip("CLAUDE_MODEL") or "claude-opus-4-6"
 FLASK_SECRET_KEY = _env("FLASK_SECRET_KEY")
+
+# Database configuration
+# Production/staging MUST use Railway-managed Postgres via DATABASE_URL.
+# SQLite (DATABASE_PATH) is allowed only for development/test.
+DATABASE_URL = _env_strip("DATABASE_URL") or ""
 DATABASE_PATH = _env("DATABASE_PATH", "real_estate.db")
+
+# Destructive flags — must never be enabled in production/staging.
+ALLOW_DESTRUCTIVE_DB_RESET = _env_bool("ALLOW_DESTRUCTIVE_DB_RESET", False)
+ALLOW_SQLITE_TABLE_REBUILD = _env_bool("ALLOW_SQLITE_TABLE_REBUILD", False)
+RUN_DEMO_SEED_ON_STARTUP = _env_bool("RUN_DEMO_SEED_ON_STARTUP", False)
+
+if DATABASE_URL:
+    # Normalize older postgres:// URLs used by some hosts
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
+    DB_ENGINE = "postgres"
+else:
+    DB_ENGINE = "sqlite"
 
 STRIPE_SECRET_KEY = _env("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = _env("STRIPE_WEBHOOK_SECRET")
@@ -64,10 +98,93 @@ SMS_DAILY_LIMIT = int(_env("SMS_DAILY_LIMIT", "50"))
 
 # Skip subscription checks locally when Stripe is not configured.
 SUBSCRIPTION_REQUIRED = _env("SUBSCRIPTION_REQUIRED", "true").lower() == "true"
-if not STRIPE_SECRET_KEY and not IS_PRODUCTION:
+if not STRIPE_SECRET_KEY and APP_ENV in {"development", "test"}:
     SUBSCRIPTION_REQUIRED = False
 
 PORT = int(_env("PORT", 8080))
+
+
+def _database_url_is_sqlite(url: str) -> bool:
+    return (url or "").lower().startswith("sqlite:")
+
+
+def _host_is_local_or_temporary(url: str) -> bool:
+    if not url:
+        return True
+    if _database_url_is_sqlite(url):
+        return True
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host in {"", "localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+        return True
+    # Allow Railway private networking; block other obvious temp hosts.
+    if host.endswith(".local"):
+        return True
+    path = (parsed.path or "").lower()
+    if "/tmp/" in path or path.endswith("/tmp"):
+        return True
+    return False
+
+
+def _looks_like_test_database(url: str) -> bool:
+    lowered = (url or "").lower()
+    return any(m in lowered for m in ("/test", "_test", "test_", "pytest", "ci_test"))
+
+
+def validate_database_config():
+    """Refuse unsafe production/staging database configuration."""
+    errors = []
+
+    if APP_ENV in {"production", "staging"}:
+        if not DATABASE_URL:
+            errors.append(
+                "DATABASE_URL is required in production/staging "
+                "(use Railway PostgreSQL; do not store paid-user data in SQLite)."
+            )
+        elif _database_url_is_sqlite(DATABASE_URL):
+            errors.append("DATABASE_URL must not point to SQLite in production/staging.")
+        elif DB_ENGINE != "postgres":
+            errors.append("Production/staging must use PostgreSQL via DATABASE_URL.")
+        elif _host_is_local_or_temporary(DATABASE_URL):
+            errors.append(
+                "DATABASE_URL host appears local or temporary; "
+                "production/staging must use a managed persistent Postgres host."
+            )
+        elif _looks_like_test_database(DATABASE_URL):
+            errors.append("Production/staging must not use a test database URL.")
+
+        if ALLOW_DESTRUCTIVE_DB_RESET:
+            errors.append("ALLOW_DESTRUCTIVE_DB_RESET must be false in production/staging.")
+        if ALLOW_SQLITE_TABLE_REBUILD:
+            errors.append("ALLOW_SQLITE_TABLE_REBUILD must be false in production/staging.")
+        if RUN_DEMO_SEED_ON_STARTUP:
+            errors.append("RUN_DEMO_SEED_ON_STARTUP must be false in production/staging.")
+
+    if APP_ENV == "test" and DATABASE_URL and not _looks_like_test_database(DATABASE_URL):
+        # Soft warning path: allow explicit test postgres URLs that include test markers.
+        pass
+
+    if errors:
+        for err in errors:
+            print(f"FATAL: {err}", file=sys.stderr)
+        sys.exit(1)
+
+    # Safe summary — never log credentials.
+    if DB_ENGINE == "postgres":
+        parsed = urlparse(DATABASE_URL)
+        print(
+            "Database startup check: "
+            f"app_env={APP_ENV} engine=postgres "
+            f"host={(parsed.hostname or 'unknown')} "
+            f"db={(parsed.path or '').lstrip('/') or 'unknown'}",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "Database startup check: "
+            f"app_env={APP_ENV} engine=sqlite path={DATABASE_PATH}",
+            file=sys.stderr,
+        )
 
 
 def validate_config():
@@ -86,6 +203,8 @@ def validate_config():
     if missing:
         print(f"FATAL: Missing required environment variables: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
+
+    validate_database_config()
 
     # Safe Twilio startup checks — never log credential values.
     account_sid_ok = bool(TWILIO_ACCOUNT_SID and TWILIO_ACCOUNT_SID.startswith("AC"))

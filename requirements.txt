@@ -6,3 +6,4 @@ flask-limiter==3.12
 stripe==11.6.0
 twilio==9.6.5
 pytest==8.3.5
+psycopg[binary]==3.2.9

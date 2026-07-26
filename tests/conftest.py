@@ -7,11 +7,16 @@ import pytest
 # Must set before importing app/config/db.
 _fd, _db_path = tempfile.mkstemp(suffix=".db")
 os.close(_fd)
+os.environ["APP_ENV"] = "test"
+os.environ["ENV"] = "test"
 os.environ["DATABASE_PATH"] = _db_path
+os.environ.pop("DATABASE_URL", None)
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-anthropic-key-not-real")
 os.environ.setdefault("FLASK_SECRET_KEY", "test-flask-secret")
 os.environ["SUBSCRIPTION_REQUIRED"] = "false"
-os.environ["ENV"] = "development"
+os.environ["ALLOW_DESTRUCTIVE_DB_RESET"] = "false"
+os.environ["ALLOW_SQLITE_TABLE_REBUILD"] = "false"
+os.environ["RUN_DEMO_SEED_ON_STARTUP"] = "false"
 
 
 @pytest.fixture(scope="session", autouse=True)
