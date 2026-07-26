@@ -93,6 +93,8 @@ NEEDS_ATTENTION_REASONS = {
     "delivery_failed": "Message failed or undelivered",
     "appointment_outcome_missing": "Appointment outcome not recorded",
     "opt_out": "Opt-out request received",
+    "call_failed": "AI call failed or did not connect",
+    "review_call_outcome": "Review AI call outcome",
 }
 
 PROTECTED_RESOLVE_REASONS = {"opt_out", "delivery_failed", "sensitive_topic"}

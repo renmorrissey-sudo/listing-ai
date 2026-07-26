@@ -226,13 +226,14 @@ def create_voice_call(user_id, persona_id, provider, direction, data):
         cur = conn.execute(
             """
             INSERT INTO voice_calls
-                (user_id, persona_id, provider, direction, lead_name, phone_number, lead_type,
+                (user_id, persona_id, lead_id, provider, direction, lead_name, phone_number, lead_type,
                  property_interest, desired_outcome, notes, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
             """,
             (
                 user_id,
                 persona_id,
+                data.get("lead_id"),
                 provider,
                 direction,
                 data.get("lead_name"),
@@ -240,11 +241,30 @@ def create_voice_call(user_id, persona_id, provider, direction, data):
                 data.get("lead_type"),
                 data.get("property_interest"),
                 data.get("desired_outcome"),
-                data.get("notes"),
+                data.get("notes") or data.get("lead_context"),
                 now,
             ),
         )
         return cur.lastrowid
+
+
+def set_voice_call_lead_id(call_id, lead_id, user_id):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE voice_calls SET lead_id = ? WHERE id = ? AND user_id = ?",
+            (lead_id, call_id, user_id),
+        )
+
+
+def get_voice_call_by_provider_id(provider_call_id):
+    if not provider_call_id:
+        return None
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM voice_calls WHERE provider_call_id = ? LIMIT 1",
+            (provider_call_id,),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def update_voice_call_provider(call_id, provider_call_id, status):
@@ -333,54 +353,176 @@ def list_voice_calls(user_id, limit=20):
 
 
 def upsert_lead(user_id, phone_number, data=None, source="sms"):
-    data = data or {}
+    """Backward-compatible wrapper — prefer lead_service.upsert_crm_lead."""
+    import lead_service
+
+    lead_id, _created, _lead = lead_service.upsert_crm_lead(
+        user_id,
+        phone_number,
+        data,
+        source=source,
+        touch_sms=(source == "sms"),
+    )
+    return lead_id
+
+
+def create_lead_record(
+    user_id,
+    phone_number,
+    *,
+    name,
+    lead_type=None,
+    property_interest=None,
+    status="new",
+    source="sms",
+    notes=None,
+    assigned_user_id=None,
+    touch_call=False,
+    touch_sms=False,
+):
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
-        existing = conn.execute(
-            "SELECT * FROM leads WHERE user_id = ? AND phone_number = ?",
-            (user_id, phone_number),
-        ).fetchone()
-        if existing:
-            conn.execute(
-                """
-                UPDATE leads
-                SET name = COALESCE(?, name),
-                    lead_type = COALESCE(?, lead_type),
-                    property_interest = COALESCE(?, property_interest),
-                    notes = COALESCE(?, notes),
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    data.get("lead_name") or data.get("name"),
-                    data.get("lead_type"),
-                    data.get("property_interest"),
-                    data.get("notes"),
-                    now,
-                    existing["id"],
-                ),
-            )
-            return existing["id"]
         cur = conn.execute(
             """
             INSERT INTO leads
                 (user_id, name, phone_number, lead_type, property_interest, status, source,
-                 notes, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'new', ?, ?, ?, ?)
+                 notes, assigned_user_id, created_at, updated_at,
+                 last_contacted_at, latest_call_at, last_outbound_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
-                data.get("lead_name") or data.get("name") or "Lead",
+                name or "Lead",
                 phone_number,
-                data.get("lead_type"),
-                data.get("property_interest"),
+                lead_type,
+                property_interest,
+                status or "new",
                 source,
-                data.get("notes"),
+                notes,
+                assigned_user_id or user_id,
                 now,
                 now,
+                now if (touch_call or touch_sms) else None,
+                now if touch_call else None,
+                now if (touch_call or touch_sms) else None,
             ),
         )
         return cur.lastrowid
+
+
+def update_lead_contact_fields(
+    lead_id,
+    user_id,
+    *,
+    name=None,
+    lead_type=None,
+    property_interest=None,
+    notes=None,
+    touch_call=False,
+    touch_sms=False,
+    bump_status_from_new_to=None,
+):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        lead = conn.execute(
+            "SELECT * FROM leads WHERE id = ? AND user_id = ?",
+            (lead_id, user_id),
+        ).fetchone()
+        if not lead:
+            return
+        new_status = lead["status"]
+        if bump_status_from_new_to and (lead["status"] or "new") == "new":
+            new_status = bump_status_from_new_to
+        conn.execute(
+            """
+            UPDATE leads
+            SET name = COALESCE(?, name),
+                lead_type = COALESCE(?, lead_type),
+                property_interest = COALESCE(?, property_interest),
+                notes = CASE
+                    WHEN ? IS NOT NULL AND (notes IS NULL OR notes = '') THEN ?
+                    ELSE notes
+                END,
+                status = ?,
+                last_contacted_at = CASE WHEN ? THEN ? ELSE last_contacted_at END,
+                latest_call_at = CASE WHEN ? THEN ? ELSE latest_call_at END,
+                last_outbound_at = CASE WHEN ? THEN ? ELSE last_outbound_at END,
+                updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                name,
+                lead_type,
+                property_interest,
+                notes,
+                notes,
+                new_status,
+                1 if (touch_call or touch_sms) else 0,
+                now,
+                1 if touch_call else 0,
+                now,
+                1 if (touch_call or touch_sms) else 0,
+                now,
+                now,
+                lead_id,
+                user_id,
+            ),
+        )
+
+
+def touch_lead_call_timestamps(lead_id, user_id):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE leads
+            SET last_contacted_at = ?,
+                latest_call_at = ?,
+                last_outbound_at = COALESCE(last_outbound_at, ?),
+                updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (now, now, now, now, lead_id, user_id),
+        )
+
+
+def merge_lead_call_outcome_notes(
+    lead_id, user_id, *, summary=None, outcome=None, next_action=None, follow_up_at=None
+):
+    now = datetime.now(timezone.utc).isoformat()
+    bits = []
+    if summary:
+        bits.append(f"Call summary: {summary}")
+    if outcome:
+        bits.append(f"Call outcome: {outcome}")
+    note_add = " | ".join(bits)[:1500] if bits else None
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE leads
+            SET notes = CASE
+                    WHEN ? IS NULL THEN notes
+                    WHEN notes IS NULL OR notes = '' THEN ?
+                    ELSE notes || ' | ' || ?
+                END,
+                next_action = COALESCE(?, next_action),
+                follow_up_at = COALESCE(?, follow_up_at),
+                next_follow_up_at = COALESCE(?, next_follow_up_at),
+                updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                note_add,
+                note_add,
+                note_add,
+                next_action,
+                follow_up_at,
+                follow_up_at,
+                now,
+                lead_id,
+                user_id,
+            ),
+        )
 
 
 def get_lead(lead_id, user_id):

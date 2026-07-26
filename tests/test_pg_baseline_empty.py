@@ -118,7 +118,13 @@ class FakeRawPostgres:
             return _FakeCursor([{"ok": 1}])
 
         if upper.startswith("ALTER TABLE"):
+            # Track additive columns from migration 004.
+            if "ADD COLUMN" in upper and "LEAD_ID" in upper and "VOICE_CALLS" in upper:
+                self.tables.add("voice_calls")
             return _FakeCursor()
+
+        if "FROM information_schema.table_constraints" in text:
+            return _FakeCursor([])
 
         if upper.startswith("INSERT INTO SCHEMA_MIGRATIONS"):
             version = params[0] if params else None
@@ -277,6 +283,7 @@ def test_empty_postgres_migration_order_and_ledger(fake_postgres):
         "001_baseline",
         "002_safe_additive_columns",
         "003_user_business_profile",
+        "004_voice_call_lead_link",
     }
     create_users_idx = next(
         i for i, (sql, _) in enumerate(fake_postgres.executed)
@@ -335,6 +342,7 @@ def test_empty_postgres_user_lead_task_survive_restart(fake_postgres):
         "001_baseline",
         "002_safe_additive_columns",
         "003_user_business_profile",
+        "004_voice_call_lead_link",
     }
 
 
@@ -458,4 +466,5 @@ def test_genuine_empty_postgres_database(monkeypatch):
             "001_baseline",
             "002_safe_additive_columns",
             "003_user_business_profile",
+            "004_voice_call_lead_link",
         }

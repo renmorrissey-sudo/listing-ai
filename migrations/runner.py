@@ -28,6 +28,7 @@ MIGRATION_MODULES = [
     "migrations.versions.001_baseline",
     "migrations.versions.002_safe_additive_columns",
     "migrations.versions.003_user_business_profile",
+    "migrations.versions.004_voice_call_lead_link",
 ]
 
 # Required after 001_baseline. App has no separate accounts/tenants/subscriptions

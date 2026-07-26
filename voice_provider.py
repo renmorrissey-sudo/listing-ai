@@ -283,6 +283,24 @@ def normalize_voice_webhook(payload):
 
     status = "completed" if event_type in ("end-of-call-report", "call_ended", "call_analyzed") else None
 
+    duration = (
+        message.get("durationSeconds")
+        or message.get("duration")
+        or call.get("durationSeconds")
+        or call.get("duration")
+        or payload.get("duration")
+    )
+    follow_up_at = (
+        (message.get("analysis") or {}).get("followUpAt")
+        or message.get("followUpAt")
+        or payload.get("follow_up_at")
+    )
+    recommended_next_action = (
+        (message.get("analysis") or {}).get("nextAction")
+        or message.get("nextAction")
+        or payload.get("recommended_next_action")
+    )
+
     return {
         "call_id": internal_call_id,
         "provider_call_id": provider_call_id,
@@ -292,4 +310,7 @@ def normalize_voice_webhook(payload):
         "summary": summary,
         "recording_url": recording_url,
         "appointment_requested": appointment_requested,
+        "duration": duration,
+        "follow_up_at": follow_up_at,
+        "recommended_next_action": recommended_next_action,
     }

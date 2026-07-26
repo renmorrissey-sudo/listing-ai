@@ -29,6 +29,12 @@ from sms_validation import (
 from twilio_security import validate_twilio_request
 from validation import validate_listing_payload, validate_script_payload
 from voice_prompts import build_voice_call_prompt
+from lead_service import (
+    VOICE_SOURCE,
+    apply_voice_call_webhook_to_lead,
+    record_voice_call_started,
+    upsert_crm_lead,
+)
 from voice_provider import (
     VoiceProviderError,
     build_vapi_variable_values,
@@ -38,6 +44,7 @@ from voice_provider import (
     validate_vapi_variable_values,
 )
 from voice_validation import validate_voice_call_payload, validate_voice_persona_payload
+from crm_constants import normalize_lead_status
 
 config.validate_config()
 
@@ -597,6 +604,18 @@ def start_voice_call():
         return jsonify({"error": validation_error}), 400
     log_variable_values_presence(variable_values)
 
+    # Shared CRM lead upsert (same as SMS) — match by user + E.164 phone.
+    lead_id, _created, lead = upsert_crm_lead(
+        user["id"],
+        cleaned["phone_number"],
+        cleaned,
+        source=VOICE_SOURCE,
+        initial_status="new",
+        touch_call=False,
+        assigned_user_id=user["id"],
+    )
+    cleaned["lead_id"] = lead_id
+
     call_id = db.create_voice_call(
         user_id=user["id"],
         persona_id=persona["id"],
@@ -610,13 +629,33 @@ def start_voice_call():
             call_id, cleaned, persona, prompt, variable_values=variable_values
         )
         db.update_voice_call_provider(call_id, result["provider_call_id"], "started")
+        if normalize_lead_status(lead.get("status")) == "new":
+            crm_db.set_lead_status(
+                user["id"], lead_id, "attempting_contact", from_automation=True
+            )
+        record_voice_call_started(
+            user["id"],
+            lead_id,
+            call_id,
+            phone_number=cleaned["phone_number"],
+            provider_call_id=result.get("provider_call_id"),
+        )
     except VoiceProviderError as exc:
         logger.warning("Voice call failed to start: %s", type(exc).__name__)
         db.update_voice_call_provider(call_id, None, "failed")
-        return jsonify({"error": str(exc)}), 503
+        crm_db.add_lead_activity(
+            lead_id,
+            user["id"],
+            "voice_call_failed",
+            "AI call could not be placed",
+            {"voice_call_id": call_id, "status": "failed"},
+            actor_user_id=user["id"],
+        )
+        return jsonify({"error": str(exc), "lead_id": lead_id, "id": call_id}), 503
 
     return jsonify({
         "id": call_id,
+        "lead_id": lead_id,
         "provider_call_id": result["provider_call_id"],
         "status": "started",
     }), 201
@@ -931,7 +970,16 @@ def send_sms_message():
     if not persona:
         return jsonify({"error": "Selected persona was not found."}), 404
 
-    lead_id = db.upsert_lead(user["id"], cleaned["phone_number"], cleaned, source="sms")
+    from lead_service import SMS_SOURCE
+
+    lead_id, _created, _lead = upsert_crm_lead(
+        user["id"],
+        cleaned["phone_number"],
+        cleaned,
+        source=SMS_SOURCE,
+        touch_sms=True,
+        assigned_user_id=user["id"],
+    )
     # validate_sms_send_payload already required compliance_confirmed.
     consent_status = "confirmed"
     db.set_lead_consent(lead_id, user["id"], "confirmed")
@@ -1083,8 +1131,12 @@ def sms_inbound_webhook():
 
     try:
         seed = db.last_outbound_seed_for_phone(owner_id, from_number)
-        lead_id = db.upsert_lead(owner_id, from_number, seed, source="sms")
-        lead = db.get_lead(lead_id, owner_id)
+        from lead_service import SMS_SOURCE
+
+        lead_id, _created, lead = upsert_crm_lead(
+            owner_id, from_number, seed, source=SMS_SOURCE, touch_sms=False
+        )
+        lead = lead or db.get_lead(lead_id, owner_id)
         opted_out = _looks_like_opt_out(body)
         inbound_id = db.create_inbound_sms_message(
             user_id=owner_id,
@@ -1359,13 +1411,50 @@ def voice_webhook():
     if not normalized.get("provider_call_id") and not normalized.get("call_id"):
         return jsonify({"error": "Missing provider call ID."}), 400
 
-    updated = db.update_voice_call_from_webhook(**normalized)
+    webhook_fields = {
+        k: normalized.get(k)
+        for k in (
+            "call_id",
+            "provider_call_id",
+            "status",
+            "outcome",
+            "transcript",
+            "summary",
+            "recording_url",
+            "appointment_requested",
+        )
+    }
+    updated = db.update_voice_call_from_webhook(**webhook_fields)
     if not updated:
         logger.warning(
             "Voice webhook did not match an existing call: provider_call_id=%s call_id=%s",
             normalized.get("provider_call_id"),
             normalized.get("call_id"),
         )
+        return jsonify({"received": True}), 200
+
+    call_row = None
+    if normalized.get("provider_call_id"):
+        call_row = db.get_voice_call_by_provider_id(normalized["provider_call_id"])
+    if not call_row and normalized.get("call_id"):
+        try:
+            internal_id = int(normalized["call_id"])
+        except (TypeError, ValueError):
+            internal_id = None
+        if internal_id is not None:
+            with db.get_db() as conn:
+                row = conn.execute(
+                    "SELECT * FROM voice_calls WHERE id = ? LIMIT 1",
+                    (internal_id,),
+                ).fetchone()
+                call_row = dict(row) if row else None
+
+    if call_row and call_row.get("user_id"):
+        try:
+            apply_voice_call_webhook_to_lead(call_row["user_id"], call_row, normalized)
+        except Exception:
+            logger.exception("Failed to apply voice webhook to CRM lead")
+
     return jsonify({"received": True}), 200
 
 

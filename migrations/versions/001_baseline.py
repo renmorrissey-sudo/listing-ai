@@ -54,6 +54,7 @@ POSTGRES_TABLES = {
             id BIGSERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL,
             persona_id BIGINT,
+            lead_id BIGINT,
             provider TEXT NOT NULL,
             provider_call_id TEXT,
             direction TEXT NOT NULL,
@@ -135,6 +136,8 @@ POSTGRES_TABLES = {
             follow_up_priority TEXT DEFAULT 'normal',
             follow_up_completed_at TEXT,
             follow_up_created_by BIGINT,
+            last_contacted_at TEXT,
+            latest_call_at TEXT,
             UNIQUE (user_id, phone_number)
         )
         """,
@@ -364,6 +367,7 @@ def upgrade_sqlite(conn):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             persona_id INTEGER,
+            lead_id INTEGER,
             provider TEXT NOT NULL,
             provider_call_id TEXT,
             direction TEXT NOT NULL,
@@ -445,6 +449,8 @@ def upgrade_sqlite(conn):
             follow_up_priority TEXT DEFAULT 'normal',
             follow_up_completed_at TEXT,
             follow_up_created_by INTEGER,
+            last_contacted_at TEXT,
+            latest_call_at TEXT,
             UNIQUE(user_id, phone_number)
         )
         """,

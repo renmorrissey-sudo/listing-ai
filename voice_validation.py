@@ -23,20 +23,9 @@ PERSONA_FIELD_LIMITS = {
 
 
 def _clean_phone(phone_number):
-    raw = str(phone_number or "").strip()
-    if not raw:
-        return ""
-    if raw.startswith("+"):
-        digits = "+" + re.sub(r"\D", "", raw[1:])
-    else:
-        digits_only = re.sub(r"\D", "", raw)
-        if len(digits_only) == 10:
-            digits = "+1" + digits_only
-        elif len(digits_only) == 11 and digits_only.startswith("1"):
-            digits = "+" + digits_only
-        else:
-            digits = "+" + digits_only
-    return digits
+    from lead_service import normalize_phone_e164
+
+    return normalize_phone_e164(phone_number)
 
 
 def validate_voice_call_payload(data):

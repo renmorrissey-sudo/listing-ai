@@ -17,6 +17,10 @@ class CompatCursor:
         self._cursor = cursor
         self.lastrowid = lastrowid
 
+    @property
+    def rowcount(self):
+        return getattr(self._cursor, "rowcount", -1)
+
     def fetchone(self):
         row = self._cursor.fetchone()
         return _normalize_row(row)
