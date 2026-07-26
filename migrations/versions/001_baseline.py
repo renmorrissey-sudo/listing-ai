@@ -265,6 +265,11 @@ def upgrade_postgres(conn):
     for stmt in statements:
         _pg_exec(conn, stmt)
 
+    # Fail inside 001 (before stamp) if CREATE TABLE statements did not land.
+    from migrations.runner import verify_baseline_tables
+
+    verify_baseline_tables(conn)
+
 
 def upgrade_sqlite(conn):
     """SQLite baseline for local development/test only."""
@@ -521,3 +526,7 @@ def upgrade_sqlite(conn):
     ]
     for stmt in statements:
         conn.execute(stmt)
+
+    from migrations.runner import verify_baseline_tables
+
+    verify_baseline_tables(conn)

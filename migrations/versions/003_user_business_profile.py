@@ -27,6 +27,19 @@ def _postgres_has_column(conn, table, column):
     return bool(row)
 
 
+def _postgres_table_exists(conn, table):
+    row = conn.execute(
+        """
+        SELECT 1 AS ok
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = ?
+        LIMIT 1
+        """,
+        (table,),
+    ).fetchone()
+    return bool(row)
+
+
 def upgrade_sqlite(conn):
     cols = _sqlite_columns(conn, "users")
     for column, definition in COLUMNS:
@@ -35,6 +48,13 @@ def upgrade_sqlite(conn):
 
 
 def upgrade_postgres(conn):
+    if not _postgres_table_exists(conn, "users"):
+        raise RuntimeError(
+            "Additive migration 003 cannot run: table 'users' does not exist. "
+            "Baseline migration 001_baseline must create it first."
+        )
     for column, definition in COLUMNS:
         if not _postgres_has_column(conn, "users", column):
-            conn.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
+            conn.execute(
+                f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {column} {definition}"
+            )

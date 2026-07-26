@@ -108,8 +108,11 @@ python -m migrations.runner
 ```
 
 - Location: `migrations/versions/`
+- Order: `001_baseline` → verify required tables → `002_safe_additive_columns` → `003_user_business_profile`
 - Rules: forward-only, additive, versioned, reviewed, non-destructive
-- New columns: add a new versioned migration with `ALTER TABLE ... ADD COLUMN` only when missing
+- Each migration runs in a transaction; the version is stamped only after success (and after baseline table verification for `001`)
+- If `001_baseline` was falsely recorded but tables like `users` are missing (empty broken cutover), startup clears **only** `schema_migrations` rows and re-applies baseline — it does not `DROP` user tables
+- New columns: additive migrations use `ADD COLUMN IF NOT EXISTS` / existence checks
 
 ## Prohibited production reset commands
 

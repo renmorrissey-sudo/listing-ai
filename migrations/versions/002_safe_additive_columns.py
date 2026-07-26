@@ -73,6 +73,19 @@ def _postgres_has_column(conn, table, column):
     return bool(row)
 
 
+def _postgres_table_exists(conn, table):
+    row = conn.execute(
+        """
+        SELECT 1 AS ok
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = ?
+        LIMIT 1
+        """,
+        (table,),
+    ).fetchone()
+    return bool(row)
+
+
 def upgrade_sqlite(conn):
     for table, column, definition in SQLITE_COLUMNS:
         cols = _sqlite_columns(conn, table)
@@ -82,5 +95,13 @@ def upgrade_sqlite(conn):
 
 def upgrade_postgres(conn):
     for table, column, definition in POSTGRES_COLUMNS:
+        if not _postgres_table_exists(conn, table):
+            raise RuntimeError(
+                f"Additive migration 002 cannot run: table {table!r} does not exist. "
+                "Baseline migration 001_baseline must create it first."
+            )
+        # Idempotent on PostgreSQL 9.1+.
         if not _postgres_has_column(conn, table, column):
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {definition}"
+            )
