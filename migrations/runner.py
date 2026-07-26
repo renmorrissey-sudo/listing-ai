@@ -43,20 +43,40 @@ REQUIRED_BASELINE_TABLES = (
     "notifications",
 )
 
+APP_DATA_TABLES = tuple(t for t in REQUIRED_BASELINE_TABLES if t != "schema_migrations")
+
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
 def _ensure_migrations_table(conn):
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-            version TEXT PRIMARY KEY,
-            applied_at TEXT NOT NULL
+    if conn.engine == "postgres":
+        from migrations.pg_ddl import pg_execute
+
+        previous = conn._raw.autocommit
+        conn._raw.autocommit = True
+        try:
+            pg_execute(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version TEXT PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                )
+                """,
+            )
+        finally:
+            conn._raw.autocommit = previous
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+            """
         )
-        """
-    )
 
 
 def _applied_versions(conn):
@@ -66,16 +86,9 @@ def _applied_versions(conn):
 
 def _table_exists(conn, table_name: str) -> bool:
     if conn.engine == "postgres":
-        row = conn.execute(
-            """
-            SELECT 1 AS ok
-            FROM information_schema.tables
-            WHERE table_schema = 'public' AND table_name = ?
-            LIMIT 1
-            """,
-            (table_name,),
-        ).fetchone()
-        return bool(row)
+        from migrations.pg_ddl import pg_table_exists
+
+        return pg_table_exists(conn, table_name)
     row = conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
         (table_name,),
@@ -99,58 +112,113 @@ def verify_baseline_tables(conn):
     )
 
 
+def _database_is_empty_of_app_data(conn) -> bool:
+    """True when no application base tables exist (or they exist but have zero rows).
+
+    Used only to decide whether it is safe to clear a false 001 stamp.
+    """
+    existing_app_tables = [t for t in APP_DATA_TABLES if _table_exists(conn, t)]
+    if not existing_app_tables:
+        return True
+    # If any app table exists, require zero rows across all existing app tables.
+    for table in existing_app_tables:
+        row = conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()
+        count = int(row["c"] if isinstance(row, dict) else row[0])
+        if count > 0:
+            return False
+    return True
+
+
 def _stamp(conn, version: str):
-    conn.execute(
-        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-        (version, _now()),
-    )
+    if conn.engine == "postgres":
+        from migrations.pg_ddl import pg_execute
+
+        previous = conn._raw.autocommit
+        conn._raw.autocommit = True
+        try:
+            pg_execute(
+                conn,
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (%s, %s)",
+                (version, _now()),
+            )
+        finally:
+            conn._raw.autocommit = previous
+    else:
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            (version, _now()),
+        )
 
 
 def _clear_migration_bookkeeping(conn):
     """Delete only schema_migrations rows — never DROP user tables or data."""
-    conn.execute("DELETE FROM schema_migrations")
+    if conn.engine == "postgres":
+        from migrations.pg_ddl import pg_execute
+
+        previous = conn._raw.autocommit
+        conn._raw.autocommit = True
+        try:
+            pg_execute(conn, "DELETE FROM schema_migrations")
+        finally:
+            conn._raw.autocommit = previous
+    else:
+        conn.execute("DELETE FROM schema_migrations")
 
 
 def _repair_false_baseline_stamp(conn, applied):
-    """If 001 is stamped but base tables are missing, clear bookkeeping and rerun.
-
-    Safe for the empty Railway Postgres cutover where a broken deploy recorded
-    001_baseline without creating users. Does not DROP TABLES or DELETE app data.
-    """
+    """If 001 is stamped but base tables are missing on an empty DB, clear ledger."""
     if "001_baseline" not in applied:
         return applied
 
-    missing = missing_baseline_tables(conn)
-    # schema_migrations itself is allowed to exist; ignore it for "empty" check.
-    critical_missing = [t for t in missing if t != "schema_migrations"]
-    if not critical_missing:
+    missing = [t for t in missing_baseline_tables(conn) if t != "schema_migrations"]
+    if not missing:
         return applied
 
+    if not _database_is_empty_of_app_data(conn):
+        raise MigrationBootstrapError(
+            "001_baseline is marked applied but required tables are missing "
+            f"({', '.join(missing)}), and the database is not empty. "
+            "Refusing automatic repair to avoid damaging existing data."
+        )
+
     logger.error(
-        "False migration stamp detected: 001_baseline is recorded but tables "
-        "are missing (%s). Clearing migration bookkeeping only, then re-running "
-        "baseline. No user tables will be dropped.",
-        ", ".join(critical_missing),
+        "False migration stamp on empty database: 001_baseline recorded but tables "
+        "missing (%s). Clearing schema_migrations only, then re-running baseline.",
+        ", ".join(missing),
     )
     print(
-        "FATAL-REPAIR: 001_baseline was marked applied without baseline tables "
-        f"({', '.join(critical_missing)}). Clearing schema_migrations rows and "
-        "re-applying baseline.",
+        "REPAIR: empty database has false 001_baseline stamp; clearing "
+        "schema_migrations rows and re-applying baseline.",
         file=sys.stderr,
     )
     _clear_migration_bookkeeping(conn)
-    conn.commit()
+    if conn.engine != "postgres":
+        conn.commit()
     return set()
 
 
 def _acquire_lock(conn):
     if conn.engine == "postgres":
-        conn.execute("SELECT pg_advisory_lock(?)", (872364001,))
+        from migrations.pg_ddl import pg_execute
+
+        previous = conn._raw.autocommit
+        conn._raw.autocommit = True
+        try:
+            pg_execute(conn, "SELECT pg_advisory_lock(%s)", (872364001,))
+        finally:
+            conn._raw.autocommit = previous
 
 
 def _release_lock(conn):
     if conn.engine == "postgres":
-        conn.execute("SELECT pg_advisory_unlock(?)", (872364001,))
+        from migrations.pg_ddl import pg_execute
+
+        previous = conn._raw.autocommit
+        conn._raw.autocommit = True
+        try:
+            pg_execute(conn, "SELECT pg_advisory_unlock(%s)", (872364001,))
+        finally:
+            conn._raw.autocommit = previous
 
 
 def _expected_versions():
@@ -180,27 +248,37 @@ def log_migration_state(applied):
     print(message, file=sys.stderr)
 
 
+def _verify_baseline_on_fresh_connection():
+    """Verify tables via a brand-new connection (catches non-persisted DDL)."""
+    verify_conn = connect()
+    try:
+        verify_baseline_tables(verify_conn)
+    finally:
+        verify_conn.close()
+
+
 def _apply_migration(conn, mod):
-    """Run one migration in a transaction; stamp only after success (+ baseline verify)."""
+    """Run one migration; stamp only after success (+ fresh baseline verify for 001)."""
     version = mod.VERSION
     try:
-        # Explicit transaction boundary (psycopg: BEGIN when not in a txn).
-        try:
-            conn.execute("BEGIN")
-        except Exception:
-            # Already in a transaction — continue.
-            pass
-
         if conn.engine == "postgres":
             mod.upgrade_postgres(conn)
         else:
             mod.upgrade_sqlite(conn)
+            try:
+                conn.commit()
+            except Exception:
+                pass
 
         if version == "001_baseline":
+            # Same-connection check.
             verify_baseline_tables(conn)
+            # Fresh-connection check — proves DDL persisted outside this session.
+            _verify_baseline_on_fresh_connection()
 
         _stamp(conn, version)
-        conn.commit()
+        if conn.engine != "postgres":
+            conn.commit()
     except Exception:
         try:
             conn.rollback()
@@ -226,7 +304,8 @@ def apply_pending_migrations():
 
         _acquire_lock(conn)
         _ensure_migrations_table(conn)
-        conn.commit()
+        if conn.engine != "postgres":
+            conn.commit()
 
         applied = _applied_versions(conn)
         applied = _repair_false_baseline_stamp(conn, applied)
@@ -253,10 +332,8 @@ def apply_pending_migrations():
             print(f"Applied migration {version}", file=sys.stderr)
 
             if version == "001_baseline":
-                # Belt-and-suspenders before 002 runs.
-                verify_baseline_tables(conn)
+                _verify_baseline_on_fresh_connection()
 
-        # Final guard before app boot.
         verify_baseline_tables(conn)
         log_migration_state(applied)
     except MigrationBootstrapError:

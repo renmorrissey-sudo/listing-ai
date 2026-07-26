@@ -1,24 +1,25 @@
 """Baseline schema for TopAI CRM and tools.
 
+Derived from the live application tables used in db.py / crm_db.py.
 Additive only. Never drops tables or truncates data.
 """
 
+from __future__ import annotations
+
+import sys
+
 VERSION = "001_baseline"
 
-
-def _pg_exec(conn, sql):
-    conn.execute(sql)
-
-
-def upgrade_postgres(conn):
-    statements = [
-        """
+# Complete application schema (no separate accounts/tenants/subscriptions/
+# sms_conversations tables — those concepts live on users / leads / sms_messages).
+POSTGRES_TABLES = {
+    "schema_migrations": """
         CREATE TABLE IF NOT EXISTS schema_migrations (
             version TEXT PRIMARY KEY,
             applied_at TEXT NOT NULL
         )
         """,
-        """
+    "users": """
         CREATE TABLE IF NOT EXISTS users (
             id BIGSERIAL PRIMARY KEY,
             email TEXT UNIQUE NOT NULL,
@@ -27,10 +28,13 @@ def upgrade_postgres(conn):
             subscription_status TEXT NOT NULL DEFAULT 'none',
             subscription_id TEXT,
             created_at TEXT NOT NULL,
-            role TEXT DEFAULT 'agent'
+            role TEXT DEFAULT 'agent',
+            agent_name TEXT,
+            brokerage_name TEXT,
+            company_name TEXT
         )
         """,
-        """
+    "voice_personas": """
         CREATE TABLE IF NOT EXISTS voice_personas (
             id BIGSERIAL PRIMARY KEY,
             user_id BIGINT,
@@ -45,7 +49,7 @@ def upgrade_postgres(conn):
             created_at TEXT NOT NULL
         )
         """,
-        """
+    "voice_calls": """
         CREATE TABLE IF NOT EXISTS voice_calls (
             id BIGSERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL,
@@ -69,7 +73,7 @@ def upgrade_postgres(conn):
             completed_at TEXT
         )
         """,
-        """
+    "tool_usage": """
         CREATE TABLE IF NOT EXISTS tool_usage (
             id BIGSERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL,
@@ -79,7 +83,7 @@ def upgrade_postgres(conn):
             created_at TEXT NOT NULL
         )
         """,
-        """
+    "sms_messages": """
         CREATE TABLE IF NOT EXISTS sms_messages (
             id BIGSERIAL PRIMARY KEY,
             user_id BIGINT,
@@ -105,7 +109,7 @@ def upgrade_postgres(conn):
             consent_source TEXT
         )
         """,
-        """
+    "leads": """
         CREATE TABLE IF NOT EXISTS leads (
             id BIGSERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL,
@@ -131,10 +135,10 @@ def upgrade_postgres(conn):
             follow_up_priority TEXT DEFAULT 'normal',
             follow_up_completed_at TEXT,
             follow_up_created_by BIGINT,
-            UNIQUE(user_id, phone_number)
+            UNIQUE (user_id, phone_number)
         )
         """,
-        """
+    "lead_follow_ups": """
         CREATE TABLE IF NOT EXISTS lead_follow_ups (
             id BIGSERIAL PRIMARY KEY,
             lead_id BIGINT NOT NULL,
@@ -148,7 +152,7 @@ def upgrade_postgres(conn):
             completed_at TEXT
         )
         """,
-        """
+    "lead_insights": """
         CREATE TABLE IF NOT EXISTS lead_insights (
             id BIGSERIAL PRIMARY KEY,
             lead_id BIGINT NOT NULL,
@@ -170,7 +174,7 @@ def upgrade_postgres(conn):
             created_at TEXT NOT NULL
         )
         """,
-        """
+    "lead_activities": """
         CREATE TABLE IF NOT EXISTS lead_activities (
             id BIGSERIAL PRIMARY KEY,
             lead_id BIGINT NOT NULL,
@@ -182,7 +186,7 @@ def upgrade_postgres(conn):
             created_at TEXT NOT NULL
         )
         """,
-        """
+    "tasks": """
         CREATE TABLE IF NOT EXISTS tasks (
             id BIGSERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL,
@@ -199,7 +203,7 @@ def upgrade_postgres(conn):
             updated_at TEXT NOT NULL
         )
         """,
-        """
+    "appointments": """
         CREATE TABLE IF NOT EXISTS appointments (
             id BIGSERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL,
@@ -217,7 +221,7 @@ def upgrade_postgres(conn):
             updated_at TEXT NOT NULL
         )
         """,
-        """
+    "needs_attention": """
         CREATE TABLE IF NOT EXISTS needs_attention (
             id BIGSERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL,
@@ -234,7 +238,7 @@ def upgrade_postgres(conn):
             resolved_by BIGINT
         )
         """,
-        """
+    "notifications": """
         CREATE TABLE IF NOT EXISTS notifications (
             id BIGSERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL,
@@ -247,28 +251,74 @@ def upgrade_postgres(conn):
             created_at TEXT NOT NULL
         )
         """,
-        "CREATE INDEX IF NOT EXISTS idx_sms_messages_user_created ON sms_messages(user_id, created_at DESC)",
-        "CREATE INDEX IF NOT EXISTS idx_sms_messages_provider_id ON sms_messages(provider_message_id)",
-        "CREATE INDEX IF NOT EXISTS idx_sms_messages_lead_created ON sms_messages(lead_id, created_at ASC)",
-        "CREATE INDEX IF NOT EXISTS idx_leads_user_updated ON leads(user_id, updated_at DESC)",
-        "CREATE INDEX IF NOT EXISTS idx_lead_follow_ups_user_due ON lead_follow_ups(user_id, due_at)",
-        "CREATE INDEX IF NOT EXISTS idx_lead_insights_user_status ON lead_insights(user_id, status, created_at DESC)",
-        "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_created ON tool_usage(user_id, created_at DESC)",
-        "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_tool ON tool_usage(user_id, tool_key)",
-        "CREATE INDEX IF NOT EXISTS idx_lead_activities_lead ON lead_activities(lead_id, created_at DESC)",
-        "CREATE INDEX IF NOT EXISTS idx_tasks_user_due ON tasks(user_id, due_at)",
-        "CREATE INDEX IF NOT EXISTS idx_tasks_user_status ON tasks(user_id, status)",
-        "CREATE INDEX IF NOT EXISTS idx_appointments_user_start ON appointments(user_id, start_at)",
-        "CREATE INDEX IF NOT EXISTS idx_needs_attention_user_status ON needs_attention(user_id, status, created_at DESC)",
-        "CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC)",
-    ]
-    for stmt in statements:
-        _pg_exec(conn, stmt)
+}
 
-    # Fail inside 001 (before stamp) if CREATE TABLE statements did not land.
-    from migrations.runner import verify_baseline_tables
+# Dependency order: migrations bookkeeping, then users, then dependents.
+POSTGRES_TABLE_ORDER = [
+    "schema_migrations",
+    "users",
+    "voice_personas",
+    "voice_calls",
+    "tool_usage",
+    "leads",
+    "sms_messages",
+    "lead_follow_ups",
+    "lead_insights",
+    "lead_activities",
+    "tasks",
+    "appointments",
+    "needs_attention",
+    "notifications",
+]
 
-    verify_baseline_tables(conn)
+POSTGRES_INDEXES = [
+    ("idx_sms_messages_user_created", "CREATE INDEX IF NOT EXISTS idx_sms_messages_user_created ON sms_messages (user_id, created_at)"),
+    ("idx_sms_messages_provider_id", "CREATE INDEX IF NOT EXISTS idx_sms_messages_provider_id ON sms_messages (provider_message_id)"),
+    ("idx_sms_messages_lead_created", "CREATE INDEX IF NOT EXISTS idx_sms_messages_lead_created ON sms_messages (lead_id, created_at)"),
+    ("idx_leads_user_updated", "CREATE INDEX IF NOT EXISTS idx_leads_user_updated ON leads (user_id, updated_at)"),
+    ("idx_lead_follow_ups_user_due", "CREATE INDEX IF NOT EXISTS idx_lead_follow_ups_user_due ON lead_follow_ups (user_id, due_at)"),
+    ("idx_lead_insights_user_status", "CREATE INDEX IF NOT EXISTS idx_lead_insights_user_status ON lead_insights (user_id, status, created_at)"),
+    ("idx_tool_usage_user_created", "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_created ON tool_usage (user_id, created_at)"),
+    ("idx_tool_usage_user_tool", "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_tool ON tool_usage (user_id, tool_key)"),
+    ("idx_lead_activities_lead", "CREATE INDEX IF NOT EXISTS idx_lead_activities_lead ON lead_activities (lead_id, created_at)"),
+    ("idx_tasks_user_due", "CREATE INDEX IF NOT EXISTS idx_tasks_user_due ON tasks (user_id, due_at)"),
+    ("idx_tasks_user_status", "CREATE INDEX IF NOT EXISTS idx_tasks_user_status ON tasks (user_id, status)"),
+    ("idx_appointments_user_start", "CREATE INDEX IF NOT EXISTS idx_appointments_user_start ON appointments (user_id, start_at)"),
+    ("idx_needs_attention_user_status", "CREATE INDEX IF NOT EXISTS idx_needs_attention_user_status ON needs_attention (user_id, status, created_at)"),
+    ("idx_notifications_user", "CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications (user_id, created_at)"),
+]
+
+
+def upgrade_postgres(conn):
+    """Create the full application schema using raw psycopg DDL + autocommit."""
+    from migrations.pg_ddl import pg_execute, pg_table_exists
+
+    raw = conn._raw
+    previous_autocommit = raw.autocommit
+    raw.autocommit = True
+    created = []
+    try:
+        for table in POSTGRES_TABLE_ORDER:
+            ddl = POSTGRES_TABLES[table]
+            print(f"001_baseline: CREATE TABLE {table}", file=sys.stderr)
+            pg_execute(conn, ddl)
+            if not pg_table_exists(conn, table):
+                raise RuntimeError(
+                    f"001_baseline failed: CREATE TABLE {table} did not create a "
+                    f"public base table (to_regclass/pg_class check failed)."
+                )
+            created.append(table)
+
+        for index_name, ddl in POSTGRES_INDEXES:
+            print(f"001_baseline: CREATE INDEX {index_name}", file=sys.stderr)
+            pg_execute(conn, ddl)
+    finally:
+        raw.autocommit = previous_autocommit
+
+    print(
+        "001_baseline: created tables: " + ", ".join(created),
+        file=sys.stderr,
+    )
 
 
 def upgrade_sqlite(conn):
@@ -289,7 +339,10 @@ def upgrade_sqlite(conn):
             subscription_status TEXT NOT NULL DEFAULT 'none',
             subscription_id TEXT,
             created_at TEXT NOT NULL,
-            role TEXT DEFAULT 'agent'
+            role TEXT DEFAULT 'agent',
+            agent_name TEXT,
+            brokerage_name TEXT,
+            company_name TEXT
         )
         """,
         """
@@ -509,24 +562,20 @@ def upgrade_sqlite(conn):
             created_at TEXT NOT NULL
         )
         """,
-        "CREATE INDEX IF NOT EXISTS idx_sms_messages_user_created ON sms_messages(user_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_sms_messages_user_created ON sms_messages(user_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_sms_messages_provider_id ON sms_messages(provider_message_id)",
-        "CREATE INDEX IF NOT EXISTS idx_sms_messages_lead_created ON sms_messages(lead_id, created_at ASC)",
-        "CREATE INDEX IF NOT EXISTS idx_leads_user_updated ON leads(user_id, updated_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_sms_messages_lead_created ON sms_messages(lead_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_leads_user_updated ON leads(user_id, updated_at)",
         "CREATE INDEX IF NOT EXISTS idx_lead_follow_ups_user_due ON lead_follow_ups(user_id, due_at)",
-        "CREATE INDEX IF NOT EXISTS idx_lead_insights_user_status ON lead_insights(user_id, status, created_at DESC)",
-        "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_created ON tool_usage(user_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_lead_insights_user_status ON lead_insights(user_id, status, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_created ON tool_usage(user_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_tool_usage_user_tool ON tool_usage(user_id, tool_key)",
-        "CREATE INDEX IF NOT EXISTS idx_lead_activities_lead ON lead_activities(lead_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_lead_activities_lead ON lead_activities(lead_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_tasks_user_due ON tasks(user_id, due_at)",
         "CREATE INDEX IF NOT EXISTS idx_tasks_user_status ON tasks(user_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_appointments_user_start ON appointments(user_id, start_at)",
-        "CREATE INDEX IF NOT EXISTS idx_needs_attention_user_status ON needs_attention(user_id, status, created_at DESC)",
-        "CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_needs_attention_user_status ON needs_attention(user_id, status, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at)",
     ]
     for stmt in statements:
         conn.execute(stmt)
-
-    from migrations.runner import verify_baseline_tables
-
-    verify_baseline_tables(conn)

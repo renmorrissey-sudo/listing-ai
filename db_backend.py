@@ -35,17 +35,21 @@ class CompatConnection:
         self.engine = engine  # "postgres" | "sqlite"
 
     def execute(self, sql, params=None):
-        if params is None:
-            params = ()
-        elif isinstance(params, list):
+        if isinstance(params, list):
             params = tuple(params)
         sql_exec = sql
         if self.engine == "postgres":
-            sql_exec = _PLACEHOLDER.sub("%s", sql)
-            cur = self._raw.execute(sql_exec, params)
+            # Only convert placeholders when bind params are provided.
+            # DDL with params=() previously went through pyformat binding and did
+            # not reliably persist CREATE TABLE in production.
+            if params:
+                sql_exec = _PLACEHOLDER.sub("%s", sql)
+                cur = self._raw.execute(sql_exec, params)
+            else:
+                cur = self._raw.execute(sql)
             lastrowid = None
-            stripped = sql_exec.lstrip().upper()
-            if stripped.startswith("INSERT"):
+            stripped = sql.lstrip().upper()
+            if stripped.startswith("INSERT") and params:
                 try:
                     row = self._raw.execute("SELECT lastval() AS id").fetchone()
                     if row is not None:
@@ -54,6 +58,8 @@ class CompatConnection:
                     lastrowid = None
             return CompatCursor(cur, lastrowid=lastrowid)
 
+        if params is None:
+            params = ()
         cur = self._raw.execute(sql_exec, params)
         return CompatCursor(cur, lastrowid=getattr(cur, "lastrowid", None))
 

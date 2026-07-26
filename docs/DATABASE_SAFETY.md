@@ -108,10 +108,11 @@ python -m migrations.runner
 ```
 
 - Location: `migrations/versions/`
-- Order: `001_baseline` → verify required tables → `002_safe_additive_columns` → `003_user_business_profile`
+- Order: `001_baseline` (raw autocommit Postgres DDL) → verify via fresh connection → stamp → `002` → `003`
 - Rules: forward-only, additive, versioned, reviewed, non-destructive
-- Each migration runs in a transaction; the version is stamped only after success (and after baseline table verification for `001`)
-- If `001_baseline` was falsely recorded but tables like `users` are missing (empty broken cutover), startup clears **only** `schema_migrations` rows and re-applies baseline — it does not `DROP` user tables
+- Postgres baseline DDL uses the raw psycopg connection (`migrations/pg_ddl.py`), not the SQLite compat binder
+- `001` is stamped only after required tables exist on a **new** connection (`pg_catalog.pg_class` check)
+- If `001_baseline` was falsely recorded but base tables are missing **and the DB has no app data**, startup clears **only** `schema_migrations` rows and re-applies baseline — never on a non-empty database, never `DROP` user tables
 - New columns: additive migrations use `ADD COLUMN IF NOT EXISTS` / existence checks
 
 ## Prohibited production reset commands
