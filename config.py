@@ -24,7 +24,7 @@ APP_URL = _env("APP_URL", "http://localhost:8080")
 
 # Public website copy. Keep these as constants so malformed host environment
 # variables cannot leak into legal/pricing pages.
-BUSINESS_NAME = "TOPAIRE REAL ESTATE"
+BUSINESS_NAME = "TopAI RE Tools"
 PRODUCT_NAME = "TopAI Real Estate Tools"
 CONTACT_EMAIL = "ren.morrissey@gmail.com"
 SUBSCRIPTION_PRICE = "$49/month"
