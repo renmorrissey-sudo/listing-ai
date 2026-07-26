@@ -121,13 +121,15 @@ def crm_tasks_page():
     user = _user_or_redirect()
     if not user:
         return redirect(url_for("index"))
+    local_date = (request.args.get("local_date") or "").strip()[:10] or None
     return render_template(
         "crm_tasks.html",
-        overdue=crm_db.list_tasks(user["id"], "overdue"),
-        today=crm_db.list_tasks(user["id"], "today"),
-        upcoming=crm_db.list_tasks(user["id"], "upcoming"),
+        overdue=crm_db.list_tasks(user["id"], "overdue", local_date=local_date),
+        today=crm_db.list_tasks(user["id"], "today", local_date=local_date),
+        upcoming=crm_db.list_tasks(user["id"], "upcoming", local_date=local_date),
         task_types=TASK_TYPES,
         priorities=PRIORITIES,
+        local_date=local_date or "",
         **_nav_context(user, "tasks"),
     )
 
@@ -276,7 +278,11 @@ def api_tasks():
     user = auth.get_current_user()
     if request.method == "GET":
         bucket = (request.args.get("bucket") or "all").strip()
-        return jsonify({"tasks": crm_db.list_tasks(user["id"], bucket=bucket)})
+        local_date = (request.args.get("local_date") or "").strip()[:10] or None
+        return jsonify({
+            "tasks": crm_db.list_tasks(user["id"], bucket=bucket, local_date=local_date),
+            "local_date": local_date,
+        })
     data = request.get_json(silent=True) or {}
     task_id, error = crm_db.create_task(user["id"], data)
     if error:

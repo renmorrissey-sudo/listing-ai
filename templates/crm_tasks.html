@@ -99,6 +99,15 @@
     {{ task_table('Upcoming', upcoming, 'No upcoming tasks.') }}
   </main>
   <script>
+    (function ensureLocalDate() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('local_date')) return;
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      params.set('local_date', `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
+      window.location.replace(`${window.location.pathname}?${params.toString()}`);
+    })();
+
     function showFlash(msg, err) {
       const el = document.getElementById('flash');
       el.textContent = msg;

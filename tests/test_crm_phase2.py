@@ -64,6 +64,53 @@ def test_task_complete_creates_activity(two_users):
     assert any(a["event_type"] == "task_completed" for a in activities)
 
 
+def test_task_due_today_uses_calendar_date(two_users):
+    u1, _ = two_users
+    task_id, err = crm_db.create_task(
+        u1,
+        {
+            "title": "CMA today",
+            "task_type": "prepare_cma",
+            "due_at": "2026-07-27T00:05:00+00:00",
+        },
+    )
+    assert err is None
+    today = crm_db.list_tasks(u1, "today", local_date="2026-07-27")
+    upcoming = crm_db.list_tasks(u1, "upcoming", local_date="2026-07-27")
+    overdue = crm_db.list_tasks(u1, "overdue", local_date="2026-07-27")
+    assert any(t["id"] == task_id for t in today)
+    assert all(t["id"] != task_id for t in upcoming)
+    assert all(t["id"] != task_id for t in overdue)
+
+
+def test_task_overdue_requires_prior_calendar_day(two_users):
+    u1, _ = two_users
+    yesterday_id, err = crm_db.create_task(
+        u1,
+        {
+            "title": "Yesterday task",
+            "task_type": "other",
+            "due_at": "2026-07-26T21:10:00+00:00",
+        },
+    )
+    assert err is None
+    today_id, err = crm_db.create_task(
+        u1,
+        {
+            "title": "Today task",
+            "task_type": "other",
+            "due_at": "2026-07-27T09:00:00+00:00",
+        },
+    )
+    assert err is None
+    overdue = crm_db.list_tasks(u1, "overdue", local_date="2026-07-27")
+    today = crm_db.list_tasks(u1, "today", local_date="2026-07-27")
+    assert any(t["id"] == yesterday_id for t in overdue)
+    assert all(t["id"] != today_id for t in overdue)
+    assert any(t["id"] == today_id for t in today)
+    assert all(t["id"] != yesterday_id for t in today)
+
+
 def test_task_update(two_users):
     u1, _ = two_users
     lead_id = _lead(u1)

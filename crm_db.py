@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import json
+import re
 
 from crm_constants import (
     APPOINTMENT_OUTCOMES,
@@ -257,35 +258,52 @@ def create_task(user_id, data):
     return task_id, None
 
 
-def list_tasks(user_id, bucket="all", limit=100):
-    now = _now()
-    today_end = (datetime.now(timezone.utc).replace(hour=23, minute=59, second=59)).isoformat()
+def _calendar_day(local_date=None):
+    """YYYY-MM-DD for task bucketing. Prefer the agent's browser local date when provided."""
+    value = str(local_date or "").strip()[:10]
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return value
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def list_tasks(user_id, bucket="all", limit=100, local_date=None):
+    """Bucket tasks by calendar due date (YYYY-MM-DD prefix of due_at).
+
+    Pass local_date from the browser so "Due today" matches the agent's local day,
+    not only the server UTC day.
+    """
+    day = _calendar_day(local_date)
     with get_db() as conn:
         if bucket == "overdue":
+            # Overdue only when the due calendar day is at least 1 day before today.
+            # Same-day tasks stay in "Due today" even if the clock time has passed.
             rows = conn.execute(
                 """
                 SELECT t.*, l.name AS lead_name, l.phone_number
                 FROM tasks t
                 LEFT JOIN leads l ON l.id = t.lead_id
                 WHERE t.user_id = ? AND t.status IN ('open', 'in_progress')
-                  AND t.due_at IS NOT NULL AND t.due_at < ?
+                  AND t.due_at IS NOT NULL
+                  AND substr(t.due_at, 1, 10) < ?
                 ORDER BY t.due_at ASC
                 LIMIT ?
                 """,
-                (user_id, now, limit),
+                (user_id, day, limit),
             ).fetchall()
         elif bucket == "today":
+            # Match the calendar date shown/stored on due_at (first 10 chars).
             rows = conn.execute(
                 """
                 SELECT t.*, l.name AS lead_name, l.phone_number
                 FROM tasks t
                 LEFT JOIN leads l ON l.id = t.lead_id
                 WHERE t.user_id = ? AND t.status IN ('open', 'in_progress')
-                  AND t.due_at IS NOT NULL AND t.due_at >= ? AND t.due_at <= ?
+                  AND t.due_at IS NOT NULL
+                  AND substr(t.due_at, 1, 10) = ?
                 ORDER BY t.due_at ASC
                 LIMIT ?
                 """,
-                (user_id, now[:10], today_end, limit),
+                (user_id, day, limit),
             ).fetchall()
         elif bucket == "upcoming":
             rows = conn.execute(
@@ -294,11 +312,14 @@ def list_tasks(user_id, bucket="all", limit=100):
                 FROM tasks t
                 LEFT JOIN leads l ON l.id = t.lead_id
                 WHERE t.user_id = ? AND t.status IN ('open', 'in_progress')
-                  AND (t.due_at IS NULL OR t.due_at > ?)
+                  AND (
+                    t.due_at IS NULL
+                    OR substr(t.due_at, 1, 10) > ?
+                  )
                 ORDER BY t.due_at ASC
                 LIMIT ?
                 """,
-                (user_id, today_end, limit),
+                (user_id, day, limit),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -675,13 +696,15 @@ def refresh_needs_attention(user_id):
             """,
             (user_id, now),
         ).fetchall()]
+        today = now_dt.strftime("%Y-%m-%d")
         overdue_tasks = [dict(r) for r in conn.execute(
             """
             SELECT id, lead_id FROM tasks
             WHERE user_id = ? AND status IN ('open', 'in_progress')
-              AND due_at IS NOT NULL AND due_at < ?
+              AND due_at IS NOT NULL
+              AND substr(due_at, 1, 10) < ?
             """,
-            (user_id, now),
+            (user_id, today),
         ).fetchall()]
         missing_outcomes = [dict(r) for r in conn.execute(
             """
