@@ -874,6 +874,30 @@ def mark_lead_opt_out(lead_id, user_id):
         )
 
 
+def clear_lead_sms_opt_out(lead_id, user_id):
+    """Restore SMS eligibility after START/UNSTOP. Does not auto-send or auto-confirm consent."""
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE leads
+            SET opt_out_status = 'active',
+                consent_status = CASE
+                    WHEN consent_status IN ('revoked', 'opted_out') THEN 'unknown'
+                    ELSE consent_status
+                END,
+                status = CASE
+                    WHEN status = 'do_not_contact' THEN 'contacted'
+                    ELSE status
+                END,
+                next_action = 'Lead requested to resume SMS — review before sending',
+                updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (now, lead_id, user_id),
+        )
+
+
 def cancel_suggested_sms_for_lead(lead_id, user_id, reason="Cancelled"):
     with get_db() as conn:
         conn.execute(
@@ -893,6 +917,90 @@ def get_sms_message_by_provider_id(provider_message_id):
             (provider_message_id,),
         ).fetchone()
         return dict(row) if row else None
+
+
+def create_inbound_sms_message(
+    user_id,
+    phone_number,
+    message_body,
+    provider_message_id=None,
+    lead_id=None,
+    lead_name=None,
+    opt_out_status="active",
+    to_number=None,
+    media_urls=None,
+    num_media=0,
+    status_meta=None,
+):
+    """Insert inbound SMS. Idempotent on provider_message_id. Returns (id, is_duplicate)."""
+    import json
+
+    if provider_message_id:
+        existing = get_sms_message_by_provider_id(provider_message_id)
+        if existing:
+            return existing["id"], True
+
+    now = datetime.now(timezone.utc).isoformat()
+    media_json = None
+    if media_urls:
+        media_json = json.dumps(list(media_urls)[:10])
+    notes = None
+    if status_meta:
+        notes = f"twilio_status={status_meta}"[:200]
+
+    with get_db() as conn:
+        if provider_message_id:
+            row = conn.execute(
+                "SELECT id FROM sms_messages WHERE provider_message_id = ? LIMIT 1",
+                (provider_message_id,),
+            ).fetchone()
+            if row:
+                return row["id"], True
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO sms_messages
+                    (user_id, persona_id, lead_id, provider, provider_message_id, direction, lead_name,
+                     phone_number, message_body, status, consent_status, opt_out_status, created_at,
+                     to_number, media_urls, num_media, notes)
+                VALUES (?, NULL, ?, 'twilio', ?, 'inbound', ?, ?, ?, 'received', 'unknown', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    lead_id,
+                    provider_message_id,
+                    lead_name,
+                    phone_number,
+                    message_body,
+                    opt_out_status,
+                    now,
+                    to_number,
+                    media_json,
+                    int(num_media or 0),
+                    notes,
+                ),
+            )
+        except Exception:
+            cur = conn.execute(
+                """
+                INSERT INTO sms_messages
+                    (user_id, persona_id, lead_id, provider, provider_message_id, direction, lead_name,
+                     phone_number, message_body, status, consent_status, opt_out_status, created_at, notes)
+                VALUES (?, NULL, ?, 'twilio', ?, 'inbound', ?, ?, ?, 'received', 'unknown', ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    lead_id,
+                    provider_message_id,
+                    lead_name,
+                    phone_number,
+                    message_body,
+                    opt_out_status,
+                    now,
+                    notes,
+                ),
+            )
+        return cur.lastrowid, False
 
 
 def set_lead_consent(lead_id, user_id, consent_status="confirmed"):
@@ -993,29 +1101,6 @@ def find_sms_user_by_phone(phone_number):
             (phone_number,),
         ).fetchone()
         return row["user_id"] if row else None
-
-
-def create_inbound_sms_message(
-    user_id,
-    phone_number,
-    message_body,
-    provider_message_id=None,
-    lead_id=None,
-    lead_name=None,
-    opt_out_status="active",
-):
-    now = datetime.now(timezone.utc).isoformat()
-    with get_db() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO sms_messages
-                (user_id, persona_id, lead_id, provider, provider_message_id, direction, lead_name,
-                 phone_number, message_body, status, consent_status, opt_out_status, created_at)
-            VALUES (?, NULL, ?, 'twilio', ?, 'inbound', ?, ?, ?, 'received', 'unknown', ?, ?)
-            """,
-            (user_id, lead_id, provider_message_id, lead_name, phone_number, message_body, opt_out_status, now),
-        )
-        return cur.lastrowid
 
 
 def list_sms_messages(user_id, limit=20):

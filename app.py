@@ -1,5 +1,4 @@
 import logging
-import re
 import secrets
 
 import stripe
@@ -18,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 import sms_coach
 from crm import crm_bp
 from crm_constants import status_label
-from sms_prompts import build_inbound_reply_analysis_prompt, build_sms_prompt
+from sms_prompts import build_sms_prompt
 from sms_provider import (
     SmsProviderError,
     get_sms_provider,
@@ -27,7 +26,6 @@ from sms_provider import (
     sms_status_callback_url,
 )
 from sms_validation import (
-    validate_e164_phone,
     validate_sms_generate_payload,
     validate_sms_send_payload,
     validate_sms_test_payload,
@@ -1241,243 +1239,43 @@ def sms_test_send():
 
 
 @app.route("/webhook/sms/inbound", methods=["POST"])
+@app.route("/webhooks/twilio/sms", methods=["POST"])
 @limiter.exempt
 @validate_twilio_request
 def sms_inbound_webhook():
     """
-    Phase 1 inbound CRM webhook.
-    Match TopAI user + lead by Twilio recipient (To) and sender (From).
-    Save inbound message to conversation history and draft a Claude recommendation for agent approval.
-    Never auto-sends.
+    Twilio inbound SMS webhook.
+
+    Preferred production URL: POST {APP_URL}/webhooks/twilio/sms
+    Legacy alias: POST {APP_URL}/webhook/sms/inbound
+
+    Validates Twilio signature, acks immediately with empty TwiML, and never auto-sends.
+    Claude coaching runs in a background thread after the ack path.
     """
-    from_number, from_error = validate_e164_phone(request.form.get("From"))
-    to_number, to_error = validate_e164_phone(request.form.get("To"))
-    body = str(request.form.get("Body") or "").strip()[:1500]
-    message_sid = str(request.form.get("MessageSid") or "").strip() or None
+    from sms_inbound import parse_inbound_form, process_inbound_sms
 
-    if from_error or to_error or not body:
-        return _twiml_empty_response()
-
-    # Recipient must be this app's configured Twilio number.
-    configured_to = (config.TWILIO_PHONE_NUMBER or "").strip()
-    if not configured_to or to_number != configured_to:
-        logger.warning("Inbound SMS ignored: recipient number does not match configured Twilio number")
-        return _twiml_empty_response()
-
-    owner_id = db.find_sms_user_by_phone(from_number)
-    if not owner_id:
-        return _twiml_empty_response()
-
+    payload = parse_inbound_form(request.form)
+    message_sid = payload.get("message_sid")
+    logger.info(
+        "Inbound SMS webhook received sid=%s path=%s",
+        message_sid or "none",
+        request.path,
+    )
     try:
-        seed = db.last_outbound_seed_for_phone(owner_id, from_number)
-        from lead_service import SMS_SOURCE
-
-        lead_id, _created, lead = upsert_crm_lead(
-            owner_id, from_number, seed, source=SMS_SOURCE, touch_sms=False
+        result = process_inbound_sms(payload, defer_coach=True, app=app)
+        logger.info(
+            "Inbound SMS webhook result sid=%s status=%s tenant=%s lead=%s duplicate=%s ignored=%s",
+            message_sid or "none",
+            "ok" if result.get("ok") else "ignored",
+            result.get("owner_id"),
+            result.get("lead_id"),
+            bool(result.get("duplicate")),
+            result.get("ignored"),
         )
-        lead = lead or db.get_lead(lead_id, owner_id)
-        opted_out = _looks_like_opt_out(body)
-        inbound_id = db.create_inbound_sms_message(
-            user_id=owner_id,
-            phone_number=from_number,
-            message_body=body,
-            provider_message_id=message_sid,
-            lead_id=lead_id,
-            lead_name=(lead or {}).get("name"),
-            opt_out_status="opted_out" if opted_out else "active",
-        )
-        now = datetime.now(timezone.utc).isoformat()
-        if opted_out:
-            db.mark_lead_opt_out(lead_id, owner_id)
-            crm_db.add_lead_activity(
-                lead_id,
-                owner_id,
-                "opt_out",
-                "Lead opted out via SMS keyword",
-                {"body_preview": body[:120]},
-            )
-            crm_db.upsert_needs_attention(
-                owner_id, lead_id, "opt_out", priority="urgent", source_ref_type="sms", source_ref_id=inbound_id
-            )
-        else:
-            # Deterministic inbound touch only — Claude suggestions are never auto-applied.
-            # DNC / opted-out leads cannot leave that status via automation.
-            db.update_lead_from_analysis(
-                lead_id,
-                owner_id,
-                last_inbound_at=now,
-            )
-            if (lead or {}).get("opt_out_status") != "opted_out":
-                crm_db.set_lead_status(
-                    owner_id, lead_id, "contacted", from_automation=True
-                )
-            crm_db.add_lead_activity(
-                lead_id,
-                owner_id,
-                "sms_inbound",
-                "Inbound SMS received",
-                {"message_id": inbound_id},
-            )
-        _analyze_inbound_and_coach(owner_id, lead_id, inbound_id, body, opted_out=opted_out)
     except Exception:
-        logger.exception("Failed to process inbound SMS")
+        logger.exception("Failed to process inbound SMS sid=%s", message_sid or "none")
 
     return _twiml_empty_response()
-
-
-def _looks_like_opt_out(body):
-    text = re.sub(r"[^a-z\s]", "", (body or "").strip().lower())
-    tokens = set(text.split())
-    return bool(tokens & {"stop", "unsubscribe", "cancel", "end", "quit"})
-
-
-def _analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_out=False):
-    """Claude coaching. Stores recommendations + draft only — never auto-sends or auto-applies CRM changes."""
-    lead = db.get_lead(lead_id, user_id)
-    if not lead:
-        return
-
-    conversation = db.list_lead_messages(user_id, lead_id)
-    if opted_out:
-        insight_id = db.create_lead_insight(
-            lead_id,
-            user_id,
-            inbound_id,
-            {
-                "summary": "Lead opted out.",
-                "intent": "opt_out",
-                "next_best_step": "Do not send further SMS.",
-                "recommended_action": "Do not send further SMS. Lead opted out.",
-                "suggested_reply": "",
-                "home_value_pitch": None,
-                "confidence_score": 1.0,
-                "requires_manual_review": True,
-                "escalation_topics": [],
-                "raw_json": None,
-            },
-            model="system",
-        )
-        crm_db.apply_coach_queue_flags(
-            user_id,
-            lead_id,
-            {"requires_manual_review": True, "needs_attention_reasons": ["opt_out"]},
-            insight_id=insight_id,
-        )
-        return
-
-    if not sms_coach.is_configured():
-        insight_id = db.create_lead_insight(
-            lead_id,
-            user_id,
-            inbound_id,
-            {
-                "summary": "Lead replied. Claude analysis is not configured.",
-                "intent": "unknown",
-                "next_best_step": "Review the inbound message and reply manually.",
-                "recommended_action": "Open the conversation and draft a reply.",
-                "suggested_reply": "",
-                "home_value_pitch": None,
-                "confidence_score": 0.0,
-                "requires_manual_review": True,
-                "escalation_topics": [],
-                "raw_json": None,
-            },
-            model="none",
-        )
-        crm_db.apply_coach_queue_flags(
-            user_id, lead_id, {"requires_manual_review": True}, insight_id=insight_id
-        )
-        return
-
-    try:
-        analysis = sms_coach.analyze_inbound_reply(
-            build_inbound_reply_analysis_prompt(lead, conversation, inbound_body)
-        )
-    except sms_coach.SmsCoachError as exc:
-        logger.warning("Claude inbound analysis failed: %s", type(exc).__name__)
-        insight_id = db.create_lead_insight(
-            lead_id,
-            user_id,
-            inbound_id,
-            {
-                "summary": "Lead replied. Automatic analysis failed; review manually.",
-                "intent": "unknown",
-                "next_best_step": "Review the inbound message and reply manually.",
-                "recommended_action": "Open the conversation and draft a reply.",
-                "suggested_reply": "",
-                "home_value_pitch": None,
-                "confidence_score": 0.0,
-                "requires_manual_review": True,
-                "escalation_topics": [],
-                "raw_json": None,
-            },
-            model=config.CLAUDE_MODEL,
-        )
-        crm_db.apply_coach_queue_flags(
-            user_id, lead_id, {"requires_manual_review": True}, insight_id=insight_id
-        )
-        return
-
-    # Store recommendation text on the lead for visibility — do NOT apply status/follow-up/tasks.
-    note_bits = [
-        analysis.get("summary"),
-        analysis.get("intent"),
-        analysis.get("recommended_next_action") or analysis.get("next_best_step"),
-    ]
-    notes = " | ".join(bit for bit in note_bits if bit)[:1500] or None
-    db.update_lead_from_analysis(
-        lead_id,
-        user_id,
-        notes=notes,
-        next_action=analysis.get("recommended_next_action")
-        or analysis.get("recommended_action")
-        or analysis.get("next_best_step"),
-        last_inbound_at=datetime.now(timezone.utc).isoformat(),
-    )
-
-    suggested_id = None
-    draft = analysis.get("draft_reply") or analysis.get("suggested_reply")
-    if draft:
-        suggested_id = db.create_sms_message(
-            user_id=user_id,
-            persona_id=None,
-            provider=config.SMS_PROVIDER,
-            data={
-                "lead_name": lead.get("name"),
-                "phone_number": lead.get("phone_number"),
-                "lead_type": lead.get("lead_type"),
-                "property_interest": lead.get("property_interest"),
-                "message_body": draft,
-                "notes": "Claude suggested reply pending agent approval",
-            },
-            status="suggested",
-            lead_id=lead_id,
-            direction="suggested",
-            consent_status="unknown",
-            opt_out_status=lead.get("opt_out_status") or "active",
-        )
-
-    insight_id = db.create_lead_insight(
-        lead_id,
-        user_id,
-        inbound_id,
-        analysis,
-        suggested_message_id=suggested_id,
-        model=config.CLAUDE_MODEL,
-    )
-    crm_db.add_lead_activity(
-        lead_id,
-        user_id,
-        "insight_created",
-        "Claude coaching recommendation ready for review",
-        {
-            "insight_id": insight_id,
-            "suggested_lead_status": analysis.get("suggested_lead_status"),
-            "confidence": analysis.get("confidence_score"),
-        },
-    )
-    crm_db.apply_coach_queue_flags(user_id, lead_id, analysis, insight_id=insight_id)
-    db.record_tool_usage(user_id, "ai_sms", "inbound_analyzed")
 
 
 @app.route("/webhook/sms/status", methods=["POST"])
