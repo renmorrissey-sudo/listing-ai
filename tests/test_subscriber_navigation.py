@@ -97,12 +97,24 @@ def test_active_nav_state(app_client, two_users):
     assert re.search(r'href="/dashboard"\s+class="active"', dash_html)
 
 
+def test_logo_links_to_dashboard(app_client, two_users):
+    u1, _ = two_users
+    _login(app_client, u1)
+    html = app_client.get("/crm/leads").get_data(as_text=True)
+    assert 'href="/dashboard"' in html
+    assert 'aria-label="TopAI Real Estate Tools — Dashboard"' in html
+    assert re.search(
+        r'<a class="logo" href="/dashboard"[^>]*>TopAI',
+        html,
+    )
+
+
 def test_mobile_nav_toggle_present(app_client, two_users):
     u1, _ = two_users
     _login(app_client, u1)
     html = app_client.get("/crm/leads").get_data(as_text=True)
     assert 'id="tool-nav-toggle"' in html
-    assert "aria-controls=\"tool-nav\"" in html
+    assert 'aria-controls="tool-nav"' in html
     assert 'name="viewport"' in html and "width=device-width" in html
 
 

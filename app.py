@@ -35,6 +35,7 @@ from lead_service import (
     record_voice_call_started,
     upsert_crm_lead,
 )
+import seo
 from voice_provider import (
     VoiceProviderError,
     build_vapi_variable_values,
@@ -232,6 +233,23 @@ def _sync_user_from_stripe(user, email):
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"}), 200
+
+
+@app.route("/sitemap.xml")
+def sitemap_xml():
+    xml = seo.build_sitemap_xml()
+    return app.response_class(
+        xml,
+        mimetype="application/xml; charset=utf-8",
+    )
+
+
+@app.route("/robots.txt")
+def robots_txt():
+    return app.response_class(
+        seo.build_robots_txt(),
+        mimetype="text/plain; charset=utf-8",
+    )
 
 
 @app.route("/")
