@@ -9,8 +9,10 @@ from crm_constants import (
     APPOINTMENT_OUTCOMES,
     APPOINTMENT_STATUSES,
     APPOINTMENT_TYPES,
+    CALENDAR_EVENT_TYPE_SET,
     CONFIDENCE_THRESHOLD,
     FIRST_RESPONSE_HOURS,
+    FOLLOW_UP_CANCEL_REASON_SET,
     NEEDS_ATTENTION_REASONS,
     PIPELINE_STAGES,
     PRIORITIES,
@@ -18,6 +20,7 @@ from crm_constants import (
     TASK_STATUSES,
     TASK_TYPES,
     build_appointment_outcome_suggestion,
+    cancel_reason_label,
     normalize_lead_status,
     outcome_label,
     status_label,
@@ -360,10 +363,14 @@ def _follow_up_select_sql():
         SELECT f.*,
                l.name AS lead_name,
                l.phone_number,
-               u.email AS created_by_email
+               l.status AS lead_status,
+               l.source AS lead_source,
+               u.email AS created_by_email,
+               cu.email AS cancelled_by_email
         FROM lead_follow_ups f
         JOIN leads l ON l.id = f.lead_id
         LEFT JOIN users u ON u.id = f.created_by
+        LEFT JOIN users cu ON cu.id = f.cancelled_by_user_id
     """
 
 
@@ -682,9 +689,19 @@ def list_lead_follow_ups(user_id, lead_id, include_completed=True, limit=100):
 
 def group_follow_ups_for_lead(follow_ups, local_date=None, tz_offset_minutes=None):
     day = _calendar_day(local_date)
-    groups = {"overdue": [], "today": [], "upcoming": [], "completed": []}
+    groups = {
+        "overdue": [],
+        "today": [],
+        "upcoming": [],
+        "completed": [],
+        "cancelled": [],
+    }
     for item in follow_ups:
-        if item.get("status") != "pending":
+        status = item.get("status")
+        if status == "cancelled":
+            groups["cancelled"].append(item)
+            continue
+        if status != "pending":
             groups["completed"].append(item)
             continue
         due_day = _local_date_for_due(
@@ -951,36 +968,134 @@ def complete_follow_up(user_id, follow_up_id):
     return True, None
 
 
-def dismiss_follow_up(user_id, follow_up_id, reason="Dismissed"):
+def cancel_follow_up(
+    user_id,
+    follow_up_id,
+    *,
+    cancel_reason_code,
+    cancel_reason_notes="",
+    cancelled_by_user_id=None,
+):
+    """Cancel a follow-up with a required reason. Never deletes the row."""
+    code = str(cancel_reason_code or "").strip()
+    notes = str(cancel_reason_notes or "").strip()[:1000]
+    if code not in FOLLOW_UP_CANCEL_REASON_SET:
+        return None, "A valid cancellation reason is required."
+    if code == "other" and not notes:
+        return None, "Please explain why this follow-up is being cancelled."
+
+    actor = cancelled_by_user_id or user_id
     now = _now()
-    reason = str(reason or "Dismissed")[:500]
+    label = cancel_reason_label(code)
+
     with get_db() as conn:
         row = conn.execute(
             "SELECT * FROM lead_follow_ups WHERE id = ? AND user_id = ?",
             (follow_up_id, user_id),
         ).fetchone()
         if not row:
-            return False, "Follow-up not found."
+            return None, "Follow-up not found."
         item = dict(row)
-        if item.get("status") == "pending":
-            conn.execute(
-                """
-                UPDATE lead_follow_ups
-                SET status = 'cancelled', completed_at = ?
-                WHERE id = ? AND user_id = ?
-                """,
-                (now, follow_up_id, user_id),
-            )
-            _sync_lead_next_follow_up(conn, user_id, item["lead_id"])
+
+        # Idempotent: already cancelled with same code → success, no new activity.
+        if item.get("status") == "cancelled":
+            if (item.get("cancel_reason_code") or "") == code:
+                return {
+                    "ok": True,
+                    "duplicate": True,
+                    "follow_up_id": follow_up_id,
+                    "status": "cancelled",
+                    "cancel_reason_code": code,
+                    "offer_dnc": code == "lead_requested_no_further_contact",
+                }, None
+            return None, "Follow-up is already cancelled."
+
+        if item.get("status") != "pending":
+            return None, "Only open follow-ups can be cancelled."
+
+        conn.execute(
+            """
+            UPDATE lead_follow_ups
+            SET status = 'cancelled',
+                completed_at = ?,
+                cancelled_at = ?,
+                cancelled_by_user_id = ?,
+                cancel_reason_code = ?,
+                cancel_reason_notes = ?
+            WHERE id = ? AND user_id = ? AND status = 'pending'
+            """,
+            (now, now, actor, code, notes or None, follow_up_id, user_id),
+        )
+        _sync_lead_next_follow_up(conn, user_id, item["lead_id"])
+
+        summary = f"Follow-up cancelled: {label}"
+        payload = {
+            "follow_up_id": follow_up_id,
+            "cancel_reason_code": code,
+            "cancel_reason_notes": notes,
+            "original_due_at": item.get("due_at"),
+            "follow_up_reason": item.get("reason"),
+        }
+        # Avoid duplicate cancel activities on retry races.
+        existing = conn.execute(
+            """
+            SELECT id, payload_json FROM lead_activities
+            WHERE user_id = ? AND lead_id = ? AND event_type = 'follow_up_cancelled'
+            ORDER BY id DESC LIMIT 20
+            """,
+            (user_id, item["lead_id"]),
+        ).fetchall()
+        already = False
+        for act in existing:
+            try:
+                p = json.loads(act["payload_json"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                p = {}
+            if int(p.get("follow_up_id") or 0) == int(follow_up_id):
+                already = True
+                break
+        if not already:
+            note_bit = f" — {notes}" if notes else ""
+            due_bit = ""
+            if item.get("due_at"):
+                due_bit = f" (was due {str(item['due_at'])[:16]} UTC)"
             _insert_activity(
                 conn,
                 item["lead_id"],
                 user_id,
-                "follow_up_dismissed",
-                reason,
-                {"follow_up_id": follow_up_id, "reason": item.get("reason")},
-                actor_user_id=user_id,
+                "follow_up_cancelled",
+                f"{summary}{due_bit}{note_bit}",
+                payload,
+                actor_user_id=actor,
             )
+
+    return {
+        "ok": True,
+        "duplicate": False,
+        "follow_up_id": follow_up_id,
+        "status": "cancelled",
+        "cancel_reason_code": code,
+        "cancel_reason_label": label,
+        "offer_dnc": code == "lead_requested_no_further_contact",
+    }, None
+
+
+def dismiss_follow_up(user_id, follow_up_id, reason="Dismissed"):
+    """Backward-compatible wrapper — maps free-text dismiss to cancel other/notes."""
+    notes = str(reason or "").strip()
+    code = "other"
+    if normalize_follow_up_reason(notes) == "duplicate follow-up":
+        code = "duplicate_follow_up"
+        notes = notes or "Duplicate follow-up"
+    result, error = cancel_follow_up(
+        user_id,
+        follow_up_id,
+        cancel_reason_code=code,
+        cancel_reason_notes=notes or "Dismissed",
+        cancelled_by_user_id=user_id,
+    )
+    if error:
+        return False, error
     return True, None
 
 
@@ -1011,6 +1126,73 @@ def dismiss_lead_follow_up(user_id, lead_id, reason="Dismissed", follow_up_id=No
     for item in open_items:
         dismiss_follow_up(user_id, item["id"], reason=reason)
     return True
+
+
+def find_duplicate_open_follow_ups(user_id, *, dry_run=True):
+    """Find pending follow-ups that share tenant/lead/reason/due-minute.
+
+    Keeps the oldest row in each group; cancels the rest when dry_run=False.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM lead_follow_ups
+            WHERE user_id = ? AND status = 'pending'
+            ORDER BY lead_id ASC, id ASC
+            """,
+            (user_id,),
+        ).fetchall()
+    groups = {}
+    for row in rows:
+        item = dict(row)
+        key = (
+            int(item["lead_id"]),
+            normalize_follow_up_reason(item.get("reason")),
+            _normalize_due_at_key(item.get("due_at")),
+        )
+        groups.setdefault(key, []).append(item)
+
+    report = []
+    cancel_ids = []
+    for key, members in groups.items():
+        if len(members) < 2:
+            continue
+        keep = members[0]
+        dupes = members[1:]
+        report.append(
+            {
+                "lead_id": key[0],
+                "reason": keep.get("reason"),
+                "due_at": keep.get("due_at"),
+                "keep_id": keep["id"],
+                "duplicate_ids": [d["id"] for d in dupes],
+                "duplicate_count": len(dupes),
+            }
+        )
+        cancel_ids.extend(d["id"] for d in dupes)
+
+    cancelled = []
+    if not dry_run and cancel_ids:
+        for fid in cancel_ids:
+            result, error = cancel_follow_up(
+                user_id,
+                fid,
+                cancel_reason_code="duplicate_follow_up",
+                cancel_reason_notes=(
+                    "System cleanup: duplicate open follow-up with the same "
+                    "lead, reason, and due time."
+                ),
+                cancelled_by_user_id=user_id,
+            )
+            if not error:
+                cancelled.append(result["follow_up_id"])
+
+    return {
+        "dry_run": dry_run,
+        "groups": report,
+        "duplicate_count": sum(g["duplicate_count"] for g in report),
+        "cancelled_ids": cancelled,
+    }
 
 
 def create_task(user_id, data):
@@ -2184,6 +2366,285 @@ def get_pipeline_metrics(user_id, since_iso=None):
         "leads_by_status": by_status,
         "pipeline_stages": stages,
         "average_first_response_hours": None,
+    }
+
+
+def _map_appointment_event_type(appt):
+    appt_type = str(appt.get("appointment_type") or "")
+    status = str(appt.get("status") or "")
+    outcome = appt.get("outcome")
+    start = str(appt.get("start_at") or "")
+    now = _now()
+    if (
+        not outcome
+        and status in {"completed", "no_show", "scheduled", "confirmed"}
+        and start
+        and start < now
+        and status != "cancelled"
+    ):
+        # Past appointments still missing an outcome surface as reminders.
+        if status in {"completed", "no_show"} or (
+            status in {"scheduled", "confirmed"} and start < now
+        ):
+            if status in {"completed", "no_show"}:
+                return "outcome_required"
+    mapping = {
+        "property_showing": "showing",
+        "buyer_consultation": "buyer_consultation",
+        "listing_consultation": "listing_consultation",
+        "phone_call": "call",
+        "video_meeting": "call",
+        "open_house_follow_up": "appointment",
+    }
+    return mapping.get(appt_type, "appointment")
+
+
+def _map_task_event_type(task):
+    task_type = str(task.get("task_type") or "")
+    mapping = {
+        "call": "call",
+        "send_sms": "sms_follow_up",
+        "schedule_showing": "showing",
+        "buyer_consultation": "buyer_consultation",
+        "listing_consultation": "listing_consultation",
+    }
+    return mapping.get(task_type, "task")
+
+
+def list_calendar_events(
+    user_id,
+    *,
+    start_at=None,
+    end_at=None,
+    event_types=None,
+    statuses=None,
+    priorities=None,
+    lead_status=None,
+    lead_source=None,
+    assigned_user_id=None,
+    include_cancelled=False,
+    include_completed=False,
+    limit=1000,
+):
+    """Unified calendar events from follow-ups, tasks, and appointments.
+
+    Stable ids: followup:<id>, task:<id>, appointment:<id>.
+    Always scoped to user_id (tenant ownership).
+    """
+    wanted_types = None
+    if event_types:
+        wanted_types = {t for t in event_types if t in CALENDAR_EVENT_TYPE_SET}
+    status_filter = {s for s in (statuses or []) if s}
+    priority_filter = {p for p in (priorities or []) if p in PRIORITIES}
+    assignee = assigned_user_id
+
+    events = []
+    with get_db() as conn:
+        fu_rows = conn.execute(
+            _follow_up_select_sql()
+            + " WHERE f.user_id = ? ORDER BY f.due_at ASC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+        for row in fu_rows:
+            item = _row_to_follow_up(row)
+            status = item.get("status") or "pending"
+            if status == "cancelled" and not include_cancelled:
+                continue
+            if status == "done" and not include_completed:
+                continue
+            if status_filter and status not in status_filter:
+                continue
+            if priority_filter and (item.get("priority") or "normal") not in priority_filter:
+                continue
+            if lead_status and normalize_lead_status(item.get("lead_status")) != normalize_lead_status(lead_status):
+                continue
+            if lead_source and str(item.get("lead_source") or "") != str(lead_source):
+                continue
+            if assignee and int(item.get("created_by") or item.get("user_id") or 0) != int(assignee):
+                continue
+            due = item.get("due_at")
+            if start_at and due and due < str(start_at):
+                continue
+            if end_at and due and due > str(end_at):
+                continue
+            events.append(
+                {
+                    "id": f"followup:{item['id']}",
+                    "source_type": "follow_up",
+                    "source_id": item["id"],
+                    "event_type": "follow_up",
+                    "lead_id": item.get("lead_id"),
+                    "lead_name": item.get("lead_name"),
+                    "lead_status": item.get("lead_status"),
+                    "lead_source": item.get("lead_source"),
+                    "phone_number": item.get("phone_number"),
+                    "title": item.get("reason") or "Follow up",
+                    "start_at": due,
+                    "end_at": due,
+                    "status": status,
+                    "priority": item.get("priority") or "normal",
+                    "assigned_agent": item.get("created_by_email"),
+                    "assigned_user_id": item.get("created_by") or item.get("user_id"),
+                }
+            )
+
+        task_rows = conn.execute(
+            """
+            SELECT t.*, l.name AS lead_name, l.phone_number, l.status AS lead_status,
+                   l.source AS lead_source, u.email AS assigned_email
+            FROM tasks t
+            LEFT JOIN leads l ON l.id = t.lead_id
+            LEFT JOIN users u ON u.id = t.assigned_user_id
+            WHERE t.user_id = ?
+            ORDER BY COALESCE(t.due_at, t.created_at) ASC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        for row in task_rows:
+            item = dict(row)
+            status = item.get("status") or "open"
+            if status == "cancelled" and not include_cancelled:
+                continue
+            if status == "completed" and not include_completed:
+                continue
+            if status_filter and status not in status_filter:
+                continue
+            if priority_filter and (item.get("priority") or "normal") not in priority_filter:
+                continue
+            if lead_status and item.get("lead_id") and normalize_lead_status(item.get("lead_status")) != normalize_lead_status(lead_status):
+                continue
+            if lead_source and str(item.get("lead_source") or "") != str(lead_source):
+                continue
+            if assignee and int(item.get("assigned_user_id") or item.get("user_id") or 0) != int(assignee):
+                continue
+            due = item.get("due_at")
+            if start_at and due and due < str(start_at):
+                continue
+            if end_at and due and due > str(end_at):
+                continue
+            etype = _map_task_event_type(item)
+            events.append(
+                {
+                    "id": f"task:{item['id']}",
+                    "source_type": "task",
+                    "source_id": item["id"],
+                    "event_type": etype,
+                    "lead_id": item.get("lead_id"),
+                    "lead_name": item.get("lead_name"),
+                    "lead_status": item.get("lead_status"),
+                    "lead_source": item.get("lead_source"),
+                    "phone_number": item.get("phone_number"),
+                    "title": item.get("title") or "Task",
+                    "start_at": due,
+                    "end_at": due,
+                    "status": status,
+                    "priority": item.get("priority") or "normal",
+                    "assigned_agent": item.get("assigned_email"),
+                    "assigned_user_id": item.get("assigned_user_id") or item.get("user_id"),
+                    "task_type": item.get("task_type"),
+                }
+            )
+
+        appt_rows = conn.execute(
+            """
+            SELECT a.*, l.name AS lead_name, l.phone_number, l.status AS lead_status,
+                   l.source AS lead_source, u.email AS owner_email
+            FROM appointments a
+            JOIN leads l ON l.id = a.lead_id
+            LEFT JOIN users u ON u.id = a.user_id
+            WHERE a.user_id = ?
+            ORDER BY a.start_at ASC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        for row in appt_rows:
+            item = dict(row)
+            status = item.get("status") or "scheduled"
+            if status == "cancelled" and not include_cancelled:
+                continue
+            if status == "completed" and not include_completed and item.get("outcome"):
+                continue
+            if status_filter and status not in status_filter:
+                continue
+            if lead_status and normalize_lead_status(item.get("lead_status")) != normalize_lead_status(lead_status):
+                continue
+            if lead_source and str(item.get("lead_source") or "") != str(lead_source):
+                continue
+            if assignee and int(item.get("user_id") or 0) != int(assignee):
+                continue
+            start = item.get("start_at")
+            if start_at and start and start < str(start_at):
+                continue
+            if end_at and start and start > str(end_at):
+                continue
+            etype = _map_appointment_event_type(item)
+            events.append(
+                {
+                    "id": f"appointment:{item['id']}",
+                    "source_type": "appointment",
+                    "source_id": item["id"],
+                    "event_type": etype,
+                    "lead_id": item.get("lead_id"),
+                    "lead_name": item.get("lead_name"),
+                    "lead_status": item.get("lead_status"),
+                    "lead_source": item.get("lead_source"),
+                    "phone_number": item.get("phone_number"),
+                    "title": (item.get("appointment_type") or "appointment").replace("_", " ").title(),
+                    "start_at": start,
+                    "end_at": item.get("end_at") or start,
+                    "status": status,
+                    "priority": "normal",
+                    "assigned_agent": item.get("owner_email"),
+                    "assigned_user_id": item.get("user_id"),
+                    "appointment_type": item.get("appointment_type"),
+                    "outcome": item.get("outcome"),
+                }
+            )
+
+    if wanted_types is not None:
+        events = [e for e in events if e.get("event_type") in wanted_types]
+
+    # Deduplicate by stable event id (retries / overlapping queries never double-render).
+    seen = set()
+    unique = []
+    for event in sorted(events, key=lambda e: (e.get("start_at") or "", e["id"])):
+        if event["id"] in seen:
+            continue
+        seen.add(event["id"])
+        unique.append(event)
+    return unique[: max(int(limit), 1)]
+
+
+def calendar_summary(user_id, local_date=None, tz_offset_minutes=None):
+    day = _calendar_day(local_date)
+    counts = follow_up_dashboard_counts(
+        user_id, local_date=day, tz_offset_minutes=tz_offset_minutes
+    )
+    tasks_today = list_tasks(user_id, bucket="today", local_date=day, limit=50)
+    appts = list_appointments(user_id, limit=200)
+    appts_today = [
+        a
+        for a in appts
+        if a.get("status") not in {"cancelled"}
+        and _local_date_for_due(a.get("start_at"), tz_offset_minutes, day) == day
+    ]
+    week_events = list_calendar_events(
+        user_id,
+        start_at=f"{day}T00:00:00",
+        end_at=(datetime.strptime(day, "%Y-%m-%d") + timedelta(days=7)).strftime(
+            "%Y-%m-%dT23:59:59"
+        ),
+        include_cancelled=False,
+        include_completed=False,
+        limit=300,
+    )
+    return {
+        **counts,
+        "tasks_due_today": len(tasks_today),
+        "appointments_today": len(appts_today),
+        "upcoming_events_this_week": len(week_events),
     }
 
 

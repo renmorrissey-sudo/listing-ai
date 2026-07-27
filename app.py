@@ -613,6 +613,7 @@ def business_profile():
             "agent_name": "",
             "brokerage_name": "",
             "company_name": "",
+            "timezone": "America/Denver",
         }
         return jsonify({"profile": profile})
 
@@ -622,6 +623,7 @@ def business_profile():
         agent_name=str(data.get("agent_name") or ""),
         brokerage_name=str(data.get("brokerage_name") or ""),
         company_name=str(data.get("company_name") or ""),
+        timezone=str(data.get("timezone") or "") or None,
     )
     return jsonify({"ok": True, "profile": profile})
 

@@ -22,6 +22,7 @@
   <div class="public-nav">
     <a href="/dashboard">Dashboard</a>
     <a href="/crm/leads" class="active">Leads</a>
+    <a href="/crm/calendar">Leads Calendar</a>
     <a href="/crm/follow-ups">Follow-ups</a>
     <a href="/crm/tasks">Tasks</a>
     <a href="/crm/needs-attention">Needs Attention</a>
@@ -30,6 +31,7 @@
   <nav class="tool-nav">
     <a href="/dashboard">Dashboard</a>
     <a href="/crm/leads" class="active">Leads</a>
+    <a href="/crm/calendar">Leads Calendar</a>
     <a href="/crm/follow-ups">Follow-ups</a>
     <a href="/crm/tasks">Tasks</a>
     <a href="/crm/needs-attention">Needs Attention</a>
@@ -50,21 +52,32 @@
       <div class="status-hero">{{ status_label(lead.status) }}</div>
       {% if lead.opt_out_status == 'opted_out' %}<span class="pill danger">Opted out — Do Not Contact</span>{% endif %}
       <p>{% if lead.next_action %}<strong>Next action:</strong> {{ lead.next_action }}{% endif %}</p>
-      {% if next_follow_up %}
       <div style="margin-top:10px;padding:12px 14px;background:#f8fafc;border-radius:10px;border:1px solid #eef2f7;">
-        <div><strong>Next follow-up:</strong></div>
-        <div style="font-size:18px;font-weight:800;margin-top:4px;">
-          <span class="local-dt" data-utc="{{ next_follow_up.due_at }}">{{ (next_follow_up.due_at or '')[:16] }}</span>
+        <div class="row" style="justify-content:space-between;">
+          <strong>Schedule snapshot</strong>
+          <a href="/crm/calendar">View in Leads Calendar</a>
         </div>
-        <div class="muted" style="margin-top:4px;">Reason: {{ next_follow_up.reason or 'Follow up' }}</div>
-        <div class="row" style="margin-top:6px;">
-          <span class="pill {% if next_follow_up.priority == 'high' %}warn{% endif %}">{{ next_follow_up.priority or 'normal' }}</span>
-          <span class="pill">{{ next_follow_up.status }}</span>
+        <div style="margin-top:10px;">
+          <div><strong>Next follow-up:</strong>
+            {% if next_follow_up %}
+            <span class="local-dt" data-utc="{{ next_follow_up.due_at }}">{{ (next_follow_up.due_at or '')[:16] }}</span>
+            <span class="muted"> — {{ next_follow_up.reason or 'Follow up' }}</span>
+            {% else %}<span class="muted">None</span>{% endif %}
+          </div>
+          <div style="margin-top:6px;"><strong>Next open task:</strong>
+            {% if next_task %}
+            {{ next_task.title }}
+            {% if next_task.due_at %} · <span class="local-dt" data-utc="{{ next_task.due_at }}">{{ next_task.due_at[:16] }}</span>{% endif %}
+            {% else %}<span class="muted">None</span>{% endif %}
+          </div>
+          <div style="margin-top:6px;"><strong>Next appointment:</strong>
+            {% if next_appointment %}
+            {{ next_appointment.appointment_type.replace('_',' ') }}
+            · <span class="local-dt" data-utc="{{ next_appointment.start_at }}">{{ (next_appointment.start_at or '')[:16] }}</span>
+            {% else %}<span class="muted">None</span>{% endif %}
+          </div>
         </div>
       </div>
-      {% else %}
-      <p class="muted">No open follow-up scheduled</p>
-      {% endif %}
 
       <div class="quick-actions">
         <a class="btn" href="/#sms">Draft SMS</a>
@@ -91,7 +104,8 @@
           <h2>Follow-ups</h2>
           <p class="muted" style="margin:0 0 10px;font-size:12px;">
             Quick options schedule or reschedule an open follow-up. The list below is the source of truth.
-            <a href="/crm/follow-ups">Open calendar</a>
+            <a href="/crm/calendar">View in Leads Calendar</a>
+            · <a href="/crm/tools/cleanup-duplicate-follow-ups">Cleanup duplicates</a>
           </p>
           <div class="quick-actions">
             <button class="btn secondary" type="button" onclick="quickFollowUp('tomorrow')">Tomorrow</button>
@@ -133,7 +147,16 @@
                 <button class="btn secondary" type="button" onclick="rescheduleFollowUp({{ item.id }})">Reschedule</button>
                 <button class="btn secondary" type="button" onclick="editFollowUpReason({{ item.id }}, {{ (item.reason or '')|tojson }})">Edit reason</button>
                 <button class="btn secondary" type="button" onclick="changeFollowUpPriority({{ item.id }}, {{ (item.priority or 'normal')|tojson }})">Priority</button>
-                <button class="btn secondary" type="button" onclick="dismissFollowUpById({{ item.id }})">Dismiss</button>
+                <button class="btn secondary" type="button" onclick="openCancelFollowUp({{ item.id }})">Cancel follow-up</button>
+              </div>
+              {% endif %}
+              {% if item.status == 'cancelled' %}
+              <div class="muted" style="margin-top:6px;">
+                Cancelled
+                {% if item.cancelled_at %}<span class="local-dt" data-utc="{{ item.cancelled_at }}">{{ item.cancelled_at[:16] }}</span>{% endif %}
+                by {{ item.cancelled_by_email or 'agent' }}
+                · {{ cancel_reason_label(item.cancel_reason_code) if item.cancel_reason_code else '—' }}
+                {% if item.cancel_reason_notes %} — {{ item.cancel_reason_notes }}{% endif %}
               </div>
               {% endif %}
             </li>
@@ -148,6 +171,10 @@
           {{ render_follow_ups('Due today', follow_up_groups.today) }}
           {{ render_follow_ups('Upcoming', follow_up_groups.upcoming) }}
           {{ render_follow_ups('Completed', follow_up_groups.completed[:20]) }}
+          <details style="margin-top:12px;">
+            <summary style="cursor:pointer;font-weight:700;">Cancelled ({{ follow_up_groups.cancelled|length }})</summary>
+            {{ render_follow_ups('', follow_up_groups.cancelled[:30]) }}
+          </details>
         </div>
 
         <div class="card" id="task-panel">
@@ -326,6 +353,27 @@
       </div>
     </div>
   </main>
+  <div id="cancel-fu-modal" style="position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:1000;display:none;align-items:center;justify-content:center;padding:20px;">
+    <div style="background:#fff;border-radius:12px;max-width:520px;width:100%;padding:18px;box-shadow:0 12px 40px rgba(0,0,0,0.18);">
+      <h2 style="margin-top:0;">Cancel follow-up</h2>
+      <p class="muted">Choose why this follow-up is being cancelled. The record stays in history.</p>
+      <input type="hidden" id="cancel-fu-id" />
+      <select id="cancel-fu-code" style="width:100%;" onchange="toggleLeadCancelNotes()">
+        <option value="">Select a reason…</option>
+        {% for code, label in follow_up_cancel_reasons %}
+        <option value="{{ code }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+      <textarea id="cancel-fu-notes" placeholder="Additional notes (required for Other)" style="width:100%;margin-top:10px;min-height:80px;"></textarea>
+      <div id="cancel-fu-dnc-hint" class="muted" style="display:none;margin-top:8px;">
+        Cancelling for “no further contact” does not opt the lead out. Use a separate Do Not Contact action if the lead truly requested DNC.
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <button class="btn danger" type="button" onclick="submitLeadCancelFollowUp()">Confirm cancel</button>
+        <button class="btn secondary" type="button" onclick="closeCancelFollowUp()">Back</button>
+      </div>
+    </div>
+  </div>
   <div id="transcript-modal" hidden style="position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:1000;display:none;align-items:center;justify-content:center;padding:20px;">
     <div style="background:#fff;border-radius:12px;max-width:720px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,0.18);">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid #eef2f7;">
@@ -450,14 +498,43 @@
       if (!res.ok) return showFlash(data.error || 'Failed', true);
       location.reload();
     }
-    async function dismissFollowUpById(id) {
-      const res = await fetch(`/api/crm/follow-ups/${id}/dismiss`, {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({reason: 'Dismissed by agent'}),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) return showFlash(data.error || 'Failed', true);
-      location.reload();
+    function openCancelFollowUp(id) {
+      document.getElementById('cancel-fu-id').value = id;
+      document.getElementById('cancel-fu-code').value = '';
+      document.getElementById('cancel-fu-notes').value = '';
+      toggleLeadCancelNotes();
+      document.getElementById('cancel-fu-modal').style.display = 'flex';
+    }
+    function closeCancelFollowUp() {
+      document.getElementById('cancel-fu-modal').style.display = 'none';
+    }
+    function toggleLeadCancelNotes() {
+      const code = document.getElementById('cancel-fu-code').value;
+      document.getElementById('cancel-fu-dnc-hint').style.display =
+        code === 'lead_requested_no_further_contact' ? 'block' : 'none';
+    }
+    async function submitLeadCancelFollowUp() {
+      const id = document.getElementById('cancel-fu-id').value;
+      const code = document.getElementById('cancel-fu-code').value;
+      const notes = document.getElementById('cancel-fu-notes').value;
+      if (!code) return showFlash('Select a cancellation reason.', true);
+      if (code === 'other' && !notes.trim()) return showFlash('Please explain why (Other).', true);
+      try {
+        const res = await fetch(`/api/crm/follow-ups/${id}/cancel`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ cancel_reason_code: code, cancel_reason_notes: notes }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return showFlash(data.error || 'Could not cancel follow-up.', true);
+        showFlash(data.duplicate ? 'Follow-up already cancelled.' : `Follow-up cancelled: ${code.replace(/_/g,' ')}`);
+        if (data.offer_dnc) {
+          showFlash('Follow-up cancelled. Lead was not opted out automatically.');
+        }
+        closeCancelFollowUp();
+        setTimeout(() => location.reload(), 700);
+      } catch (err) {
+        showFlash(err.message || 'Could not cancel follow-up.', true);
+      }
     }
     async function rescheduleFollowUp(id) {
       const localDue = window.prompt('New local date/time (YYYY-MM-DDTHH:MM)', '');

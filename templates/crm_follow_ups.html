@@ -56,6 +56,7 @@
   <div class="public-nav">
     <a href="/dashboard">Dashboard</a>
     <a href="/crm/leads">Leads</a>
+    <a href="/crm/calendar">Leads Calendar</a>
     <a href="/crm/follow-ups" class="active">Follow-ups</a>
     <a href="/crm/tasks">Tasks</a>
     <a href="/crm/needs-attention">Needs Attention</a>
@@ -64,6 +65,7 @@
   <nav class="tool-nav">
     <a href="/dashboard">Dashboard</a>
     <a href="/crm/leads">Leads</a>
+    <a href="/crm/calendar">Leads Calendar</a>
     <a href="/crm/follow-ups" class="active">Follow-ups</a>
     <a href="/crm/tasks">Tasks</a>
     <a href="/crm/needs-attention">Needs Attention</a>
@@ -140,6 +142,10 @@
       {{ fu_table('Due today', groups.today, 'Nothing due today.') }}
       {{ fu_table('Upcoming', groups.upcoming, 'No upcoming follow-ups.') }}
       {{ fu_table('Completed', groups.completed[:40], 'No completed follow-ups yet.') }}
+      <details class="card">
+        <summary style="cursor:pointer;font-weight:700;">Cancelled ({{ groups.cancelled|length }})</summary>
+        {{ fu_table('Cancelled', groups.cancelled[:40], 'No cancelled follow-ups.') }}
+      </details>
     </div>
 
     <div id="week-view" class="card" style="display:none;">
@@ -181,8 +187,22 @@
       <div class="row" style="margin-top:14px;">
         <button class="btn" type="button" onclick="saveFollowUpModal()">Save</button>
         <button class="btn" type="button" onclick="completeFromModal()">Mark complete</button>
-        <button class="btn secondary" type="button" onclick="dismissFromModal()">Dismiss</button>
+        <button class="btn secondary" type="button" onclick="openCancelFromModal()">Cancel follow-up</button>
         <a class="btn secondary" id="modal-open-lead" href="#">Open lead</a>
+      </div>
+      <div id="cancel-inline" style="display:none;margin-top:14px;padding-top:12px;border-top:1px solid #eef2f7;">
+        <strong>Cancel follow-up</strong>
+        <select id="modal-cancel-code" style="width:100%;margin-top:8px;">
+          <option value="">Select a reason…</option>
+          {% for code, label in follow_up_cancel_reasons %}
+          <option value="{{ code }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+        <textarea id="modal-cancel-notes" placeholder="Notes (required for Other)" style="width:100%;margin-top:8px;min-height:70px;"></textarea>
+        <div class="row" style="margin-top:8px;">
+          <button class="btn danger" type="button" onclick="submitCancelFromModal()">Confirm cancel</button>
+          <button class="btn secondary" type="button" onclick="document.getElementById('cancel-inline').style.display='none'">Back</button>
+        </div>
       </div>
     </div>
   </div>
@@ -407,15 +427,22 @@
       const id = document.getElementById('modal-id').value;
       await completeFollowUp(id);
     }
-    async function dismissFromModal() {
+    function openCancelFromModal() {
+      document.getElementById('cancel-inline').style.display = 'block';
+    }
+    async function submitCancelFromModal() {
       const id = document.getElementById('modal-id').value;
-      const res = await fetch(`/api/crm/follow-ups/${id}/dismiss`, {
+      const code = document.getElementById('modal-cancel-code').value;
+      const notes = document.getElementById('modal-cancel-notes').value;
+      if (!code) return showFlash('Select a cancellation reason.', true);
+      if (code === 'other' && !notes.trim()) return showFlash('Please explain why (Other).', true);
+      const res = await fetch(`/api/crm/follow-ups/${id}/cancel`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({reason: 'Dismissed from calendar'}),
+        body: JSON.stringify({ cancel_reason_code: code, cancel_reason_notes: notes }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) return showFlash(data.error || 'Could not dismiss.', true);
+      if (!res.ok) return showFlash(data.error || 'Could not cancel.', true);
       location.reload();
     }
     async function doLogout() {

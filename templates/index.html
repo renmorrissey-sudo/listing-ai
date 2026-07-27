@@ -197,6 +197,7 @@
   <button class="tool-nav-btn" data-tool="sms" onclick="switchTool('sms', this)">AI SMS Assistant</button>
   <a class="tool-nav-btn nav-subscriber" id="dashboard-tool-link" href="/dashboard" style="display:none; text-decoration:none;">Dashboard</a>
   <a class="tool-nav-btn nav-subscriber" id="crm-leads-tool-link" href="/crm/leads" style="display:none; text-decoration:none;">Leads</a>
+  <a class="tool-nav-btn nav-subscriber" id="crm-calendar-tool-link" href="/crm/calendar" style="display:none; text-decoration:none;">Leads Calendar</a>
   <a class="tool-nav-btn nav-subscriber" id="crm-followups-tool-link" href="/crm/follow-ups" style="display:none; text-decoration:none;">Follow-ups</a>
   <a class="tool-nav-btn nav-subscriber" id="crm-tasks-tool-link" href="/crm/tasks" style="display:none; text-decoration:none;">Tasks</a>
   <a class="tool-nav-btn nav-subscriber" id="crm-needs-tool-link" href="/crm/needs-attention" style="display:none; text-decoration:none;">Needs Attention</a>
@@ -266,7 +267,19 @@
           <div class="form-group"><label>Brokerage name</label><input type="text" id="profile-brokerage-name" maxlength="200" placeholder="Your brokerage (optional if company set)" /></div>
         </div>
         <div class="form-group"><label>Company name</label><input type="text" id="profile-company-name" maxlength="200" placeholder="Your company (optional if brokerage set)" /></div>
-        <p class="muted" style="font-size:12px;margin:0 0 8px;">At least one of brokerage or company is required before starting a call.</p>
+        <div class="form-group"><label>Timezone</label>
+          <select id="profile-timezone">
+            <option value="America/Denver">America/Denver</option>
+            <option value="America/Phoenix">America/Phoenix</option>
+            <option value="America/Los_Angeles">America/Los_Angeles</option>
+            <option value="America/Chicago">America/Chicago</option>
+            <option value="America/New_York">America/New_York</option>
+            <option value="America/Anchorage">America/Anchorage</option>
+            <option value="Pacific/Honolulu">Pacific/Honolulu</option>
+            <option value="UTC">UTC</option>
+          </select>
+        </div>
+        <p class="muted" style="font-size:12px;margin:0 0 8px;">At least one of brokerage or company is required before starting a call. Timezone is used for the Leads Calendar.</p>
         <button type="button" class="btn-generate" id="profile-save-btn" style="padding:8px 12px;font-size:12px;">Save business profile</button>
         <div class="error-msg" id="profile-error" style="margin-top:8px;"></div>
         <div class="muted" id="profile-status" style="font-size:12px;margin-top:8px;"></div>
@@ -526,6 +539,7 @@
     const agentEl = document.getElementById('profile-agent-name');
     const brokerageEl = document.getElementById('profile-brokerage-name');
     const companyEl = document.getElementById('profile-company-name');
+    const tzEl = document.getElementById('profile-timezone');
     const statusEl = document.getElementById('profile-status');
     if (!agentEl || !brokerageEl || !companyEl) return;
     try {
@@ -534,6 +548,7 @@
       agentEl.value = data.profile.agent_name || '';
       brokerageEl.value = data.profile.brokerage_name || '';
       companyEl.value = data.profile.company_name || '';
+      if (tzEl) tzEl.value = data.profile.timezone || 'America/Denver';
       if (statusEl) {
         const ready = (data.profile.agent_name || '').trim()
           && ((data.profile.brokerage_name || '').trim() || (data.profile.company_name || '').trim());
@@ -560,6 +575,7 @@
           agent_name: document.getElementById('profile-agent-name')?.value || '',
           brokerage_name: document.getElementById('profile-brokerage-name')?.value || '',
           company_name: document.getElementById('profile-company-name')?.value || '',
+          timezone: document.getElementById('profile-timezone')?.value || 'America/Denver',
         }),
       });
       if (!data || !data.ok) throw new Error((data && data.error) || 'Failed to save profile');

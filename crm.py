@@ -12,10 +12,14 @@ import db
 from crm_constants import (
     APPOINTMENT_OUTCOMES,
     APPOINTMENT_TYPES,
+    CALENDAR_EVENT_TYPES,
+    COMMON_TIMEZONES,
+    FOLLOW_UP_CANCEL_REASONS,
     LEAD_STATUSES,
     NEEDS_ATTENTION_REASONS,
     PRIORITIES,
     TASK_TYPES,
+    cancel_reason_label,
     outcome_label,
     normalize_lead_status,
     status_label,
@@ -197,6 +201,18 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
         if follow_up_groups.get(key):
             next_follow_up = follow_up_groups[key][0]
             break
+    open_tasks = [
+        t for t in tasks if t.get("status") in {"open", "in_progress"}
+    ]
+    open_tasks.sort(key=lambda t: t.get("due_at") or "9999")
+    next_task = open_tasks[0] if open_tasks else None
+    open_appts = [
+        a
+        for a in appointments
+        if a.get("status") in {"scheduled", "confirmed", "proposed", "rescheduled"}
+    ]
+    open_appts.sort(key=lambda a: a.get("start_at") or "9999")
+    next_appointment = open_appts[0] if open_appts else None
     flash_message = request.args.get("notice") or ""
     flash_error = form_error or request.args.get("error") or ""
     for category, message in get_flashed_messages(with_categories=True):
@@ -214,11 +230,16 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
         "follow_ups": follow_ups,
         "follow_up_groups": follow_up_groups,
         "next_follow_up": next_follow_up,
+        "next_task": next_task,
+        "next_appointment": next_appointment,
         "statuses": LEAD_STATUSES,
         "task_types": TASK_TYPES,
         "appointment_types": APPOINTMENT_TYPES,
         "appointment_outcomes": APPOINTMENT_OUTCOMES,
         "priorities": PRIORITIES,
+        "follow_up_cancel_reasons": FOLLOW_UP_CANCEL_REASONS,
+        "cancel_reason_label": cancel_reason_label,
+        "user_timezone": db.get_user_timezone(user["id"]),
         "status_label": status_label,
         "outcome_label": outcome_label,
         "flash_message": flash_message,
@@ -444,15 +465,31 @@ def api_complete_follow_up(lead_id):
 @crm_bp.route("/api/crm/leads/<int:lead_id>/follow-up/dismiss", methods=["POST"])
 @auth.subscription_required
 def api_dismiss_follow_up(lead_id):
+    """Legacy dismiss endpoint — prefers structured cancel reason fields."""
     user = auth.get_current_user()
     data = request.get_json(silent=True) or {}
     follow_up_id = data.get("follow_up_id")
-    crm_db.dismiss_lead_follow_up(
+    if not follow_up_id:
+        return jsonify({"error": "follow_up_id is required."}), 400
+    if data.get("cancel_reason_code"):
+        result, error = crm_db.cancel_follow_up(
+            user["id"],
+            follow_up_id,
+            cancel_reason_code=data.get("cancel_reason_code"),
+            cancel_reason_notes=str(data.get("cancel_reason_notes") or ""),
+            cancelled_by_user_id=user["id"],
+        )
+        if error:
+            status = 404 if "not found" in error.lower() else 400
+            return jsonify({"error": error}), status
+        return jsonify(result)
+    ok, error = crm_db.dismiss_follow_up(
         user["id"],
-        lead_id,
-        str(data.get("reason") or "Dismissed")[:500],
-        follow_up_id=follow_up_id,
+        follow_up_id,
+        reason=str(data.get("reason") or "Dismissed")[:500],
     )
+    if not ok:
+        return jsonify({"error": error}), 400
     return jsonify({"ok": True})
 
 
@@ -523,16 +560,32 @@ def api_complete_follow_up_by_id(follow_up_id):
 
 
 @crm_bp.route("/api/crm/follow-ups/<int:follow_up_id>/dismiss", methods=["POST"])
+@crm_bp.route("/api/crm/follow-ups/<int:follow_up_id>/cancel", methods=["POST"])
 @auth.subscription_required
-def api_dismiss_follow_up_by_id(follow_up_id):
+def api_cancel_follow_up_by_id(follow_up_id):
     user = auth.get_current_user()
     data = request.get_json(silent=True) or {}
-    ok, error = crm_db.dismiss_follow_up(
-        user["id"], follow_up_id, reason=str(data.get("reason") or "Dismissed")[:500]
+    code = data.get("cancel_reason_code") or data.get("reason_code")
+    notes = data.get("cancel_reason_notes") or data.get("reason") or ""
+    if not code and data.get("reason"):
+        # Legacy clients sending free-text reason.
+        result_ok, error = crm_db.dismiss_follow_up(
+            user["id"], follow_up_id, reason=str(data.get("reason"))[:500]
+        )
+        if not result_ok:
+            return jsonify({"error": error}), 400
+        return jsonify({"ok": True})
+    result, error = crm_db.cancel_follow_up(
+        user["id"],
+        follow_up_id,
+        cancel_reason_code=code,
+        cancel_reason_notes=str(notes or ""),
+        cancelled_by_user_id=user["id"],
     )
-    if not ok:
-        return jsonify({"error": error}), 404
-    return jsonify({"ok": True})
+    if error:
+        status = 404 if "not found" in error.lower() else 400
+        return jsonify({"error": error}), status
+    return jsonify(result)
 
 
 @crm_bp.route("/crm/follow-ups")
@@ -559,13 +612,6 @@ def crm_follow_ups_page():
         user["id"], local_date=local_date, tz_offset_minutes=tz_offset
     )
     groups = crm_db.group_follow_ups_for_lead(
-        [f for f in follow_ups if f.get("status") == "pending"]
-        + [f for f in follow_ups if f.get("status") != "pending"][:50],
-        local_date=local_date,
-        tz_offset_minutes=tz_offset,
-    )
-    # Re-group all items properly for page sections.
-    groups = crm_db.group_follow_ups_for_lead(
         follow_ups, local_date=local_date, tz_offset_minutes=tz_offset
     )
     return render_template(
@@ -575,7 +621,141 @@ def crm_follow_ups_page():
         counts=counts,
         view=view,
         priorities=PRIORITIES,
+        follow_up_cancel_reasons=FOLLOW_UP_CANCEL_REASONS,
+        cancel_reason_label=cancel_reason_label,
         local_date=local_date or "",
+        user_timezone=db.get_user_timezone(user["id"]),
+        **_nav_context(user, "follow-ups"),
+    )
+
+
+@crm_bp.route("/api/crm/calendar/events")
+@auth.subscription_required
+def api_calendar_events():
+    user = auth.get_current_user()
+    event_types = [
+        t.strip()
+        for t in (request.args.get("event_types") or "").split(",")
+        if t.strip()
+    ]
+    statuses = [
+        s.strip() for s in (request.args.get("statuses") or "").split(",") if s.strip()
+    ]
+    priorities = [
+        p.strip() for p in (request.args.get("priorities") or "").split(",") if p.strip()
+    ]
+    include_cancelled = str(request.args.get("include_cancelled") or "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    include_completed = str(request.args.get("include_completed") or "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    assigned = request.args.get("assigned_user_id")
+    try:
+        assigned_user_id = int(assigned) if assigned else None
+    except (TypeError, ValueError):
+        assigned_user_id = None
+    # Agents only see their own tenant data; assigned filter defaults to self unless manager.
+    if user.get("role") != "manager":
+        assigned_user_id = None  # still scoped by user_id ownership below
+    events = crm_db.list_calendar_events(
+        user["id"],
+        start_at=(request.args.get("start_at") or "").strip() or None,
+        end_at=(request.args.get("end_at") or "").strip() or None,
+        event_types=event_types or None,
+        statuses=statuses or None,
+        priorities=priorities or None,
+        lead_status=(request.args.get("lead_status") or "").strip() or None,
+        lead_source=(request.args.get("lead_source") or "").strip() or None,
+        assigned_user_id=assigned_user_id,
+        include_cancelled=include_cancelled,
+        include_completed=include_completed,
+    )
+    local_date = (request.args.get("local_date") or "").strip()[:10] or None
+    try:
+        tz_offset = int(request.args.get("tz_offset_minutes"))
+    except (TypeError, ValueError):
+        tz_offset = None
+    summary = crm_db.calendar_summary(
+        user["id"], local_date=local_date, tz_offset_minutes=tz_offset
+    )
+    return jsonify(
+        {
+            "events": events,
+            "summary": summary,
+            "timezone": db.get_user_timezone(user["id"]),
+        }
+    )
+
+
+@crm_bp.route("/crm/calendar")
+def crm_leads_calendar_page():
+    user = _user_or_redirect()
+    if not user:
+        return redirect(url_for("index"))
+    local_date = (request.args.get("local_date") or "").strip()[:10] or None
+    try:
+        tz_offset = int(request.args.get("tz_offset_minutes"))
+    except (TypeError, ValueError):
+        tz_offset = None
+    view = (request.args.get("view") or "month").strip().lower()
+    if view not in {"month", "week", "day", "agenda"}:
+        view = "month"
+    include_cancelled = str(request.args.get("include_cancelled") or "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    include_completed = str(request.args.get("include_completed") or "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    events = crm_db.list_calendar_events(
+        user["id"],
+        include_cancelled=include_cancelled,
+        include_completed=include_completed,
+        limit=800,
+    )
+    summary = crm_db.calendar_summary(
+        user["id"], local_date=local_date, tz_offset_minutes=tz_offset
+    )
+    return render_template(
+        "crm_leads_calendar.html",
+        events=events,
+        summary=summary,
+        view=view,
+        event_types=CALENDAR_EVENT_TYPES,
+        statuses=LEAD_STATUSES,
+        priorities=PRIORITIES,
+        follow_up_cancel_reasons=FOLLOW_UP_CANCEL_REASONS,
+        common_timezones=COMMON_TIMEZONES,
+        user_timezone=db.get_user_timezone(user["id"]),
+        include_cancelled=include_cancelled,
+        include_completed=include_completed,
+        local_date=local_date or "",
+        **_nav_context(user, "calendar"),
+    )
+
+
+@crm_bp.route("/crm/tools/cleanup-duplicate-follow-ups", methods=["GET", "POST"])
+def crm_cleanup_duplicate_follow_ups():
+    user = _user_or_redirect()
+    if not user:
+        return redirect(url_for("index"))
+    dry_run = True
+    if request.method == "POST":
+        dry_run = str(request.form.get("dry_run") or "1") != "0"
+        report = crm_db.find_duplicate_open_follow_ups(user["id"], dry_run=dry_run)
+    else:
+        report = crm_db.find_duplicate_open_follow_ups(user["id"], dry_run=True)
+    return render_template(
+        "crm_cleanup_follow_ups.html",
+        report=report,
         **_nav_context(user, "follow-ups"),
     )
 

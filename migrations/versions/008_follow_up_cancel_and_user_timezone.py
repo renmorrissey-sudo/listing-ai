@@ -1,0 +1,61 @@
+"""Additive cancel metadata on lead_follow_ups + user timezone preference."""
+
+VERSION = "008_follow_up_cancel_and_user_timezone"
+
+POSTGRES_COLUMNS = [
+    ("lead_follow_ups", "cancelled_at", "TEXT"),
+    ("lead_follow_ups", "cancelled_by_user_id", "BIGINT"),
+    ("lead_follow_ups", "cancel_reason_code", "TEXT"),
+    ("lead_follow_ups", "cancel_reason_notes", "TEXT"),
+    ("users", "timezone", "TEXT"),
+]
+
+SQLITE_COLUMNS = [
+    ("lead_follow_ups", "cancelled_at", "TEXT"),
+    ("lead_follow_ups", "cancelled_by_user_id", "INTEGER"),
+    ("lead_follow_ups", "cancel_reason_code", "TEXT"),
+    ("lead_follow_ups", "cancel_reason_notes", "TEXT"),
+    ("users", "timezone", "TEXT"),
+]
+
+
+def _sqlite_columns(conn, table):
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {r["name"] if isinstance(r, dict) else r[1] for r in rows}
+
+
+def _postgres_has_column(conn, table, column):
+    raw = conn._raw
+    cur = raw.execute(
+        """
+        SELECT 1 AS ok
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s AND column_name = %s
+        LIMIT 1
+        """,
+        (table, column),
+    )
+    row = cur.fetchone()
+    try:
+        cur.close()
+    except Exception:
+        pass
+    return bool(row)
+
+
+def upgrade_postgres(conn):
+    from migrations.pg_ddl import pg_execute
+
+    for table, column, definition in POSTGRES_COLUMNS:
+        if not _postgres_has_column(conn, table, column):
+            pg_execute(
+                conn,
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {definition}",
+            )
+
+
+def upgrade_sqlite(conn):
+    for table, column, definition in SQLITE_COLUMNS:
+        cols = _sqlite_columns(conn, table)
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")

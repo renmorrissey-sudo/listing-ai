@@ -36,6 +36,45 @@ PIPELINE_STAGES = [
 
 PRIORITIES = ["low", "normal", "high", "urgent"]
 
+FOLLOW_UP_CANCEL_REASONS = [
+    ("duplicate_follow_up", "Duplicate follow-up"),
+    ("no_longer_needed", "No longer needed"),
+    ("lead_requested_no_further_contact", "Lead requested no further contact"),
+    ("lead_not_ready", "Lead is not ready"),
+    ("lead_no_longer_qualified", "Lead is no longer qualified"),
+    ("appointment_already_scheduled", "Appointment already scheduled"),
+    ("handled_another_way", "Follow-up handled another way"),
+    ("created_by_mistake", "Created by mistake"),
+    ("other", "Other"),
+]
+FOLLOW_UP_CANCEL_REASON_SET = {code for code, _ in FOLLOW_UP_CANCEL_REASONS}
+FOLLOW_UP_CANCEL_REASON_LABELS = {code: label for code, label in FOLLOW_UP_CANCEL_REASONS}
+
+# Unified Leads Calendar event kinds (stable filter values).
+CALENDAR_EVENT_TYPES = [
+    ("follow_up", "Follow-ups"),
+    ("task", "Tasks"),
+    ("appointment", "Appointments"),
+    ("showing", "Showing appointments"),
+    ("buyer_consultation", "Buyer consultations"),
+    ("listing_consultation", "Listing consultations"),
+    ("call", "Calls"),
+    ("sms_follow_up", "SMS follow-ups"),
+    ("outcome_required", "Outcome-required reminders"),
+]
+CALENDAR_EVENT_TYPE_SET = {code for code, _ in CALENDAR_EVENT_TYPES}
+
+COMMON_TIMEZONES = [
+    "America/Denver",
+    "America/Phoenix",
+    "America/Los_Angeles",
+    "America/Chicago",
+    "America/New_York",
+    "America/Anchorage",
+    "Pacific/Honolulu",
+    "UTC",
+]
+
 TASK_STATUSES = ["open", "in_progress", "completed", "cancelled"]
 TASK_TYPES = [
     "call",
@@ -258,6 +297,12 @@ def status_label(status):
 
 def outcome_label(outcome):
     return str(outcome or "").replace("_", " ").strip().title()
+
+
+def cancel_reason_label(code):
+    return FOLLOW_UP_CANCEL_REASON_LABELS.get(
+        code, str(code or "").replace("_", " ").strip().title()
+    )
 
 
 def appointment_status_label(status):

@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Leads Calendar - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+  <style>
+    .layout { display:grid; grid-template-columns: 240px 1fr; gap:16px; }
+    .side .metric { background:#fff; border-radius:10px; padding:12px; margin-bottom:10px; box-shadow:0 1px 5px rgba(0,0,0,.06); }
+    .side .k { font-size:11px; color:#667; text-transform:uppercase; letter-spacing:.4px; }
+    .side .v { font-size:22px; font-weight:800; margin-top:4px; }
+    .view-tabs, .filters { display:flex; gap:8px; flex-wrap:wrap; margin:10px 0; }
+    .view-tabs button, .filters label { background:#eef2f7; border:none; border-radius:8px; padding:8px 12px; font-size:12px; font-weight:700; cursor:pointer; }
+    .view-tabs button.active { background:#4f8ef7; color:#fff; }
+    .cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; }
+    .cal-head { text-align:center; font-size:11px; color:#667; font-weight:700; padding:6px 0; }
+    .cal-cell { min-height:100px; background:#f8fafc; border:1px solid #eef2f7; border-radius:8px; padding:6px; font-size:11px; }
+    .cal-cell.muted-day { opacity:.45; }
+    .cal-cell.today { outline:2px solid #4f8ef7; }
+    .cal-item { display:block; border-radius:6px; padding:3px 5px; margin-top:3px; text-decoration:none; font-weight:600; color:#1a1a2e; cursor:pointer; border-left:3px solid #4f8ef7; background:#eef5ff; }
+    .cal-item.follow_up { border-left-color:#2563eb; background:#eff6ff; }
+    .cal-item.task { border-left-color:#059669; background:#ecfdf5; }
+    .cal-item.appointment, .cal-item.showing, .cal-item.buyer_consultation, .cal-item.listing_consultation { border-left-color:#d97706; background:#fffbeb; }
+    .cal-item.call { border-left-color:#7c3aed; background:#f5f3ff; }
+    .cal-item.sms_follow_up { border-left-color:#0891b2; background:#ecfeff; }
+    .cal-item.outcome_required { border-left-color:#dc2626; background:#fef2f2; }
+    .cal-item.done, .cal-item.completed { opacity:.55; }
+    .cal-item.cancelled { opacity:.4; text-decoration:line-through; }
+    #event-modal, #cancel-modal { position:fixed; inset:0; background:rgba(15,23,42,.45); z-index:1000; display:none; align-items:center; justify-content:center; padding:20px; }
+    .panel { background:#fff; border-radius:12px; max-width:560px; width:100%; padding:18px; box-shadow:0 12px 40px rgba(0,0,0,.18); max-height:85vh; overflow:auto; }
+    @media (max-width: 900px) { .layout { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="logo">TopAI <span>Real Estate Tools</span></div>
+      <div class="tagline">Leads Calendar</div>
+    </div>
+    <div class="subscriber-info">
+      <span class="subscriber-email">&#10003; {{ email }}</span>
+      {% if has_billing_portal %}<a class="billing-link" href="/billing/portal">Manage billing</a>{% endif %}
+      <button class="logout-btn" type="button" onclick="doLogout()">Sign out</button>
+    </div>
+  </header>
+  <div class="public-nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/crm/leads">Leads</a>
+    <a href="/crm/calendar" class="active">Leads Calendar</a>
+    <a href="/crm/follow-ups">Follow-ups</a>
+    <a href="/crm/tasks">Tasks</a>
+    <a href="/crm/needs-attention">Needs Attention</a>
+    <a href="/#sms">AI SMS</a>
+  </div>
+  <nav class="tool-nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/crm/leads">Leads</a>
+    <a href="/crm/calendar" class="active">Leads Calendar</a>
+    <a href="/crm/follow-ups">Follow-ups</a>
+    <a href="/crm/tasks">Tasks</a>
+    <a href="/crm/needs-attention">Needs Attention</a>
+    <a href="/#sms">AI SMS Assistant</a>
+  </nav>
+  <main>
+    <h1>Leads Calendar</h1>
+    <p class="muted">Follow-ups, tasks, and appointments for your leads. Times shown in {{ user_timezone }}.</p>
+    <div id="flash" class="flash"></div>
+
+    <div class="layout">
+      <aside class="side">
+        <div class="metric"><div class="k">Overdue follow-ups</div><div class="v">{{ summary.follow_ups_overdue }}</div></div>
+        <div class="metric"><div class="k">Tasks due today</div><div class="v">{{ summary.tasks_due_today }}</div></div>
+        <div class="metric"><div class="k">Appointments today</div><div class="v">{{ summary.appointments_today }}</div></div>
+        <div class="metric"><div class="k">Upcoming this week</div><div class="v">{{ summary.upcoming_events_this_week }}</div></div>
+        <div class="card" style="padding:12px;">
+          <h3 style="margin-top:0;">Timezone</h3>
+          <select id="tz-select" style="width:100%;">
+            {% for tz in common_timezones %}
+            <option value="{{ tz }}" {% if tz == user_timezone %}selected{% endif %}>{{ tz }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn secondary" style="margin-top:8px;width:100%;" type="button" onclick="saveTimezone()">Save timezone</button>
+        </div>
+      </aside>
+
+      <section>
+        <div class="view-tabs">
+          <button type="button" class="view-btn active" data-view="month" onclick="setView('month')">Month</button>
+          <button type="button" class="view-btn" data-view="week" onclick="setView('week')">Week</button>
+          <button type="button" class="view-btn" data-view="day" onclick="setView('day')">Day</button>
+          <button type="button" class="view-btn" data-view="agenda" onclick="setView('agenda')">Agenda</button>
+          <button type="button" onclick="jumpToday()">Today</button>
+        </div>
+        <div class="filters card" style="padding:12px;">
+          <select id="filter-type">
+            <option value="">All event types</option>
+            {% for code, label in event_types %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+          </select>
+          <select id="filter-priority">
+            <option value="">All priorities</option>
+            {% for p in priorities %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+          </select>
+          <select id="filter-lead-status">
+            <option value="">All lead statuses</option>
+            {% for slug, label in statuses %}<option value="{{ slug }}">{{ label }}</option>{% endfor %}
+          </select>
+          <label><input type="checkbox" id="filter-completed" /> Show completed</label>
+          <label><input type="checkbox" id="filter-cancelled" /> Show cancelled</label>
+          <button class="btn secondary" type="button" onclick="applyFilters()">Apply filters</button>
+        </div>
+
+        <div class="card">
+          <div class="row" style="justify-content:space-between;margin-bottom:12px;">
+            <button class="btn secondary" type="button" onclick="shift(-1)">Previous</button>
+            <strong id="range-label"></strong>
+            <button class="btn secondary" type="button" onclick="shift(1)">Next</button>
+          </div>
+          <div id="month-week-grid" class="cal-grid"></div>
+          <div id="agenda-list" style="display:none;"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div id="event-modal">
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;">
+        <h2 style="margin:0;" id="ev-title">Event</h2>
+        <button class="btn secondary" type="button" onclick="closeEventModal()">Close</button>
+      </div>
+      <div id="ev-body" style="margin-top:12px;font-size:14px;line-height:1.55;"></div>
+      <div class="row" style="margin-top:14px;" id="ev-actions"></div>
+    </div>
+  </div>
+
+  <div id="cancel-modal">
+    <div class="panel">
+      <h2 style="margin-top:0;">Cancel follow-up</h2>
+      <p class="muted">A cancellation reason is required. The follow-up is kept in history.</p>
+      <input type="hidden" id="cancel-follow-up-id" />
+      <select id="cancel-reason-code" style="width:100%;" onchange="toggleCancelNotes()">
+        <option value="">Select a reason…</option>
+        {% for code, label in follow_up_cancel_reasons %}
+        <option value="{{ code }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+      <textarea id="cancel-reason-notes" placeholder="Additional notes (required for Other)" style="width:100%;margin-top:10px;min-height:80px;"></textarea>
+      <div id="dnc-hint" class="muted" style="display:none;margin-top:8px;">
+        This does not opt the lead out. Use a separate Do Not Contact action if needed.
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <button class="btn danger" type="button" onclick="submitCancelFollowUp()">Confirm cancel</button>
+        <button class="btn secondary" type="button" onclick="closeCancelModal()">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let events = {{ events|tojson }};
+    let currentView = 'month';
+    let cursor = new Date();
+    cursor.setHours(12,0,0,0);
+    const userTimezone = {{ user_timezone|tojson }};
+
+    function showFlash(msg, err) {
+      const el = document.getElementById('flash');
+      el.textContent = msg;
+      el.className = err ? 'flash err' : 'flash';
+      el.style.display = 'block';
+    }
+    function ymd(d) {
+      const pad = n => String(n).padStart(2,'0');
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    }
+    function formatInTz(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso).slice(0,16);
+      try {
+        return d.toLocaleString(undefined, { timeZone: userTimezone, year:'numeric', month:'long', day:'numeric', hour:'numeric', minute:'2-digit' });
+      } catch (e) {
+        return d.toLocaleString();
+      }
+    }
+    function localDayKey(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return '';
+      try {
+        const parts = new Intl.DateTimeFormat('en-CA', { timeZone: userTimezone, year:'numeric', month:'2-digit', day:'2-digit' }).formatToParts(d);
+        const get = t => parts.find(p => p.type === t)?.value;
+        return `${get('year')}-${get('month')}-${get('day')}`;
+      } catch (e) {
+        return ymd(d);
+      }
+    }
+    function filteredEvents() {
+      const type = document.getElementById('filter-type').value;
+      const priority = document.getElementById('filter-priority').value;
+      const leadStatus = document.getElementById('filter-lead-status').value;
+      const showCompleted = document.getElementById('filter-completed').checked;
+      const showCancelled = document.getElementById('filter-cancelled').checked;
+      return events.filter(ev => {
+        if (type && ev.event_type !== type) return false;
+        if (priority && ev.priority !== priority) return false;
+        if (leadStatus && ev.lead_status !== leadStatus) return false;
+        if (!showCancelled && ev.status === 'cancelled') return false;
+        if (!showCompleted && (ev.status === 'done' || ev.status === 'completed')) return false;
+        return true;
+      });
+    }
+    function eventsForDay(dayKey) {
+      return filteredEvents().filter(ev => localDayKey(ev.start_at) === dayKey);
+    }
+    function setView(view) {
+      currentView = view;
+      document.querySelectorAll('.view-btn').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+      render();
+    }
+    function jumpToday() { cursor = new Date(); cursor.setHours(12,0,0,0); render(); }
+    function shift(delta) {
+      if (currentView === 'month') cursor.setMonth(cursor.getMonth() + delta);
+      else if (currentView === 'week') cursor.setDate(cursor.getDate() + delta * 7);
+      else cursor.setDate(cursor.getDate() + delta);
+      render();
+    }
+    function renderDayCell(dateObj, outside) {
+      const key = ymd(dateObj);
+      const cell = document.createElement('div');
+      cell.className = 'cal-cell' + (outside ? ' muted-day' : '') + (key === ymd(new Date()) ? ' today' : '');
+      cell.innerHTML = `<div style="font-weight:800;">${dateObj.getDate()}</div>`;
+      eventsForDay(key).slice(0, 5).forEach(ev => {
+        const a = document.createElement('a');
+        a.className = `cal-item ${ev.event_type} ${ev.status || ''}`;
+        a.textContent = `${(ev.lead_name || 'Lead').slice(0,14)} · ${(ev.title || '').slice(0,18)}`;
+        a.onclick = (e) => { e.preventDefault(); openEvent(ev); };
+        cell.appendChild(a);
+      });
+      return cell;
+    }
+    function render() {
+      const grid = document.getElementById('month-week-grid');
+      const agenda = document.getElementById('agenda-list');
+      grid.innerHTML = '';
+      agenda.innerHTML = '';
+      if (currentView === 'agenda') {
+        grid.style.display = 'none';
+        agenda.style.display = 'block';
+        document.getElementById('range-label').textContent = 'Agenda';
+        const items = filteredEvents().slice().sort((a,b) => String(a.start_at).localeCompare(String(b.start_at)));
+        if (!items.length) { agenda.innerHTML = '<p class="empty">No events match these filters.</p>'; return; }
+        const ul = document.createElement('ul');
+        ul.className = 'timeline';
+        items.forEach(ev => {
+          const li = document.createElement('li');
+          li.innerHTML = `<strong>${ev.lead_name || 'Lead'}</strong> · ${ev.event_type.replace(/_/g,' ')}
+            <div class="muted">${formatInTz(ev.start_at)} · ${ev.status} · ${ev.priority || 'normal'}</div>
+            <div>${ev.title || ''}</div>`;
+          li.style.cursor = 'pointer';
+          li.onclick = () => openEvent(ev);
+          ul.appendChild(li);
+        });
+        agenda.appendChild(ul);
+        return;
+      }
+      grid.style.display = 'grid';
+      agenda.style.display = 'none';
+      ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(n => {
+        const h = document.createElement('div'); h.className = 'cal-head'; h.textContent = n; grid.appendChild(h);
+      });
+      if (currentView === 'day') {
+        document.getElementById('range-label').textContent = cursor.toLocaleDateString(undefined, { weekday:'long', month:'long', day:'numeric', year:'numeric' });
+        for (let i=0;i<7;i++) {
+          const d = new Date(cursor); d.setDate(cursor.getDate() - cursor.getDay() + i);
+          grid.appendChild(renderDayCell(d, ymd(d) !== ymd(cursor)));
+        }
+        return;
+      }
+      if (currentView === 'week') {
+        const start = new Date(cursor); start.setDate(cursor.getDate() - cursor.getDay());
+        const end = new Date(start); end.setDate(start.getDate()+6);
+        document.getElementById('range-label').textContent =
+          `${start.toLocaleDateString(undefined,{month:'short',day:'numeric'})} – ${end.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})}`;
+        for (let i=0;i<7;i++) { const d = new Date(start); d.setDate(start.getDate()+i); grid.appendChild(renderDayCell(d,false)); }
+        return;
+      }
+      const year = cursor.getFullYear(), month = cursor.getMonth();
+      document.getElementById('range-label').textContent = cursor.toLocaleDateString(undefined,{month:'long',year:'numeric'});
+      const first = new Date(year, month, 1);
+      const start = new Date(first); start.setDate(1 - first.getDay());
+      for (let i=0;i<42;i++) { const d = new Date(start); d.setDate(start.getDate()+i); grid.appendChild(renderDayCell(d, d.getMonth()!==month)); }
+    }
+    function openEvent(ev) {
+      document.getElementById('ev-title').textContent = ev.title || 'Event';
+      document.getElementById('ev-body').innerHTML = `
+        <div><strong>Lead:</strong> ${ev.lead_id ? `<a href="/crm/leads/${ev.lead_id}">${ev.lead_name || 'Lead'}</a>` : '—'}</div>
+        <div><strong>Type:</strong> ${String(ev.event_type||'').replace(/_/g,' ')}</div>
+        <div><strong>When:</strong> ${formatInTz(ev.start_at)}</div>
+        <div><strong>Status:</strong> ${ev.status || '—'} · <strong>Priority:</strong> ${ev.priority || 'normal'}</div>
+        <div><strong>Assigned:</strong> ${ev.assigned_agent || '—'}</div>
+        <div class="muted" style="margin-top:8px;">Event ID: ${ev.id}</div>`;
+      const actions = document.getElementById('ev-actions');
+      actions.innerHTML = '';
+      if (ev.lead_id) {
+        actions.innerHTML += `<a class="btn" href="/crm/leads/${ev.lead_id}">Open lead</a>`;
+        actions.innerHTML += `<a class="btn secondary" href="/#sms">Draft SMS</a>`;
+        if (ev.phone_number) actions.innerHTML += `<a class="btn secondary" href="tel:${ev.phone_number}">Call</a>`;
+      }
+      if (ev.source_type === 'follow_up' && ev.status === 'pending') {
+        const completeBtn = document.createElement('button');
+        completeBtn.className = 'btn'; completeBtn.textContent = 'Mark complete';
+        completeBtn.onclick = () => completeFollowUp(ev.source_id);
+        actions.appendChild(completeBtn);
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'btn secondary'; cancelBtn.textContent = 'Cancel follow-up';
+        cancelBtn.onclick = () => openCancelModal(ev.source_id);
+        actions.appendChild(cancelBtn);
+        const resched = document.createElement('button');
+        resched.className = 'btn secondary'; resched.textContent = 'Reschedule';
+        resched.onclick = () => rescheduleFollowUp(ev.source_id);
+        actions.appendChild(resched);
+      }
+      if (ev.source_type === 'task' && ['open','in_progress'].includes(ev.status)) {
+        const completeBtn = document.createElement('button');
+        completeBtn.className = 'btn'; completeBtn.textContent = 'Mark complete';
+        completeBtn.onclick = () => completeTask(ev.source_id);
+        actions.appendChild(completeBtn);
+      }
+      if (ev.source_type === 'appointment' && ev.lead_id) {
+        actions.innerHTML += `<a class="btn secondary" href="/crm/leads/${ev.lead_id}#appt-panel">Record outcome</a>`;
+      }
+      document.getElementById('event-modal').style.display = 'flex';
+    }
+    function closeEventModal() { document.getElementById('event-modal').style.display = 'none'; }
+    function openCancelModal(id) {
+      document.getElementById('cancel-follow-up-id').value = id;
+      document.getElementById('cancel-reason-code').value = '';
+      document.getElementById('cancel-reason-notes').value = '';
+      toggleCancelNotes();
+      document.getElementById('cancel-modal').style.display = 'flex';
+    }
+    function closeCancelModal() { document.getElementById('cancel-modal').style.display = 'none'; }
+    function toggleCancelNotes() {
+      const code = document.getElementById('cancel-reason-code').value;
+      document.getElementById('dnc-hint').style.display = code === 'lead_requested_no_further_contact' ? 'block' : 'none';
+    }
+    async function submitCancelFollowUp() {
+      const id = document.getElementById('cancel-follow-up-id').value;
+      const code = document.getElementById('cancel-reason-code').value;
+      const notes = document.getElementById('cancel-reason-notes').value;
+      if (!code) return showFlash('Select a cancellation reason.', true);
+      if (code === 'other' && !notes.trim()) return showFlash('Please explain why (Other).', true);
+      const res = await fetch(`/api/crm/follow-ups/${id}/cancel`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ cancel_reason_code: code, cancel_reason_notes: notes }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return showFlash(data.error || 'Could not cancel.', true);
+      showFlash(data.duplicate ? 'Follow-up already cancelled.' : 'Follow-up cancelled.');
+      if (data.offer_dnc) showFlash('Follow-up cancelled. Lead was not opted out — use Do Not Contact separately if needed.');
+      closeCancelModal(); closeEventModal();
+      setTimeout(() => location.reload(), 600);
+    }
+    async function completeFollowUp(id) {
+      const res = await fetch(`/api/crm/follow-ups/${id}/complete`, {method:'POST'});
+      if (!res.ok) return showFlash('Could not complete.', true);
+      location.reload();
+    }
+    async function completeTask(id) {
+      const res = await fetch(`/api/crm/tasks/${id}/complete`, {method:'POST'});
+      if (!res.ok) return showFlash('Could not complete task.', true);
+      location.reload();
+    }
+    async function rescheduleFollowUp(id) {
+      const localDue = window.prompt('New local date/time (YYYY-MM-DDTHH:MM)');
+      if (!localDue) return;
+      const due = new Date(localDue);
+      if (Number.isNaN(due.getTime())) return showFlash('Invalid date.', true);
+      const res = await fetch(`/api/crm/follow-ups/${id}`, {
+        method:'PATCH', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ due_at: due.toISOString(), local_due_label: formatInTz(due.toISOString()) }),
+      });
+      const data = await res.json().catch(()=>({}));
+      if (!res.ok) return showFlash(data.error || 'Could not reschedule.', true);
+      location.reload();
+    }
+    async function applyFilters() {
+      const params = new URLSearchParams();
+      const type = document.getElementById('filter-type').value;
+      if (type) params.set('event_types', type);
+      if (document.getElementById('filter-completed').checked) params.set('include_completed', '1');
+      if (document.getElementById('filter-cancelled').checked) params.set('include_cancelled', '1');
+      const leadStatus = document.getElementById('filter-lead-status').value;
+      if (leadStatus) params.set('lead_status', leadStatus);
+      const priority = document.getElementById('filter-priority').value;
+      if (priority) params.set('priorities', priority);
+      params.set('tz_offset_minutes', String(new Date().getTimezoneOffset()));
+      params.set('local_date', ymd(new Date()));
+      const res = await fetch(`/api/crm/calendar/events?${params}`);
+      const data = await res.json();
+      events = data.events || [];
+      render();
+    }
+    async function saveTimezone() {
+      const tz = document.getElementById('tz-select').value;
+      const profileRes = await fetch('/account/business-profile');
+      const profileData = await profileRes.json().catch(()=>({}));
+      const profile = profileData.profile || {};
+      const res = await fetch('/account/business-profile', {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          agent_name: profile.agent_name || '',
+          brokerage_name: profile.brokerage_name || '',
+          company_name: profile.company_name || '',
+          timezone: tz,
+        }),
+      });
+      if (!res.ok) return showFlash('Could not save timezone.', true);
+      location.reload();
+    }
+    async function doLogout() { await fetch('/logout',{method:'POST'}); location.href='/'; }
+    document.getElementById('event-modal').onclick = (e) => { if (e.target.id==='event-modal') closeEventModal(); };
+    document.getElementById('cancel-modal').onclick = (e) => { if (e.target.id==='cancel-modal') closeCancelModal(); };
+    render();
+  </script>
+</body>
+</html>

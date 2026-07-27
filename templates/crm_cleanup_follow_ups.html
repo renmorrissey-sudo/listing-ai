@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cleanup duplicate follow-ups - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+</head>
+<body>
+  <header>
+    <div>
+      <div class="logo">TopAI <span>Real Estate Tools</span></div>
+      <div class="tagline">Duplicate follow-up cleanup</div>
+    </div>
+    <div class="subscriber-info">
+      <span class="subscriber-email">&#10003; {{ email }}</span>
+      <button class="logout-btn" type="button" onclick="fetch('/logout',{method:'POST'}).then(()=>location.href='/')">Sign out</button>
+    </div>
+  </header>
+  <div class="public-nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/crm/leads">Leads</a>
+    <a href="/crm/calendar">Leads Calendar</a>
+    <a href="/crm/follow-ups">Follow-ups</a>
+    <a href="/crm/tasks">Tasks</a>
+  </div>
+  <main>
+    <h1>Cleanup duplicate follow-ups</h1>
+    <p class="muted">
+      Finds open follow-ups with the same lead, normalized reason, and due minute.
+      Keeps the oldest row and cancels duplicates with reason <strong>Duplicate follow-up</strong>.
+      Rows are never deleted.
+    </p>
+    <div class="card">
+      <p><strong>Duplicate groups:</strong> {{ report.groups|length }}</p>
+      <p><strong>Duplicate rows:</strong> {{ report.duplicate_count }}</p>
+      {% if report.cancelled_ids %}
+      <p><strong>Cancelled this run:</strong> {{ report.cancelled_ids|length }}</p>
+      {% endif %}
+      {% if report.groups %}
+      <table>
+        <thead><tr><th>Lead</th><th>Reason</th><th>Due</th><th>Keep</th><th>Cancel</th></tr></thead>
+        <tbody>
+          {% for g in report.groups %}
+          <tr>
+            <td><a href="/crm/leads/{{ g.lead_id }}">{{ g.lead_id }}</a></td>
+            <td>{{ g.reason }}</td>
+            <td class="muted">{{ (g.due_at or '')[:16] }}</td>
+            <td>{{ g.keep_id }}</td>
+            <td>{{ g.duplicate_ids|join(', ') }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">No duplicate open follow-ups found for your account.</p>
+      {% endif %}
+      <form method="POST" style="margin-top:16px;" class="row">
+        {% if report.dry_run and report.duplicate_count %}
+        <input type="hidden" name="dry_run" value="0" />
+        <button class="btn" type="submit">Cancel {{ report.duplicate_count }} duplicates</button>
+        {% endif %}
+        <a class="btn secondary" href="/crm/tools/cleanup-duplicate-follow-ups">Refresh dry-run</a>
+        <a class="btn secondary" href="/crm/follow-ups">Back to follow-ups</a>
+      </form>
+    </div>
+  </main>
+</body>
+</html>
