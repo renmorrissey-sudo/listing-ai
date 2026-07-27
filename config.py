@@ -100,6 +100,8 @@ TWILIO_API_KEY_SECRET = _env_strip("TWILIO_API_KEY_SECRET")
 # Used for outbound SMS (temporary diagnostic) and webhook RequestValidator.
 TWILIO_AUTH_TOKEN = _env_strip("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = _env_strip("TWILIO_PHONE_NUMBER") or _env_strip("SMS_FROM_NUMBER")
+# Preferred for US A2P 10DLC: associate sends with an approved Messaging Service / campaign.
+TWILIO_MESSAGING_SERVICE_SID = _env_strip("TWILIO_MESSAGING_SERVICE_SID")
 SMS_DAILY_LIMIT = int(_env("SMS_DAILY_LIMIT", "50"))
 
 # Skip subscription checks locally when Stripe is not configured.

@@ -357,6 +357,7 @@
           <span>I confirm this lead consented to SMS contact and I am responsible for TCPA, DNC, opt-out, and brokerage compliance.</span>
         </label>
         <div class="error-msg" id="sms-error"></div>
+        <div id="sms-twilio-status" class="notice" style="margin-top:12px;font-size:12px;display:none;" aria-live="polite"></div>
         <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
           <button type="button" class="btn-generate" id="sms-generate-btn" style="flex:1;"><div class="spinner" id="sms-generate-spinner"></div><span id="sms-generate-label">Generate SMS</span></button>
           <button type="submit" class="btn-generate" id="sms-send-btn" style="flex:1;"><div class="spinner" id="sms-send-spinner"></div><span id="sms-send-label">Send SMS</span></button>
@@ -453,9 +454,46 @@
   async function fetchJson(url, options = {}) {
     const res = await fetch(url, options);
     if (res.status === 401) { handle401(); return null; }
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Something went wrong.');
+    let data = {};
+    try {
+      data = await res.json();
+    } catch (_err) {
+      data = {};
+    }
+    if (!res.ok) {
+      const msg = data.error || data.message || 'Something went wrong. Please try again.';
+      const err = new Error(msg);
+      err.providerCode = data.provider_code;
+      err.payload = data;
+      throw err;
+    }
     return data;
+  }
+
+  function renderTwilioStatus(status) {
+    const panel = document.getElementById('sms-twilio-status');
+    if (!panel || !status) return;
+    const yesNo = (v) => (v ? 'yes' : 'no');
+    const a2pLabels = {
+      blocked_unregistered: 'Blocked — number not on an approved A2P campaign (Twilio 30034)',
+      pending_approval: 'Compliance / campaign approval still pending',
+      messaging_service_configured_verify_in_twilio: 'Messaging Service configured — confirm A2P campaign is approved in Twilio Console',
+      from_number_configured_verify_a2p_in_twilio: 'Sending number configured — confirm A2P 10DLC registration in Twilio Console',
+      incomplete_configuration: 'Incomplete Twilio configuration',
+      unknown: 'Unknown — verify A2P readiness in Twilio Console',
+    };
+    const rows = [
+      `Twilio credentials configured: ${yesNo(status.credentials_configured)}`,
+      `Sending phone number configured: ${yesNo(status.sending_phone_configured)}`,
+      `Messaging Service SID configured: ${yesNo(status.messaging_service_configured)}`,
+      `Latest Twilio send error code: ${status.latest_twilio_error_code != null ? status.latest_twilio_error_code : 'none'}`,
+      `A2P readiness: ${a2pLabels[status.a2p_readiness] || status.a2p_readiness || 'unknown'}`,
+    ];
+    if (status.latest_twilio_error_message) {
+      rows.push(`Latest error: ${status.latest_twilio_error_message}`);
+    }
+    panel.innerHTML = `<strong>Twilio status</strong><br/>${rows.map(escapeHtml).join('<br/>')}`;
+    panel.style.display = 'block';
   }
 
   function escapeHtml(value) {
@@ -649,13 +687,16 @@
       if (!data) return;
       if (note) {
         const sendNote = data.send_configured
-          ? 'Twilio SMS sending is configured.'
+          ? (data.twilio_status && data.twilio_status.uses_messaging_service
+              ? 'Twilio SMS sending is configured via Messaging Service.'
+              : 'Twilio SMS sending is configured.')
           : 'Twilio is not configured yet. You can still generate and save SMS drafts.';
         const coachNote = data.coach_configured
           ? ' Claude inbound coaching is enabled via ANTHROPIC_API_KEY.'
           : ' Add ANTHROPIC_API_KEY in Railway to enable Claude inbound coaching.';
         note.textContent = sendNote + coachNote;
       }
+      if (data.twilio_status) renderTwilioStatus(data.twilio_status);
       if (!data.messages.length) {
         history.style.display = 'none';
         placeholder.style.display = 'flex';
@@ -1188,6 +1229,10 @@
     } catch (err) {
       errEl.textContent = err.message;
       errEl.style.display = 'block';
+      try {
+        const status = await fetchJson('/sms/status', {cache: 'no-store'});
+        if (status) renderTwilioStatus(status);
+      } catch (_ignore) {}
     }
     btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Send SMS';
   });

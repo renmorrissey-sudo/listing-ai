@@ -19,7 +19,13 @@ import sms_coach
 from crm import crm_bp
 from crm_constants import status_label
 from sms_prompts import build_inbound_reply_analysis_prompt, build_sms_prompt
-from sms_provider import SmsProviderError, get_sms_provider, sms_status_callback_url
+from sms_provider import (
+    SmsProviderError,
+    get_sms_provider,
+    parse_provider_code_from_error_message,
+    redact_secrets,
+    sms_status_callback_url,
+)
 from sms_validation import (
     validate_e164_phone,
     validate_sms_generate_payload,
@@ -743,9 +749,18 @@ def sms_messages():
     user = auth.get_current_user()
     messages = db.list_sms_messages(user["id"])
     provider = get_sms_provider()
+    latest = db.latest_failed_sms_error(user["id"])
+    latest_code = parse_provider_code_from_error_message(
+        (latest or {}).get("error_message")
+    )
+    status = provider.configuration_status(
+        latest_error_code=latest_code,
+        latest_error_message=(latest or {}).get("error_message"),
+    )
     return jsonify({
         "send_configured": provider.is_configured(),
         "coach_configured": sms_coach.is_configured(),
+        "twilio_status": status,
         "messages": [
             {
                 "id": m["id"],
@@ -764,6 +779,24 @@ def sms_messages():
             for m in messages
         ],
     })
+
+
+@app.route("/sms/status")
+@auth.subscription_required
+def sms_status():
+    """Account-owner Twilio configuration / latest send error (no secrets)."""
+    user = auth.get_current_user()
+    provider = get_sms_provider()
+    latest = db.latest_failed_sms_error(user["id"])
+    latest_code = parse_provider_code_from_error_message(
+        (latest or {}).get("error_message")
+    )
+    return jsonify(
+        provider.configuration_status(
+            latest_error_code=latest_code,
+            latest_error_message=(latest or {}).get("error_message"),
+        )
+    )
 
 
 @app.route("/sms/leads")
@@ -999,9 +1032,19 @@ def send_sms_suggestion(insight_id):
             "sent_at": datetime.now(timezone.utc).isoformat(),
         }), 201
     except SmsProviderError as exc:
-        logger.warning("Suggested SMS send failed code=%s", getattr(exc, "provider_code", None))
+        logger.warning(
+            "Suggested SMS send failed code=%s http=%s detail=%s",
+            getattr(exc, "provider_code", None),
+            getattr(exc, "status_code", None),
+            redact_secrets(str(exc)),
+        )
         db.update_sms_message_send_result(message_id, status="failed", error_message=str(exc))
-        return jsonify({"error": str(exc)}), 503
+        return jsonify(exc.to_public_dict() | {"id": message_id, "status": "failed"}), 503
+    except Exception:
+        logger.exception("Suggested SMS send failed with unexpected error")
+        safe = "SMS could not be sent due to an internal application error."
+        db.update_sms_message_send_result(message_id, status="failed", error_message=safe)
+        return jsonify({"error": safe, "id": message_id, "status": "failed"}), 500
 
 
 @app.route("/sms/generate", methods=["POST"])
@@ -1119,9 +1162,19 @@ def send_sms_message():
             "send_configured": True,
         }), 201
     except SmsProviderError as exc:
-        logger.warning("SMS send failed code=%s", getattr(exc, "provider_code", None))
+        logger.warning(
+            "SMS send failed code=%s http=%s detail=%s",
+            getattr(exc, "provider_code", None),
+            getattr(exc, "status_code", None),
+            redact_secrets(str(exc)),
+        )
         db.update_sms_message_send_result(message_id, status="failed", error_message=str(exc))
-        return jsonify({"error": str(exc), "id": message_id, "status": "failed"}), 503
+        return jsonify(exc.to_public_dict() | {"id": message_id, "status": "failed"}), 503
+    except Exception:
+        logger.exception("SMS send failed with unexpected error")
+        safe = "SMS could not be sent due to an internal application error."
+        db.update_sms_message_send_result(message_id, status="failed", error_message=safe)
+        return jsonify({"error": safe, "id": message_id, "status": "failed"}), 500
 
 
 @app.route("/sms/test", methods=["POST"])
@@ -1172,9 +1225,19 @@ def sms_test_send():
             "to": cleaned["to"],
         }), 201
     except SmsProviderError as exc:
-        logger.warning("SMS test send failed code=%s", getattr(exc, "provider_code", None))
+        logger.warning(
+            "SMS test send failed code=%s http=%s detail=%s",
+            getattr(exc, "provider_code", None),
+            getattr(exc, "status_code", None),
+            redact_secrets(str(exc)),
+        )
         db.update_sms_message_send_result(message_id, status="failed", error_message=str(exc))
-        return jsonify({"ok": False, "error": str(exc)}), 503
+        return jsonify(exc.to_public_dict() | {"ok": False}), 503
+    except Exception:
+        logger.exception("SMS test send failed with unexpected error")
+        safe = "SMS could not be sent due to an internal application error."
+        db.update_sms_message_send_result(message_id, status="failed", error_message=safe)
+        return jsonify({"ok": False, "error": safe}), 500
 
 
 @app.route("/webhook/sms/inbound", methods=["POST"])

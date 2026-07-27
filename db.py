@@ -1034,6 +1034,25 @@ def list_sms_messages(user_id, limit=20):
         return [dict(row) for row in rows]
 
 
+def latest_failed_sms_error(user_id):
+    """Return the most recent failed outbound SMS error for this account (no secrets)."""
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT error_message, status, created_at, sent_at
+            FROM sms_messages
+            WHERE user_id = ?
+              AND status = 'failed'
+              AND error_message IS NOT NULL
+              AND TRIM(error_message) != ''
+            ORDER BY COALESCE(sent_at, created_at) DESC, id DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def list_lead_messages(user_id, lead_id, limit=100):
     with get_db() as conn:
         rows = conn.execute(
