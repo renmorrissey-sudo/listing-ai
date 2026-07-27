@@ -142,35 +142,75 @@ def apply_voice_call_webhook_to_lead(user_id, call_row, normalized):
     if not lead:
         return None
 
-    status = (normalized.get("status") or call_row.get("status") or "").lower()
-    outcome = normalized.get("outcome") or call_row.get("outcome")
-    summary = normalized.get("summary") or call_row.get("summary")
-    duration = normalized.get("duration")
+    # Re-load call so recording fields persisted by the webhook update are included.
+    fresh_call = db.get_voice_call(call_row.get("id"), user_id) or call_row
+
+    status = (normalized.get("status") or fresh_call.get("status") or "").lower()
+    outcome = normalized.get("outcome") or fresh_call.get("outcome")
+    summary = normalized.get("summary") or fresh_call.get("summary")
+    duration = (
+        normalized.get("recording_duration_seconds")
+        or normalized.get("duration")
+        or fresh_call.get("recording_duration_seconds")
+    )
     appointment_requested = bool(normalized.get("appointment_requested"))
-    provider_call_id = normalized.get("provider_call_id") or call_row.get("provider_call_id")
+    provider_call_id = normalized.get("provider_call_id") or fresh_call.get("provider_call_id")
     follow_up_at = normalized.get("follow_up_at")
+    recording_status = (
+        normalized.get("recording_status")
+        or fresh_call.get("recording_status")
+    )
+    has_recording = db.voice_call_has_recording(fresh_call) or bool(
+        normalized.get("recording_url") or normalized.get("stereo_recording_url")
+    )
+    if has_recording:
+        recording_status = "available"
+
+    event_type = "voice_call_completed" if status == "completed" else "voice_call_updated"
+    activity_summary = (
+        "Voice call completed"
+        if status == "completed"
+        else (
+            f"AI call {status or 'updated'}"
+            + (f": {(summary or outcome or '')[:120]}" if (summary or outcome) else "")
+        )
+    )
 
     payload = {
-        "voice_call_id": call_row.get("id"),
+        "voice_call_id": fresh_call.get("id"),
         "provider_call_id": provider_call_id,
-        "status": status or call_row.get("status"),
+        "status": status or fresh_call.get("status"),
         "duration": duration,
+        "recording_duration_seconds": duration,
         "summary": summary,
         "outcome": outcome,
         "appointment_requested": appointment_requested,
         "follow_up_at": follow_up_at,
+        "has_recording": has_recording,
+        "recording_status": recording_status,
+        "has_transcript": bool(normalized.get("transcript") or fresh_call.get("transcript")),
+        "completed_at": fresh_call.get("completed_at"),
         "recommended_next_action": normalized.get("recommended_next_action")
         or ("Schedule follow-up appointment" if appointment_requested else None),
     }
-    crm_db.add_lead_activity(
-        lead_id,
-        user_id,
-        "voice_call_completed" if status == "completed" else "voice_call_updated",
-        f"AI call {status or 'updated'}"
-        + (f": {(summary or outcome or '')[:120]}" if (summary or outcome) else ""),
-        payload,
-        actor_user_id=user_id,
+
+    # Idempotent: Vapi may retry webhooks — update existing activity instead of duplicating.
+    existing = crm_db.find_lead_activity_for_voice_call(
+        user_id, lead_id, fresh_call.get("id"), event_type
     )
+    if existing:
+        crm_db.update_lead_activity(
+            user_id, existing["id"], summary=activity_summary, payload=payload
+        )
+    else:
+        crm_db.add_lead_activity(
+            lead_id,
+            user_id,
+            event_type,
+            activity_summary,
+            payload,
+            actor_user_id=user_id,
+        )
 
     db.touch_lead_call_timestamps(lead_id, user_id)
     if summary or outcome:

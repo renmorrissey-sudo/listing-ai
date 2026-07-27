@@ -71,6 +71,7 @@ def test_empty_database_bootstrap_creates_baseline_tables(empty_sqlite_db):
         "002_safe_additive_columns",
         "003_user_business_profile",
         "004_voice_call_lead_link",
+        "005_voice_call_recording_fields",
     }
 
 
@@ -82,11 +83,13 @@ def test_migration_order_baseline_before_additive(empty_sqlite_db, monkeypatch):
     m2 = import_module("migrations.versions.002_safe_additive_columns")
     m3 = import_module("migrations.versions.003_user_business_profile")
     m4 = import_module("migrations.versions.004_voice_call_lead_link")
+    m5 = import_module("migrations.versions.005_voice_call_recording_fields")
 
     real_sq1 = m1.upgrade_sqlite
     real_sq2 = m2.upgrade_sqlite
     real_sq3 = m3.upgrade_sqlite
     real_sq4 = m4.upgrade_sqlite
+    real_sq5 = m5.upgrade_sqlite
 
     def wrap(name, real):
         def _inner(conn):
@@ -99,9 +102,10 @@ def test_migration_order_baseline_before_additive(empty_sqlite_db, monkeypatch):
     monkeypatch.setattr(m2, "upgrade_sqlite", wrap("002", real_sq2))
     monkeypatch.setattr(m3, "upgrade_sqlite", wrap("003", real_sq3))
     monkeypatch.setattr(m4, "upgrade_sqlite", wrap("004", real_sq4))
+    monkeypatch.setattr(m5, "upgrade_sqlite", wrap("005", real_sq5))
 
     apply_pending_migrations()
-    assert order == ["001", "002", "003", "004"]
+    assert order == ["001", "002", "003", "004", "005"]
 
 
 def test_false_001_stamp_without_users_is_repaired(empty_sqlite_db):
@@ -142,6 +146,7 @@ def test_false_001_stamp_without_users_is_repaired(empty_sqlite_db):
         "002_safe_additive_columns",
         "003_user_business_profile",
         "004_voice_call_lead_link",
+        "005_voice_call_recording_fields",
     }
 
 
@@ -254,4 +259,5 @@ def test_empty_postgres_bootstrap(monkeypatch):
         "002_safe_additive_columns",
         "003_user_business_profile",
         "004_voice_call_lead_link",
+        "005_voice_call_recording_fields",
     }

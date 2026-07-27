@@ -61,6 +61,54 @@ def list_lead_activities(user_id, lead_id, limit=100):
         return [dict(r) for r in rows]
 
 
+def find_lead_activity_for_voice_call(user_id, lead_id, voice_call_id, event_type):
+    """Return the newest matching activity for a voice call event, if any."""
+    if not voice_call_id:
+        return None
+    voice_call_id = int(voice_call_id)
+    for activity in list_lead_activities(user_id, lead_id, limit=200):
+        if activity.get("event_type") != event_type:
+            continue
+        try:
+            payload = json.loads(activity.get("payload_json") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+        try:
+            if int(payload.get("voice_call_id") or 0) == voice_call_id:
+                return activity
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def update_lead_activity(user_id, activity_id, summary=None, payload=None):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM lead_activities WHERE id = ? AND user_id = ?",
+            (activity_id, user_id),
+        ).fetchone()
+        if not row:
+            return None
+        new_summary = summary if summary is not None else row["summary"]
+        if payload is not None:
+            new_payload = json.dumps(payload)[:4000]
+        else:
+            new_payload = row["payload_json"]
+        conn.execute(
+            """
+            UPDATE lead_activities
+            SET summary = ?, payload_json = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (new_summary, new_payload, activity_id, user_id),
+        )
+        updated = conn.execute(
+            "SELECT * FROM lead_activities WHERE id = ? AND user_id = ?",
+            (activity_id, user_id),
+        ).fetchone()
+        return dict(updated) if updated else None
+
+
 def set_lead_status(user_id, lead_id, new_status, actor_user_id=None, from_automation=False):
     new_status = normalize_lead_status(new_status)
     with get_db() as conn:

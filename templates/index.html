@@ -428,6 +428,33 @@
     }[char]));
   }
 
+  function formatCallDuration(seconds) {
+    const total = Number(seconds);
+    if (!Number.isFinite(total) || total < 0) return '';
+    const minutes = Math.floor(total / 60);
+    const secs = Math.floor(total % 60);
+    if (minutes && secs) return `${minutes} min ${secs} sec`;
+    if (minutes) return `${minutes} min`;
+    return `${secs} sec`;
+  }
+
+  async function viewVoiceTranscript(callId) {
+    try {
+      const data = await fetchJson(`/api/voice-calls/${callId}/transcript`, {cache: 'no-store'});
+      if (!data) return;
+      const win = window.open('', '_blank', 'noopener,noreferrer,width=720,height=640');
+      if (!win) {
+        alert('Allow pop-ups to view the transcript.');
+        return;
+      }
+      win.document.write('<pre style="white-space:pre-wrap;font:14px/1.5 system-ui,sans-serif;padding:16px;"></pre>');
+      win.document.title = 'Call transcript';
+      win.document.querySelector('pre').textContent = data.transcript || '';
+    } catch (err) {
+      alert(err.message || 'Transcript unavailable');
+    }
+  }
+
   async function loadVoiceData() {
     await Promise.all([loadBusinessProfile(), loadVoicePersonas(), loadVoiceLeads(), loadVoiceCalls()]);
   }
@@ -804,13 +831,33 @@
         return;
       }
       history.innerHTML = data.calls.map(call => {
-        const recording = call.recording_url ? `<div><a class="call-link" href="${escapeHtml(call.recording_url)}" target="_blank">Recording</a></div>` : '';
         const appointment = call.appointment_requested ? ' | Appointment requested' : '';
+        const duration = formatCallDuration(call.recording_duration_seconds);
+        const when = call.completed_at || call.created_at || '';
+        let recordingBlock = '';
+        if (call.recording_url) {
+          recordingBlock = `
+            <div class="voice-recording" style="margin-top:8px;">
+              <audio controls preload="none" src="${escapeHtml(call.recording_url)}" style="width:100%;max-width:360px;"></audio>
+              <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;">
+                <a class="call-link" href="${escapeHtml(call.recording_url)}" target="_blank" rel="noopener">Open recording</a>
+                ${call.transcript_url ? `<button type="button" class="call-link" style="background:none;border:none;padding:0;cursor:pointer;font:inherit;" onclick="viewVoiceTranscript(${call.id})">View transcript</button>` : ''}
+              </div>
+            </div>`;
+        } else if (call.status === 'completed' || call.recording_status) {
+          const label = call.recording_status === 'processing'
+            ? 'Recording processing'
+            : (call.recording_status === 'not_enabled'
+              ? 'Recording was not enabled for this call'
+              : 'Recording unavailable');
+          recordingBlock = `<div class="call-meta" style="margin-top:6px;">${label}</div>`;
+        }
         return `<div class="call-item">
           <strong>${escapeHtml(call.lead_name || 'Lead')} - ${escapeHtml(call.status)}</strong>
           <div class="call-meta">${escapeHtml(call.persona_name || 'AI Calling Assistant')} | ${escapeHtml(call.phone_number)}${appointment}</div>
+          <div class="call-meta">${duration ? escapeHtml(duration) + ' · ' : ''}${escapeHtml((when || '').slice(0, 16).replace('T', ' '))}${when ? ' UTC' : ''}</div>
           <div class="call-summary">${escapeHtml(call.summary || call.outcome || 'Call started. Summary will appear after the provider webhook is received.')}</div>
-          ${recording}
+          ${recordingBlock}
         </div>`;
       }).join('');
       placeholder.style.display = 'none';

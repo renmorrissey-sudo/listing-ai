@@ -207,35 +207,102 @@ def get_voice_provider():
     return VapiVoiceProvider()
 
 
-def _extract_recording_url(message, payload, call, artifact):
-    recording = artifact.get("recording") or {}
+def _recording_url_from_value(value):
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("url", "combinedUrl", "stereoUrl", "monoUrl"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    return None
+
+
+def _extract_recording_urls(message, payload, call, artifact):
+    """Return (mono_or_primary_url, stereo_url) from a Vapi end-of-call payload."""
+    recording = artifact.get("recording")
+    mono_url = None
+    stereo_url = None
+
     if isinstance(recording, str):
-        recording_url = recording
+        mono_url = recording.strip() or None
     elif isinstance(recording, dict):
         mono = recording.get("mono")
         stereo = recording.get("stereo")
-        recording_url = (
-            recording.get("url")
-            or recording.get("stereoUrl")
-            or recording.get("monoUrl")
-            or (mono if isinstance(mono, str) else None)
-            or (stereo if isinstance(stereo, str) else None)
-            or (mono.get("combinedUrl") if isinstance(mono, dict) else None)
-            or (stereo.get("combinedUrl") if isinstance(stereo, dict) else None)
+        mono_url = (
+            _recording_url_from_value(recording.get("url"))
+            or _recording_url_from_value(recording.get("monoUrl"))
+            or _recording_url_from_value(mono)
+            or _recording_url_from_value(recording.get("combinedUrl"))
         )
-    else:
-        recording_url = None
+        stereo_url = (
+            _recording_url_from_value(recording.get("stereoUrl"))
+            or _recording_url_from_value(stereo)
+            or _recording_url_from_value(artifact.get("stereoRecordingUrl"))
+        )
 
-    return (
-        recording_url
-        or artifact.get("recordingUrl")
-        or artifact.get("stereoRecordingUrl")
-        or message.get("recordingUrl")
-        or message.get("stereoRecordingUrl")
-        or message.get("recording_url")
-        or payload.get("recording_url")
-        or call.get("recordingUrl")
+    mono_url = (
+        mono_url
+        or _recording_url_from_value(artifact.get("recordingUrl"))
+        or _recording_url_from_value(message.get("recordingUrl"))
+        or _recording_url_from_value(message.get("recording_url"))
+        or _recording_url_from_value(payload.get("recording_url"))
+        or _recording_url_from_value(call.get("recordingUrl"))
     )
+    stereo_url = (
+        stereo_url
+        or _recording_url_from_value(artifact.get("stereoRecordingUrl"))
+        or _recording_url_from_value(message.get("stereoRecordingUrl"))
+        or _recording_url_from_value(call.get("stereoRecordingUrl"))
+    )
+
+    # Prefer mono for primary playback; fall back to stereo if mono missing.
+    primary = mono_url or stereo_url
+    return primary, stereo_url
+
+
+def _extract_transcript_url(message, payload, call, artifact):
+    for candidate in (
+        artifact.get("transcriptUrl"),
+        message.get("transcriptUrl"),
+        call.get("transcriptUrl"),
+        payload.get("transcript_url"),
+    ):
+        url = _recording_url_from_value(candidate)
+        if url:
+            return url
+    return None
+
+
+def _parse_duration_seconds(value):
+    if value is None or value == "":
+        return None
+    try:
+        seconds = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
+
+
+def _infer_recording_status(event_type, recording_url, stereo_url, artifact, message):
+    if recording_url or stereo_url:
+        return "available"
+    if event_type not in ("end-of-call-report", "call_ended", "call_analyzed"):
+        return None
+
+    recording_enabled = message.get("recordingEnabled")
+    if recording_enabled is False or (isinstance(artifact, dict) and artifact.get("recordingEnabled") is False):
+        return "not_enabled"
+
+    # Explicit empty recording artifact → not enabled / not produced.
+    if isinstance(artifact, dict) and "recording" in artifact:
+        recording = artifact.get("recording")
+        if recording in (None, "", {}, []):
+            if not artifact.get("recordingUrl") and not artifact.get("stereoRecordingUrl"):
+                return "not_enabled"
+
+    # Completed call with no URL yet — may still be processing on Vapi's side.
+    return "processing"
 
 
 def normalize_voice_webhook(payload):
@@ -257,7 +324,8 @@ def normalize_voice_webhook(payload):
     if not transcript and isinstance(message.get("transcript"), str):
         transcript = message.get("transcript")
 
-    recording_url = _extract_recording_url(message, payload, call, artifact)
+    recording_url, stereo_recording_url = _extract_recording_urls(message, payload, call, artifact)
+    transcript_url = _extract_transcript_url(message, payload, call, artifact)
 
     summary = (
         (message.get("analysis") or {}).get("summary")
@@ -283,12 +351,15 @@ def normalize_voice_webhook(payload):
 
     status = "completed" if event_type in ("end-of-call-report", "call_ended", "call_analyzed") else None
 
-    duration = (
+    duration = _parse_duration_seconds(
         message.get("durationSeconds")
         or message.get("duration")
         or call.get("durationSeconds")
         or call.get("duration")
         or payload.get("duration")
+    )
+    recording_status = _infer_recording_status(
+        event_type, recording_url, stereo_recording_url, artifact, message
     )
     follow_up_at = (
         (message.get("analysis") or {}).get("followUpAt")
@@ -307,8 +378,12 @@ def normalize_voice_webhook(payload):
         "status": status,
         "outcome": outcome,
         "transcript": transcript,
+        "transcript_url": transcript_url,
         "summary": summary,
         "recording_url": recording_url,
+        "stereo_recording_url": stereo_recording_url,
+        "recording_duration_seconds": duration,
+        "recording_status": recording_status,
         "appointment_requested": appointment_requested,
         "duration": duration,
         "follow_up_at": follow_up_at,

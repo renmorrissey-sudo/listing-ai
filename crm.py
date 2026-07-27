@@ -29,6 +29,104 @@ def _user_or_redirect():
     return user
 
 
+def _format_call_duration(seconds):
+    try:
+        total = int(seconds)
+    except (TypeError, ValueError):
+        return None
+    if total < 0:
+        return None
+    minutes, secs = divmod(total, 60)
+    if minutes and secs:
+        return f"{minutes} min {secs} sec"
+    if minutes:
+        return f"{minutes} min"
+    return f"{secs} sec"
+
+
+def _format_activity_when(value):
+    if not value:
+        return None
+    text = str(value).replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return str(value)[:16].replace("T", " ") + " UTC"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local = dt.astimezone()
+    # Example: July 26, 2026 at 5:32 PM (portable across Windows/Unix)
+    hour = local.strftime("%I").lstrip("0") or "0"
+    return f"{local.strftime('%B')} {local.day}, {local.year} at {hour}:{local.strftime('%M %p')}"
+
+
+def _enrich_lead_activities(user_id, activities):
+    """Attach voice recording controls for timeline rendering (auth proxy paths only)."""
+    enriched = []
+    for activity in activities:
+        item = dict(activity)
+        try:
+            payload = json.loads(item.get("payload_json") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+        item["payload"] = payload
+
+        voice_call_id = payload.get("voice_call_id")
+        if voice_call_id and item.get("event_type") in (
+            "voice_call_completed",
+            "voice_call_updated",
+            "voice_call_started",
+        ):
+            call = db.get_voice_call(voice_call_id, user_id)
+            if call:
+                has_recording = db.voice_call_has_recording(call)
+                recording_status = call.get("recording_status")
+                if has_recording:
+                    recording_status = "available"
+                elif not recording_status and call.get("status") == "completed":
+                    recording_status = "unavailable"
+                duration = call.get("recording_duration_seconds") or payload.get(
+                    "recording_duration_seconds"
+                ) or payload.get("duration")
+                item["voice"] = {
+                    "call_id": call["id"],
+                    "has_recording": has_recording,
+                    "recording_status": recording_status,
+                    "recording_url": (
+                        f"/api/voice-calls/{call['id']}/recording" if has_recording else None
+                    ),
+                    "has_transcript": bool(call.get("transcript")),
+                    "transcript_url": (
+                        f"/api/voice-calls/{call['id']}/transcript"
+                        if call.get("transcript")
+                        else None
+                    ),
+                    "duration_label": _format_call_duration(duration),
+                    "when_label": _format_activity_when(
+                        call.get("completed_at") or item.get("created_at")
+                    ),
+                    "summary": call.get("summary") or payload.get("summary"),
+                }
+            else:
+                item["voice"] = {
+                    "call_id": voice_call_id,
+                    "has_recording": bool(payload.get("has_recording")),
+                    "recording_status": payload.get("recording_status") or "unavailable",
+                    "recording_url": None,
+                    "has_transcript": bool(payload.get("has_transcript")),
+                    "transcript_url": None,
+                    "duration_label": _format_call_duration(
+                        payload.get("recording_duration_seconds") or payload.get("duration")
+                    ),
+                    "when_label": _format_activity_when(
+                        payload.get("completed_at") or item.get("created_at")
+                    ),
+                    "summary": payload.get("summary"),
+                }
+        enriched.append(item)
+    return enriched
+
+
 def _parse_insight_suggestions(insight):
     raw = {}
     try:
@@ -93,7 +191,9 @@ def crm_lead_detail_page(lead_id):
     lead = db.get_lead(lead_id, user["id"])
     if not lead:
         return redirect(url_for("crm.crm_leads_page"))
-    activities = crm_db.list_lead_activities(user["id"], lead_id)
+    activities = _enrich_lead_activities(
+        user["id"], crm_db.list_lead_activities(user["id"], lead_id)
+    )
     tasks = [t for t in crm_db.list_tasks(user["id"], bucket="all") if t.get("lead_id") == lead_id]
     appointments = crm_db.list_appointments(user["id"], lead_id=lead_id)
     needs = [n for n in crm_db.list_needs_attention(user["id"]) if n.get("lead_id") == lead_id]

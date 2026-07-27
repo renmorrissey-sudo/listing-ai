@@ -495,57 +495,113 @@ def create_voice_persona():
     }), 201
 
 
+def _voice_call_public_dict(c):
+    """Serialize a voice call for the authenticated owner (never expose raw Vapi URLs)."""
+    has_recording = db.voice_call_has_recording(c)
+    can_play = bool(has_recording and c.get("provider_call_id"))
+    status = c.get("recording_status")
+    if can_play:
+        status = "available"
+    elif not status and c.get("status") == "completed":
+        status = "unavailable"
+    return {
+        "id": c["id"],
+        "lead_id": c.get("lead_id"),
+        "persona_name": c.get("persona_name"),
+        "lead_name": c.get("lead_name"),
+        "phone_number": c.get("phone_number"),
+        "lead_type": c.get("lead_type"),
+        "status": c.get("status"),
+        "outcome": c.get("outcome"),
+        "appointment_requested": bool(c.get("appointment_requested")),
+        "summary": c.get("summary"),
+        "has_transcript": bool(c.get("transcript")),
+        "recording_status": status,
+        "recording_duration_seconds": c.get("recording_duration_seconds"),
+        # Auth proxy paths only — never the stored Vapi/R2 URL.
+        "recording_url": f"/api/voice-calls/{c['id']}/recording" if can_play else None,
+        "transcript_url": f"/api/voice-calls/{c['id']}/transcript" if c.get("transcript") else None,
+        "created_at": c.get("created_at"),
+        "completed_at": c.get("completed_at"),
+    }
+
+
+def _serve_voice_call_recording(call_id, user_id):
+    call = db.get_voice_call(call_id, user_id)
+    if not call:
+        return jsonify({"error": "Call not found."}), 404
+    if not call.get("provider_call_id"):
+        return jsonify({
+            "error": "Recording unavailable",
+            "recording_status": call.get("recording_status") or "unavailable",
+        }), 404
+    if not db.voice_call_has_recording(call) and call.get("recording_status") == "not_enabled":
+        return jsonify({
+            "error": "Recording was not enabled for this call",
+            "recording_status": "not_enabled",
+        }), 404
+    if not db.voice_call_has_recording(call) and call.get("recording_status") == "processing":
+        return jsonify({
+            "error": "Recording processing",
+            "recording_status": "processing",
+        }), 404
+    if not db.voice_call_has_recording(call):
+        return jsonify({
+            "error": "Recording unavailable",
+            "recording_status": call.get("recording_status") or "unavailable",
+        }), 404
+
+    try:
+        download_url = get_voice_provider().get_recording_download_url(call["provider_call_id"])
+    except VoiceProviderError as exc:
+        logger.warning("Recording fetch failed for call %s: %s", call_id, exc)
+        return jsonify({
+            "error": "Recording unavailable",
+            "detail": str(exc),
+            "recording_status": "unavailable",
+        }), 503
+
+    return redirect(download_url, code=302)
+
+
 @app.route("/voice/calls")
 @auth.subscription_required
 def voice_calls():
     user = auth.get_current_user()
     calls = db.list_voice_calls(user["id"])
-    return jsonify({
-        "calls": [
-            {
-                "id": c["id"],
-                "persona_name": c.get("persona_name"),
-                "lead_name": c.get("lead_name"),
-                "phone_number": c.get("phone_number"),
-                "lead_type": c.get("lead_type"),
-                "status": c.get("status"),
-                "outcome": c.get("outcome"),
-                "appointment_requested": bool(c.get("appointment_requested")),
-                "summary": c.get("summary"),
-                "transcript": c.get("transcript"),
-                # Private Vapi/R2 URLs are not browser-playable; expose our auth proxy instead.
-                "recording_url": (
-                    f"/voice/calls/{c['id']}/recording"
-                    if c.get("recording_url") and c.get("provider_call_id")
-                    else None
-                ),
-                "created_at": c.get("created_at"),
-                "completed_at": c.get("completed_at"),
-            }
-            for c in calls
-        ]
-    })
+    return jsonify({"calls": [_voice_call_public_dict(c) for c in calls]})
 
 
 @app.route("/voice/calls/<int:call_id>/recording")
 @auth.subscription_required
 def voice_call_recording(call_id):
     user = auth.get_current_user()
+    return _serve_voice_call_recording(call_id, user["id"])
+
+
+@app.route("/api/voice-calls/<int:call_id>/recording")
+@auth.subscription_required
+def api_voice_call_recording(call_id):
+    user = auth.get_current_user()
+    return _serve_voice_call_recording(call_id, user["id"])
+
+
+@app.route("/api/voice-calls/<int:call_id>/transcript")
+@auth.subscription_required
+def api_voice_call_transcript(call_id):
+    user = auth.get_current_user()
     call = db.get_voice_call(call_id, user["id"])
     if not call:
         return jsonify({"error": "Call not found."}), 404
-    if not call.get("provider_call_id"):
-        return jsonify({"error": "Recording is not available for this call."}), 404
-    if not call.get("recording_url"):
-        return jsonify({"error": "Recording is not available for this call yet."}), 404
-
-    try:
-        download_url = get_voice_provider().get_recording_download_url(call["provider_call_id"])
-    except VoiceProviderError as exc:
-        logger.warning("Recording fetch failed for call %s: %s", call_id, exc)
-        return jsonify({"error": str(exc)}), 503
-
-    return redirect(download_url, code=302)
+    if not call.get("transcript"):
+        return jsonify({"error": "Transcript unavailable."}), 404
+    return jsonify({
+        "call_id": call["id"],
+        "transcript": call.get("transcript"),
+        "summary": call.get("summary"),
+        "completed_at": call.get("completed_at"),
+        "recording_duration_seconds": call.get("recording_duration_seconds"),
+    })
 
 
 @app.route("/account/business-profile", methods=["GET", "PUT"])
@@ -1421,6 +1477,10 @@ def voice_webhook():
             "transcript",
             "summary",
             "recording_url",
+            "stereo_recording_url",
+            "recording_duration_seconds",
+            "recording_status",
+            "transcript_url",
             "appointment_requested",
         )
     }

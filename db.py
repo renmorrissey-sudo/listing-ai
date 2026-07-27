@@ -275,7 +275,20 @@ def update_voice_call_provider(call_id, provider_call_id, status):
         )
 
 
-def update_voice_call_from_webhook(call_id=None, provider_call_id=None, status=None, outcome=None, transcript=None, summary=None, recording_url=None, appointment_requested=False):
+def update_voice_call_from_webhook(
+    call_id=None,
+    provider_call_id=None,
+    status=None,
+    outcome=None,
+    transcript=None,
+    summary=None,
+    recording_url=None,
+    stereo_recording_url=None,
+    recording_duration_seconds=None,
+    recording_status=None,
+    transcript_url=None,
+    appointment_requested=False,
+):
     completed_at = datetime.now(timezone.utc).isoformat()
     appointment_flag = 1 if appointment_requested else 0
     update_sql = """
@@ -286,6 +299,17 @@ def update_voice_call_from_webhook(call_id=None, provider_call_id=None, status=N
             transcript = COALESCE(?, transcript),
             summary = COALESCE(?, summary),
             recording_url = COALESCE(?, recording_url),
+            stereo_recording_url = COALESCE(?, stereo_recording_url),
+            recording_duration_seconds = COALESCE(?, recording_duration_seconds),
+            recording_status = CASE
+                WHEN COALESCE(?, recording_url) IS NOT NULL
+                  OR COALESCE(?, stereo_recording_url) IS NOT NULL
+                  THEN 'available'
+                WHEN recording_status = 'available' THEN recording_status
+                WHEN ? IS NOT NULL THEN ?
+                ELSE recording_status
+            END,
+            transcript_url = COALESCE(?, transcript_url),
             appointment_requested = CASE WHEN ? = 1 THEN 1 ELSE appointment_requested END,
             completed_at = CASE WHEN ? = 'completed' THEN COALESCE(completed_at, ?) ELSE completed_at END
         WHERE {where_clause}
@@ -298,6 +322,13 @@ def update_voice_call_from_webhook(call_id=None, provider_call_id=None, status=N
         transcript,
         summary,
         recording_url,
+        stereo_recording_url,
+        recording_duration_seconds,
+        recording_url,
+        stereo_recording_url,
+        recording_status,
+        recording_status,
+        transcript_url,
         appointment_flag,
         status,
         completed_at,
@@ -320,6 +351,32 @@ def update_voice_call_from_webhook(call_id=None, provider_call_id=None, status=N
             return cur.rowcount
 
         return 0
+
+
+def voice_call_has_recording(call_row):
+    if not call_row:
+        return False
+    return bool(
+        call_row.get("recording_url")
+        or call_row.get("stereo_recording_url")
+        or call_row.get("recording_status") == "available"
+    )
+
+
+def list_voice_calls_for_lead(user_id, lead_id, limit=50):
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT vc.*, vp.name AS persona_name
+            FROM voice_calls vc
+            LEFT JOIN voice_personas vp ON vp.id = vc.persona_id
+            WHERE vc.user_id = ? AND vc.lead_id = ?
+            ORDER BY vc.created_at DESC
+            LIMIT ?
+            """,
+            (user_id, lead_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 def get_voice_call(call_id, user_id):

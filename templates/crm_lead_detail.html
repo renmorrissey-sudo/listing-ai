@@ -155,9 +155,37 @@
           <ul class="timeline">
             {% for a in activities %}
             <li>
-              <strong>{{ a.event_type.replace('_',' ') }}</strong>
-              <div>{{ a.summary }}</div>
+              {% if a.voice and a.event_type == 'voice_call_completed' %}
+              <strong>Voice call completed</strong>
+              <div class="muted" style="margin-top:4px;">
+                {% if a.voice.duration_label %}{{ a.voice.duration_label }}{% endif %}
+                {% if a.voice.duration_label and a.voice.when_label %} · {% endif %}
+                {% if a.voice.when_label %}{{ a.voice.when_label }}{% else %}{{ (a.created_at or '')[:16] }} UTC{% endif %}
+              </div>
+              {% if a.voice.summary %}
+              <div style="margin-top:6px;">{{ a.voice.summary }}</div>
+              {% endif %}
+              <div class="voice-recording" style="margin-top:10px;">
+                {% if a.voice.has_recording and a.voice.recording_url %}
+                <audio controls preload="none" src="{{ a.voice.recording_url }}" style="width:100%;max-width:360px;"></audio>
+                <div class="row" style="margin-top:8px;gap:8px;flex-wrap:wrap;">
+                  <a class="btn secondary" href="{{ a.voice.recording_url }}" target="_blank" rel="noopener">Open recording</a>
+                  {% if a.voice.has_transcript and a.voice.transcript_url %}
+                  <button class="btn secondary" type="button" onclick="viewTranscript({{ a.voice.call_id }})">View transcript</button>
+                  {% endif %}
+                </div>
+                {% elif a.voice.recording_status == 'processing' %}
+                <span class="pill">Recording processing</span>
+                {% elif a.voice.recording_status == 'not_enabled' %}
+                <span class="pill">Recording was not enabled for this call</span>
+                {% else %}
+                <span class="pill">Recording unavailable</span>
+                {% endif %}
+              </div>
+              {% else %}
+              <strong>{{ a.summary or a.event_type.replace('_',' ') }}</strong>
               <div class="muted">{{ (a.created_at or '')[:16] }} UTC</div>
+              {% endif %}
             </li>
             {% endfor %}
           </ul>
@@ -273,6 +301,24 @@
       const data = await res.json();
       if (!res.ok) return showFlash(data.error || 'Failed', true);
       location.reload();
+    }
+    async function viewTranscript(callId) {
+      try {
+        const res = await fetch(`/api/voice-calls/${callId}/transcript`, {cache: 'no-store'});
+        const data = await res.json();
+        if (!res.ok) return showFlash(data.error || 'Transcript unavailable', true);
+        const text = data.transcript || '';
+        const win = window.open('', '_blank', 'noopener,noreferrer,width=720,height=640');
+        if (!win) {
+          showFlash('Allow pop-ups to view the transcript, or open the recording link.', true);
+          return;
+        }
+        win.document.write('<pre style="white-space:pre-wrap;font:14px/1.5 system-ui,sans-serif;padding:16px;"></pre>');
+        win.document.title = 'Call transcript';
+        win.document.querySelector('pre').textContent = text;
+      } catch (err) {
+        showFlash(err.message || 'Transcript unavailable', true);
+      }
     }
     async function doLogout() {
       await fetch('/logout', {method: 'POST'});
