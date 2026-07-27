@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import config
 from db_backend import connect as backend_connect
@@ -1231,9 +1231,34 @@ def get_dashboard_metrics(user_id):
             """,
             (user_id, now.isoformat()),
         ).fetchone()["count"]
+        today = now.strftime("%Y-%m-%d")
+        week_end = (now + timedelta(days=7)).isoformat()
+        follow_ups_due_today = conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM lead_follow_ups
+            WHERE user_id = ? AND status = 'pending'
+              AND substr(due_at, 1, 10) = ?
+            """,
+            (user_id, today),
+        ).fetchone()["count"]
+        follow_ups_overdue = conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM lead_follow_ups
+            WHERE user_id = ? AND status = 'pending' AND due_at < ?
+            """,
+            (user_id, now.isoformat()),
+        ).fetchone()["count"]
+        follow_ups_due_this_week = conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM lead_follow_ups
+            WHERE user_id = ? AND status = 'pending'
+              AND due_at >= ? AND due_at < ?
+            """,
+            (user_id, now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat(), week_end),
+        ).fetchone()["count"]
         recent_leads = conn.execute(
             """
-            SELECT id, name, phone_number, status, next_action, follow_up_at, updated_at
+            SELECT id, name, phone_number, status, next_action, follow_up_at, next_follow_up_at, updated_at
             FROM leads
             WHERE user_id = ?
             ORDER BY updated_at DESC
@@ -1243,7 +1268,8 @@ def get_dashboard_metrics(user_id):
         ).fetchall()
         due_follow_ups = conn.execute(
             """
-            SELECT f.id, f.due_at, f.reason, l.name AS lead_name, l.phone_number, l.id AS lead_id
+            SELECT f.id, f.due_at, f.reason, f.priority, f.status,
+                   l.name AS lead_name, l.phone_number, l.id AS lead_id
             FROM lead_follow_ups f
             JOIN leads l ON l.id = f.lead_id
             WHERE f.user_id = ? AND f.status = 'pending' AND f.due_at <= ?
@@ -1273,6 +1299,9 @@ def get_dashboard_metrics(user_id):
             "leads_hot": leads_hot,
             "pending_suggestions": pending_suggestions,
             "follow_ups_due": follow_ups_due,
+            "follow_ups_due_today": follow_ups_due_today,
+            "follow_ups_overdue": follow_ups_overdue,
+            "follow_ups_due_this_week": follow_ups_due_this_week,
             "recent_leads": [dict(row) for row in recent_leads],
             "due_follow_ups": [dict(row) for row in due_follow_ups],
         },

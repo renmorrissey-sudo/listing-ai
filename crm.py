@@ -183,6 +183,20 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
     appointments = crm_db.list_appointments(user["id"], lead_id=lead_id)
     needs = [n for n in crm_db.list_needs_attention(user["id"]) if n.get("lead_id") == lead_id]
     messages = db.list_lead_messages(user["id"], lead_id)
+    follow_ups = crm_db.list_lead_follow_ups(user["id"], lead_id, include_completed=True)
+    local_date = (request.args.get("local_date") or "").strip()[:10] or None
+    try:
+        tz_offset = int(request.args.get("tz_offset_minutes"))
+    except (TypeError, ValueError):
+        tz_offset = None
+    follow_up_groups = crm_db.group_follow_ups_for_lead(
+        follow_ups, local_date=local_date, tz_offset_minutes=tz_offset
+    )
+    next_follow_up = None
+    for key in ("overdue", "today", "upcoming"):
+        if follow_up_groups.get(key):
+            next_follow_up = follow_up_groups[key][0]
+            break
     flash_message = request.args.get("notice") or ""
     flash_error = form_error or request.args.get("error") or ""
     for category, message in get_flashed_messages(with_categories=True):
@@ -197,6 +211,9 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
         "appointments": appointments,
         "needs": needs,
         "messages": messages,
+        "follow_ups": follow_ups,
+        "follow_up_groups": follow_up_groups,
+        "next_follow_up": next_follow_up,
         "statuses": LEAD_STATUSES,
         "task_types": TASK_TYPES,
         "appointment_types": APPOINTMENT_TYPES,
@@ -355,13 +372,26 @@ def api_lead_activities(lead_id):
     return jsonify({"activities": crm_db.list_lead_activities(user["id"], lead_id)})
 
 
-@crm_bp.route("/api/crm/leads/<int:lead_id>/follow-up", methods=["POST"])
+@crm_bp.route("/api/crm/leads/<int:lead_id>/follow-up", methods=["GET", "POST"])
 @auth.subscription_required
 def api_set_follow_up(lead_id):
     user = auth.get_current_user()
+    if request.method == "GET":
+        local_date = (request.args.get("local_date") or "").strip()[:10] or None
+        try:
+            tz_offset = int(request.args.get("tz_offset_minutes"))
+        except (TypeError, ValueError):
+            tz_offset = None
+        items = crm_db.list_lead_follow_ups(user["id"], lead_id, include_completed=True)
+        groups = crm_db.group_follow_ups_for_lead(
+            items, local_date=local_date, tz_offset_minutes=tz_offset
+        )
+        return jsonify({"follow_ups": items, "groups": groups})
+
     data = request.get_json(silent=True) or {}
-    quick = data.get("quick_pick")
     due_at = data.get("due_at")
+    # Prefer client-computed local due_at. Quick pick without due_at falls back to UTC.
+    quick = data.get("quick_pick")
     if quick and not due_at:
         days = {"tomorrow": 1, "3d": 3, "1w": 7, "2w": 14, "30d": 30}.get(str(quick))
         if days is None:
@@ -371,22 +401,43 @@ def api_set_follow_up(lead_id):
         return jsonify({"error": "due_at or quick_pick is required."}), 400
     reason = str(data.get("reason") or "Follow up").strip()[:500]
     priority = data.get("priority") if data.get("priority") in PRIORITIES else "normal"
-    follow_up_id, error = crm_db.set_lead_follow_up(
-        user["id"], lead_id, due_at, reason, priority=priority, created_by=user["id"]
+    replace_existing = data.get("replace_existing")
+    if replace_existing is None:
+        replace_existing = True
+    force_create = bool(data.get("force_create"))
+    local_due_label = str(data.get("local_due_label") or "").strip()[:120] or None
+    result, error = crm_db.set_lead_follow_up(
+        user["id"],
+        lead_id,
+        due_at,
+        reason,
+        priority=priority,
+        created_by=user["id"],
+        replace_existing=bool(replace_existing),
+        force_create=force_create,
+        local_due_label=local_due_label,
     )
+    if error == "conflict":
+        return jsonify(result), 409
     if error:
         return jsonify({"error": error}), 404
-    return jsonify({"ok": True, "follow_up_id": follow_up_id, "due_at": due_at})
+    return jsonify({"ok": True, **result})
 
 
 @crm_bp.route("/api/crm/leads/<int:lead_id>/follow-up/complete", methods=["POST"])
 @auth.subscription_required
 def api_complete_follow_up(lead_id):
     user = auth.get_current_user()
-    ok, error = crm_db.complete_lead_follow_up(user["id"], lead_id)
+    data = request.get_json(silent=True) or {}
+    follow_up_id = data.get("follow_up_id")
+    ok, error = crm_db.complete_lead_follow_up(
+        user["id"], lead_id, follow_up_id=follow_up_id
+    )
     if not ok:
         return jsonify({"error": error}), 404
-    crm_db.resolve_needs_attention_by_reason(user["id"], lead_id, "follow_up_overdue", "Follow-up completed")
+    crm_db.resolve_needs_attention_by_reason(
+        user["id"], lead_id, "follow_up_overdue", "Follow-up completed"
+    )
     return jsonify({"ok": True})
 
 
@@ -395,8 +446,138 @@ def api_complete_follow_up(lead_id):
 def api_dismiss_follow_up(lead_id):
     user = auth.get_current_user()
     data = request.get_json(silent=True) or {}
-    crm_db.dismiss_lead_follow_up(user["id"], lead_id, str(data.get("reason") or "Dismissed")[:500])
+    follow_up_id = data.get("follow_up_id")
+    crm_db.dismiss_lead_follow_up(
+        user["id"],
+        lead_id,
+        str(data.get("reason") or "Dismissed")[:500],
+        follow_up_id=follow_up_id,
+    )
     return jsonify({"ok": True})
+
+
+@crm_bp.route("/api/crm/follow-ups", methods=["GET"])
+@auth.subscription_required
+def api_list_follow_ups():
+    user = auth.get_current_user()
+    bucket = (request.args.get("bucket") or "all").strip()
+    local_date = (request.args.get("local_date") or "").strip()[:10] or None
+    try:
+        tz_offset = int(request.args.get("tz_offset_minutes"))
+    except (TypeError, ValueError):
+        tz_offset = None
+    start_at = (request.args.get("start_at") or "").strip() or None
+    end_at = (request.args.get("end_at") or "").strip() or None
+    items = crm_db.list_follow_ups(
+        user["id"],
+        bucket=bucket,
+        local_date=local_date,
+        tz_offset_minutes=tz_offset,
+        start_at=start_at,
+        end_at=end_at,
+    )
+    counts = crm_db.follow_up_dashboard_counts(
+        user["id"], local_date=local_date, tz_offset_minutes=tz_offset
+    )
+    return jsonify({"follow_ups": items, "counts": counts})
+
+
+@crm_bp.route("/api/crm/follow-ups/<int:follow_up_id>", methods=["GET", "PATCH"])
+@auth.subscription_required
+def api_follow_up_detail(follow_up_id):
+    user = auth.get_current_user()
+    if request.method == "GET":
+        item = crm_db.get_follow_up(user["id"], follow_up_id)
+        if not item:
+            return jsonify({"error": "Follow-up not found."}), 404
+        return jsonify({"follow_up": item})
+    data = request.get_json(silent=True) or {}
+    item, error = crm_db.update_follow_up(
+        user["id"],
+        follow_up_id,
+        due_at=data.get("due_at"),
+        reason=data.get("reason"),
+        priority=data.get("priority"),
+        local_due_label=str(data.get("local_due_label") or "").strip()[:120] or None,
+    )
+    if error:
+        return jsonify({"error": error}), 404
+    return jsonify({"ok": True, "follow_up": item})
+
+
+@crm_bp.route("/api/crm/follow-ups/<int:follow_up_id>/complete", methods=["POST"])
+@auth.subscription_required
+def api_complete_follow_up_by_id(follow_up_id):
+    user = auth.get_current_user()
+    item = crm_db.get_follow_up(user["id"], follow_up_id)
+    if not item:
+        return jsonify({"error": "Follow-up not found."}), 404
+    ok, error = crm_db.complete_follow_up(user["id"], follow_up_id)
+    if not ok:
+        return jsonify({"error": error}), 404
+    if item.get("lead_id"):
+        crm_db.resolve_needs_attention_by_reason(
+            user["id"], item["lead_id"], "follow_up_overdue", "Follow-up completed"
+        )
+    return jsonify({"ok": True})
+
+
+@crm_bp.route("/api/crm/follow-ups/<int:follow_up_id>/dismiss", methods=["POST"])
+@auth.subscription_required
+def api_dismiss_follow_up_by_id(follow_up_id):
+    user = auth.get_current_user()
+    data = request.get_json(silent=True) or {}
+    ok, error = crm_db.dismiss_follow_up(
+        user["id"], follow_up_id, reason=str(data.get("reason") or "Dismissed")[:500]
+    )
+    if not ok:
+        return jsonify({"error": error}), 404
+    return jsonify({"ok": True})
+
+
+@crm_bp.route("/crm/follow-ups")
+def crm_follow_ups_page():
+    user = _user_or_redirect()
+    if not user:
+        return redirect(url_for("index"))
+    local_date = (request.args.get("local_date") or "").strip()[:10] or None
+    try:
+        tz_offset = int(request.args.get("tz_offset_minutes"))
+    except (TypeError, ValueError):
+        tz_offset = None
+    view = (request.args.get("view") or "agenda").strip().lower()
+    if view not in {"agenda", "month", "week"}:
+        view = "agenda"
+    follow_ups = crm_db.list_follow_ups(
+        user["id"],
+        bucket="all",
+        limit=500,
+        local_date=local_date,
+        tz_offset_minutes=tz_offset,
+    )
+    counts = crm_db.follow_up_dashboard_counts(
+        user["id"], local_date=local_date, tz_offset_minutes=tz_offset
+    )
+    groups = crm_db.group_follow_ups_for_lead(
+        [f for f in follow_ups if f.get("status") == "pending"]
+        + [f for f in follow_ups if f.get("status") != "pending"][:50],
+        local_date=local_date,
+        tz_offset_minutes=tz_offset,
+    )
+    # Re-group all items properly for page sections.
+    groups = crm_db.group_follow_ups_for_lead(
+        follow_ups, local_date=local_date, tz_offset_minutes=tz_offset
+    )
+    return render_template(
+        "crm_follow_ups.html",
+        follow_ups=follow_ups,
+        groups=groups,
+        counts=counts,
+        view=view,
+        priorities=PRIORITIES,
+        local_date=local_date or "",
+        **_nav_context(user, "follow-ups"),
+    )
 
 
 @crm_bp.route("/api/crm/tasks", methods=["GET", "POST"])
@@ -756,19 +937,20 @@ def api_approve_suggested_follow_up(insight_id):
     reason = str(
         data.get("reason") or suggestions.get("suggested_follow_up_reason") or "Follow up"
     )[:500]
-    follow_up_id, error = crm_db.set_lead_follow_up(
-        user["id"], insight["lead_id"], due_at, reason, created_by=user["id"]
+    result, error = crm_db.set_lead_follow_up(
+        user["id"],
+        insight["lead_id"],
+        due_at,
+        reason,
+        created_by=user["id"],
+        replace_existing=True,
+        local_due_label=str(data.get("local_due_label") or "").strip()[:120] or None,
     )
+    if error == "conflict":
+        return jsonify(result), 409
     if error:
         return jsonify({"error": error}), 404
-    crm_db.add_lead_activity(
-        insight["lead_id"],
-        user["id"],
-        "insight_follow_up_approved",
-        "Approved Claude follow-up suggestion",
-        {"insight_id": insight_id, "due_at": due_at},
-    )
-    return jsonify({"ok": True, "follow_up_id": follow_up_id, "due_at": due_at})
+    return jsonify({"ok": True, **result})
 
 
 @crm_bp.route("/api/crm/insights/<int:insight_id>/approve-tasks", methods=["POST"])

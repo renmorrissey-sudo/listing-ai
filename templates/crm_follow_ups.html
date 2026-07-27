@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Follow-ups - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+  <style>
+    .view-tabs { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0 18px; }
+    .view-tabs a, .view-tabs button {
+      background:#eef2f7; color:#334; border:none; border-radius:8px; padding:8px 12px;
+      font-size:13px; font-weight:700; text-decoration:none; cursor:pointer;
+    }
+    .view-tabs a.active, .view-tabs button.active { background:#4f8ef7; color:#fff; }
+    .cal-grid { display:grid; grid-template-columns:repeat(7, 1fr); gap:6px; }
+    .cal-head { font-size:11px; color:#667; font-weight:700; text-align:center; padding:6px 0; }
+    .cal-cell {
+      min-height:92px; background:#f8fafc; border:1px solid #eef2f7; border-radius:8px;
+      padding:6px; font-size:12px;
+    }
+    .cal-cell.muted-day { opacity:0.45; }
+    .cal-cell .day-num { font-weight:800; margin-bottom:4px; }
+    .cal-item {
+      display:block; background:#eef5ff; color:#1d4ed8; border-radius:6px; padding:4px 6px;
+      margin-top:4px; text-decoration:none; font-weight:600; line-height:1.3;
+    }
+    .cal-item.overdue { background:#fef2f2; color:#b91c1c; }
+    .cal-item.high { box-shadow: inset 3px 0 0 #c2410c; }
+    .counts { display:flex; gap:10px; flex-wrap:wrap; margin:12px 0 18px; }
+    .counts .metric { background:#fff; border-radius:10px; padding:12px 14px; box-shadow:0 1px 5px rgba(0,0,0,0.06); min-width:140px; }
+    .counts .k { font-size:11px; color:#667; text-transform:uppercase; letter-spacing:0.4px; }
+    .counts .v { font-size:22px; font-weight:800; margin-top:4px; }
+    #fu-modal {
+      position:fixed; inset:0; background:rgba(15,23,42,0.45); z-index:1000;
+      display:none; align-items:center; justify-content:center; padding:20px;
+    }
+    #fu-modal .panel {
+      background:#fff; border-radius:12px; max-width:520px; width:100%; padding:18px;
+      box-shadow:0 12px 40px rgba(0,0,0,0.18);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="logo">TopAI <span>Real Estate Tools</span></div>
+      <div class="tagline">Follow-up calendar</div>
+    </div>
+    <div class="subscriber-info">
+      <span class="subscriber-email">&#10003; {{ email }}</span>
+      {% if has_billing_portal %}<a class="billing-link" href="/billing/portal">Manage billing</a>{% endif %}
+      <button class="logout-btn" type="button" onclick="doLogout()">Sign out</button>
+    </div>
+  </header>
+  <div class="public-nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/crm/leads">Leads</a>
+    <a href="/crm/follow-ups" class="active">Follow-ups</a>
+    <a href="/crm/tasks">Tasks</a>
+    <a href="/crm/needs-attention">Needs Attention</a>
+    <a href="/#sms">AI SMS</a>
+  </div>
+  <nav class="tool-nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/crm/leads">Leads</a>
+    <a href="/crm/follow-ups" class="active">Follow-ups</a>
+    <a href="/crm/tasks">Tasks</a>
+    <a href="/crm/needs-attention">Needs Attention</a>
+    <a href="/#sms">AI SMS Assistant</a>
+  </nav>
+  <main>
+    <h1>Follow-ups</h1>
+    <p class="muted">Manage scheduled follow-ups from <code>lead_follow_ups</code> — not from the activity timeline.</p>
+    <div id="flash" class="flash"></div>
+
+    <div class="counts">
+      <div class="metric"><div class="k">Due today</div><div class="v" id="count-today">{{ counts.follow_ups_due_today }}</div></div>
+      <div class="metric"><div class="k">Overdue</div><div class="v" id="count-overdue">{{ counts.follow_ups_overdue }}</div></div>
+      <div class="metric"><div class="k">This week</div><div class="v" id="count-week">{{ counts.follow_ups_due_this_week }}</div></div>
+    </div>
+
+    <div class="view-tabs">
+      <button type="button" class="view-btn active" data-view="agenda" onclick="setView('agenda')">Agenda</button>
+      <button type="button" class="view-btn" data-view="week" onclick="setView('week')">Week</button>
+      <button type="button" class="view-btn" data-view="month" onclick="setView('month')">Month</button>
+      <button type="button" onclick="jumpToday()">Today</button>
+      <button type="button" onclick="setAgendaFilter('overdue')">Overdue</button>
+      <button type="button" onclick="setAgendaFilter('upcoming')">Upcoming</button>
+    </div>
+
+    <div id="agenda-view">
+      {% macro fu_table(title, items, empty) %}
+      <div class="card" data-agenda-section="{{ title|lower|replace(' ', '-') }}">
+        <h2>{{ title }}</h2>
+        {% if items %}
+        <table>
+          <thead>
+            <tr>
+              <th>When</th><th>Lead</th><th>Reason</th><th>Priority</th><th>Status</th><th>Agent</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in items %}
+            <tr>
+              <td><span class="local-dt" data-utc="{{ item.due_at }}">{{ (item.due_at or '')[:16] }}</span></td>
+              <td>
+                {% if item.lead_id %}
+                <a href="/crm/leads/{{ item.lead_id }}">{{ item.lead_name or 'Lead' }}</a>
+                {% else %}—{% endif %}
+              </td>
+              <td>{{ item.reason or 'Follow up' }}</td>
+              <td><span class="pill {% if item.priority == 'high' %}warn{% endif %}">{{ item.priority or 'normal' }}</span></td>
+              <td>{{ item.status }}</td>
+              <td class="muted">{{ item.created_by_email or '—' }}</td>
+              <td class="row">
+                <button class="btn secondary" type="button"
+                  data-id="{{ item.id }}"
+                  data-lead-id="{{ item.lead_id or '' }}"
+                  data-due-at="{{ item.due_at or '' }}"
+                  data-reason="{{ (item.reason or '')|e }}"
+                  data-priority="{{ item.priority or 'normal' }}"
+                  data-status="{{ item.status }}"
+                  onclick="openFollowUpModal(this)">Edit</button>
+                {% if item.status == 'pending' %}
+                <button class="btn" type="button" onclick="completeFollowUp({{ item.id }})">Complete</button>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="empty">{{ empty }}</p>
+        {% endif %}
+      </div>
+      {% endmacro %}
+
+      {{ fu_table('Overdue', groups.overdue, 'No overdue follow-ups.') }}
+      {{ fu_table('Due today', groups.today, 'Nothing due today.') }}
+      {{ fu_table('Upcoming', groups.upcoming, 'No upcoming follow-ups.') }}
+      {{ fu_table('Completed', groups.completed[:40], 'No completed follow-ups yet.') }}
+    </div>
+
+    <div id="week-view" class="card" style="display:none;">
+      <div class="row" style="justify-content:space-between;margin-bottom:12px;">
+        <button class="btn secondary" type="button" onclick="shiftWeek(-1)">Previous week</button>
+        <strong id="week-label"></strong>
+        <button class="btn secondary" type="button" onclick="shiftWeek(1)">Next week</button>
+      </div>
+      <div class="cal-grid" id="week-grid"></div>
+    </div>
+
+    <div id="month-view" class="card" style="display:none;">
+      <div class="row" style="justify-content:space-between;margin-bottom:12px;">
+        <button class="btn secondary" type="button" onclick="shiftMonth(-1)">Previous</button>
+        <strong id="month-label"></strong>
+        <button class="btn secondary" type="button" onclick="shiftMonth(1)">Next</button>
+      </div>
+      <div class="cal-grid" id="month-grid"></div>
+    </div>
+  </main>
+
+  <div id="fu-modal">
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;">
+        <h2 style="margin:0;">Edit follow-up</h2>
+        <button class="btn secondary" type="button" onclick="closeFollowUpModal()">Close</button>
+      </div>
+      <input type="hidden" id="modal-id" />
+      <input type="hidden" id="modal-lead-id" />
+      <div class="row" style="margin-top:12px;">
+        <input id="modal-due" type="datetime-local" />
+        <select id="modal-priority">
+          {% for p in priorities %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+        </select>
+      </div>
+      <div style="margin-top:10px;">
+        <input id="modal-reason" placeholder="Reason" style="width:100%;" />
+      </div>
+      <div class="row" style="margin-top:14px;">
+        <button class="btn" type="button" onclick="saveFollowUpModal()">Save</button>
+        <button class="btn" type="button" onclick="completeFromModal()">Mark complete</button>
+        <button class="btn secondary" type="button" onclick="dismissFromModal()">Dismiss</button>
+        <a class="btn secondary" id="modal-open-lead" href="#">Open lead</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const followUps = {{ follow_ups|tojson }};
+    let currentView = 'agenda';
+    let cursor = new Date();
+    cursor.setHours(12, 0, 0, 0);
+
+    function showFlash(msg, err) {
+      const el = document.getElementById('flash');
+      el.textContent = msg;
+      el.className = err ? 'flash err' : 'flash';
+      el.style.display = 'block';
+    }
+    function formatLocal(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso).slice(0, 16);
+      return d.toLocaleString(undefined, {
+        year: 'numeric', month: 'long', day: 'numeric',
+        hour: 'numeric', minute: '2-digit',
+      });
+    }
+    function formatLocalDateTimes() {
+      document.querySelectorAll('.local-dt').forEach((el) => {
+        el.textContent = formatLocal(el.getAttribute('data-utc'));
+      });
+    }
+    function ymd(d) {
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
+    function toDatetimeLocalValue(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return '';
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+    function localDayKey(iso) {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return '';
+      return ymd(d);
+    }
+    function isOverdue(item) {
+      if (item.status !== 'pending') return false;
+      return localDayKey(item.due_at) < ymd(new Date());
+    }
+    function setView(view) {
+      currentView = view;
+      document.querySelectorAll('.view-btn').forEach((b) => {
+        b.classList.toggle('active', b.dataset.view === view);
+      });
+      document.getElementById('agenda-view').style.display = view === 'agenda' ? 'block' : 'none';
+      document.getElementById('week-view').style.display = view === 'week' ? 'block' : 'none';
+      document.getElementById('month-view').style.display = view === 'month' ? 'block' : 'none';
+      if (view === 'week') renderWeek();
+      if (view === 'month') renderMonth();
+    }
+    function jumpToday() {
+      cursor = new Date();
+      cursor.setHours(12, 0, 0, 0);
+      setAgendaFilter('today');
+      if (currentView === 'week') renderWeek();
+      if (currentView === 'month') renderMonth();
+    }
+    function setAgendaFilter(which) {
+      setView('agenda');
+      const map = {
+        overdue: 'overdue',
+        today: 'due-today',
+        upcoming: 'upcoming',
+        completed: 'completed',
+      };
+      const key = map[which] || which;
+      document.querySelectorAll('[data-agenda-section]').forEach((el) => {
+        el.style.display = (!which || el.dataset.agendaSection === key) ? 'block' : 'none';
+      });
+      if (!which || which === 'today') {
+        document.querySelectorAll('[data-agenda-section]').forEach((el) => {
+          el.style.display = 'block';
+        });
+        if (which === 'today') {
+          document.querySelectorAll('[data-agenda-section]').forEach((el) => {
+            el.style.display = el.dataset.agendaSection === 'due-today' ? 'block' : 'none';
+          });
+        }
+      }
+    }
+    function itemsForDay(dayKey) {
+      return followUps.filter((f) => f.status === 'pending' && localDayKey(f.due_at) === dayKey);
+    }
+    function renderDayCell(dateObj, outside) {
+      const key = ymd(dateObj);
+      const items = itemsForDay(key);
+      const cell = document.createElement('div');
+      cell.className = 'cal-cell' + (outside ? ' muted-day' : '');
+      cell.innerHTML = `<div class="day-num">${dateObj.getDate()}</div>`;
+      items.slice(0, 4).forEach((item) => {
+        const a = document.createElement('a');
+        a.href = '#';
+        a.className = 'cal-item' + (isOverdue(item) ? ' overdue' : '') + (item.priority === 'high' ? ' high' : '');
+        a.textContent = `${(item.lead_name || 'Lead').slice(0, 18)} — ${(item.reason || 'Follow up').slice(0, 24)}`;
+        a.onclick = (e) => {
+          e.preventDefault();
+          openFollowUpModalFromItem(item);
+        };
+        cell.appendChild(a);
+      });
+      if (items.length > 4) {
+        const more = document.createElement('div');
+        more.className = 'muted';
+        more.textContent = `+${items.length - 4} more`;
+        cell.appendChild(more);
+      }
+      return cell;
+    }
+    function renderWeek() {
+      const start = new Date(cursor);
+      const day = start.getDay();
+      start.setDate(start.getDate() - day);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 6);
+      document.getElementById('week-label').textContent =
+        `${start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${end.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+      const grid = document.getElementById('week-grid');
+      grid.innerHTML = '';
+      ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach((name) => {
+        const h = document.createElement('div');
+        h.className = 'cal-head';
+        h.textContent = name;
+        grid.appendChild(h);
+      });
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(start);
+        d.setDate(start.getDate() + i);
+        grid.appendChild(renderDayCell(d, false));
+      }
+    }
+    function renderMonth() {
+      const year = cursor.getFullYear();
+      const month = cursor.getMonth();
+      document.getElementById('month-label').textContent =
+        cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+      const grid = document.getElementById('month-grid');
+      grid.innerHTML = '';
+      ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach((name) => {
+        const h = document.createElement('div');
+        h.className = 'cal-head';
+        h.textContent = name;
+        grid.appendChild(h);
+      });
+      const first = new Date(year, month, 1);
+      const start = new Date(first);
+      start.setDate(1 - first.getDay());
+      for (let i = 0; i < 42; i++) {
+        const d = new Date(start);
+        d.setDate(start.getDate() + i);
+        grid.appendChild(renderDayCell(d, d.getMonth() !== month));
+      }
+    }
+    function shiftWeek(delta) {
+      cursor.setDate(cursor.getDate() + (delta * 7));
+      renderWeek();
+    }
+    function shiftMonth(delta) {
+      cursor.setMonth(cursor.getMonth() + delta);
+      renderMonth();
+    }
+    function openFollowUpModalFromItem(item) {
+      document.getElementById('modal-id').value = item.id;
+      document.getElementById('modal-lead-id').value = item.lead_id || '';
+      document.getElementById('modal-due').value = toDatetimeLocalValue(item.due_at);
+      document.getElementById('modal-reason').value = item.reason || '';
+      document.getElementById('modal-priority').value = item.priority || 'normal';
+      const link = document.getElementById('modal-open-lead');
+      link.href = item.lead_id ? `/crm/leads/${item.lead_id}` : '#';
+      document.getElementById('fu-modal').style.display = 'flex';
+    }
+    function openFollowUpModal(btn) {
+      openFollowUpModalFromItem({
+        id: btn.dataset.id,
+        lead_id: btn.dataset.leadId,
+        due_at: btn.dataset.dueAt,
+        reason: btn.dataset.reason,
+        priority: btn.dataset.priority,
+        status: btn.dataset.status,
+      });
+    }
+    function closeFollowUpModal() {
+      document.getElementById('fu-modal').style.display = 'none';
+    }
+    async function saveFollowUpModal() {
+      const id = document.getElementById('modal-id').value;
+      const localDue = document.getElementById('modal-due').value;
+      if (!localDue) return showFlash('Due date is required.', true);
+      const due = new Date(localDue);
+      const res = await fetch(`/api/crm/follow-ups/${id}`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          due_at: due.toISOString(),
+          reason: document.getElementById('modal-reason').value,
+          priority: document.getElementById('modal-priority').value,
+          local_due_label: formatLocal(due.toISOString()),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return showFlash(data.error || 'Could not save follow-up.', true);
+      showFlash('Follow-up updated.');
+      setTimeout(() => location.reload(), 500);
+    }
+    async function completeFollowUp(id) {
+      const res = await fetch(`/api/crm/follow-ups/${id}/complete`, {method: 'POST'});
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return showFlash(data.error || 'Could not complete.', true);
+      location.reload();
+    }
+    async function completeFromModal() {
+      const id = document.getElementById('modal-id').value;
+      await completeFollowUp(id);
+    }
+    async function dismissFromModal() {
+      const id = document.getElementById('modal-id').value;
+      const res = await fetch(`/api/crm/follow-ups/${id}/dismiss`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({reason: 'Dismissed from calendar'}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return showFlash(data.error || 'Could not dismiss.', true);
+      location.reload();
+    }
+    async function doLogout() {
+      await fetch('/logout', {method: 'POST'});
+      window.location.href = '/';
+    }
+    formatLocalDateTimes();
+    document.getElementById('fu-modal').addEventListener('click', (e) => {
+      if (e.target.id === 'fu-modal') closeFollowUpModal();
+    });
+  </script>
+</body>
+</html>

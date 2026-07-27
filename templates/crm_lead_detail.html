@@ -22,6 +22,7 @@
   <div class="public-nav">
     <a href="/dashboard">Dashboard</a>
     <a href="/crm/leads" class="active">Leads</a>
+    <a href="/crm/follow-ups">Follow-ups</a>
     <a href="/crm/tasks">Tasks</a>
     <a href="/crm/needs-attention">Needs Attention</a>
     <a href="/#sms">AI SMS</a>
@@ -29,6 +30,7 @@
   <nav class="tool-nav">
     <a href="/dashboard">Dashboard</a>
     <a href="/crm/leads" class="active">Leads</a>
+    <a href="/crm/follow-ups">Follow-ups</a>
     <a href="/crm/tasks">Tasks</a>
     <a href="/crm/needs-attention">Needs Attention</a>
     <a href="/#sms">AI SMS Assistant</a>
@@ -48,7 +50,21 @@
       <div class="status-hero">{{ status_label(lead.status) }}</div>
       {% if lead.opt_out_status == 'opted_out' %}<span class="pill danger">Opted out — Do Not Contact</span>{% endif %}
       <p>{% if lead.next_action %}<strong>Next action:</strong> {{ lead.next_action }}{% endif %}</p>
-      <p class="muted">{% if lead.next_follow_up_at or lead.follow_up_at %}Follow-up: <span class="local-dt" data-utc="{{ lead.next_follow_up_at or lead.follow_up_at }}">{{ (lead.next_follow_up_at or lead.follow_up_at)[:16] }}</span>{% if lead.follow_up_reason %} — {{ lead.follow_up_reason }}{% endif %}{% else %}No follow-up scheduled{% endif %}</p>
+      {% if next_follow_up %}
+      <div style="margin-top:10px;padding:12px 14px;background:#f8fafc;border-radius:10px;border:1px solid #eef2f7;">
+        <div><strong>Next follow-up:</strong></div>
+        <div style="font-size:18px;font-weight:800;margin-top:4px;">
+          <span class="local-dt" data-utc="{{ next_follow_up.due_at }}">{{ (next_follow_up.due_at or '')[:16] }}</span>
+        </div>
+        <div class="muted" style="margin-top:4px;">Reason: {{ next_follow_up.reason or 'Follow up' }}</div>
+        <div class="row" style="margin-top:6px;">
+          <span class="pill {% if next_follow_up.priority == 'high' %}warn{% endif %}">{{ next_follow_up.priority or 'normal' }}</span>
+          <span class="pill">{{ next_follow_up.status }}</span>
+        </div>
+      </div>
+      {% else %}
+      <p class="muted">No open follow-up scheduled</p>
+      {% endif %}
 
       <div class="quick-actions">
         <a class="btn" href="/#sms">Draft SMS</a>
@@ -72,7 +88,11 @@
     <div class="grid-2">
       <div>
         <div class="card" id="fu-panel">
-          <h2>Follow-up</h2>
+          <h2>Follow-ups</h2>
+          <p class="muted" style="margin:0 0 10px;font-size:12px;">
+            Quick options schedule or reschedule an open follow-up. The list below is the source of truth.
+            <a href="/crm/follow-ups">Open calendar</a>
+          </p>
           <div class="quick-actions">
             <button class="btn secondary" type="button" onclick="quickFollowUp('tomorrow')">Tomorrow</button>
             <button class="btn secondary" type="button" onclick="quickFollowUp('3d')">+3 days</button>
@@ -80,11 +100,54 @@
             <button class="btn secondary" type="button" onclick="quickFollowUp('2w')">+2 weeks</button>
             <button class="btn secondary" type="button" onclick="quickFollowUp('30d')">+30 days</button>
           </div>
-          <div class="row">
-            <input id="fu-reason" placeholder="Reason" value="Follow up" />
-            <button class="btn" type="button" onclick="completeFollowUp()">Mark complete</button>
-            <button class="btn secondary" type="button" onclick="dismissFollowUp()">Dismiss</button>
+          <div class="row" style="margin-bottom:12px;">
+            <input id="fu-reason" placeholder="Reason" value="Follow up" style="min-width:180px;" />
+            <select id="fu-priority">
+              {% for p in priorities %}<option value="{{ p }}" {% if p == 'normal' %}selected{% endif %}>{{ p }}</option>{% endfor %}
+            </select>
+            <input id="fu-custom-due" type="datetime-local" />
+            <button class="btn" type="button" onclick="scheduleCustomFollowUp()">Schedule</button>
           </div>
+
+          {% macro render_follow_ups(title, items) %}
+          <h3>{{ title }}</h3>
+          {% if items %}
+          <ul class="timeline">
+            {% for item in items %}
+            <li data-follow-up-id="{{ item.id }}">
+              <div><strong class="local-dt" data-utc="{{ item.due_at }}">{{ (item.due_at or '')[:16] }}</strong>
+                <span class="pill {% if item.priority == 'high' %}warn{% endif %}">{{ item.priority or 'normal' }}</span>
+                <span class="pill">{{ item.status }}</span>
+              </div>
+              <div style="margin-top:4px;">{{ item.reason or 'Follow up' }}</div>
+              <div class="muted" style="margin-top:4px;">
+                Created by {{ item.created_by_email or 'agent' }}
+                · <span class="local-dt" data-utc="{{ item.created_at }}">{{ (item.created_at or '')[:16] }}</span>
+                {% if item.completed_at %}
+                · Completed <span class="local-dt" data-utc="{{ item.completed_at }}">{{ (item.completed_at or '')[:16] }}</span>
+                {% endif %}
+              </div>
+              {% if item.status == 'pending' %}
+              <div class="row" style="margin-top:8px;">
+                <button class="btn" type="button" onclick="completeFollowUpById({{ item.id }})">Mark complete</button>
+                <button class="btn secondary" type="button" onclick="rescheduleFollowUp({{ item.id }})">Reschedule</button>
+                <button class="btn secondary" type="button" onclick="editFollowUpReason({{ item.id }}, {{ (item.reason or '')|tojson }})">Edit reason</button>
+                <button class="btn secondary" type="button" onclick="changeFollowUpPriority({{ item.id }}, {{ (item.priority or 'normal')|tojson }})">Priority</button>
+                <button class="btn secondary" type="button" onclick="dismissFollowUpById({{ item.id }})">Dismiss</button>
+              </div>
+              {% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="empty">None</p>
+          {% endif %}
+          {% endmacro %}
+
+          {{ render_follow_ups('Overdue', follow_up_groups.overdue) }}
+          {{ render_follow_ups('Due today', follow_up_groups.today) }}
+          {{ render_follow_ups('Upcoming', follow_up_groups.upcoming) }}
+          {{ render_follow_ups('Completed', follow_up_groups.completed[:20]) }}
         </div>
 
         <div class="card" id="task-panel">
@@ -274,6 +337,15 @@
   </div>
   <script>
     const leadId = {{ lead.id }};
+    (function ensureLocalFollowUpContext() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('tz_offset_minutes') != null && params.get('local_date')) return;
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      params.set('local_date', `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
+      params.set('tz_offset_minutes', String(d.getTimezoneOffset()));
+      window.location.replace(`${window.location.pathname}?${params.toString()}`);
+    })();
     function showFlash(msg, err) {
       const el = document.getElementById('flash');
       el.textContent = msg;
@@ -296,28 +368,134 @@
       if (!res.ok) return showFlash(data.error || 'Failed', true);
       location.reload();
     }
-    async function quickFollowUp(pick) {
-      const reason = document.getElementById('fu-reason').value || 'Follow up';
-      const res = await fetch(`/api/crm/leads/${leadId}/follow-up`, {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({quick_pick: pick, reason}),
+    function formatLocalLabel(iso) {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso || '').slice(0, 16);
+      return d.toLocaleString(undefined, {
+        year: 'numeric', month: 'long', day: 'numeric',
+        hour: 'numeric', minute: '2-digit',
       });
-      const data = await res.json();
+    }
+    function quickDueIso(pick) {
+      const days = {tomorrow: 1, '3d': 3, '1w': 7, '2w': 14, '30d': 30}[pick];
+      if (days == null) return null;
+      const d = new Date();
+      d.setHours(9, 0, 0, 0);
+      d.setDate(d.getDate() + days);
+      return d.toISOString();
+    }
+    let followUpInFlight = false;
+    async function postFollowUp(payload, {allowConflictPrompt = true} = {}) {
+      if (followUpInFlight) return;
+      followUpInFlight = true;
+      try {
+        const res = await fetch(`/api/crm/leads/${leadId}/follow-up`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 409 && data.conflict && allowConflictPrompt) {
+          const replace = window.confirm(
+            (data.message || 'An open follow-up with this reason already exists.') +
+            '\n\nOK = replace/reschedule existing\nCancel = create another'
+          );
+          followUpInFlight = false;
+          if (replace) {
+            return postFollowUp({...payload, replace_existing: true, force_create: false}, {allowConflictPrompt: false});
+          }
+          return postFollowUp({...payload, force_create: true, replace_existing: false}, {allowConflictPrompt: false});
+        }
+        if (!res.ok) {
+          showFlash(data.error || data.message || 'Could not schedule follow-up.', true);
+          return null;
+        }
+        showFlash(data.confirmation || `Follow-up scheduled for ${formatLocalLabel(data.due_at)}.`);
+        setTimeout(() => location.reload(), 700);
+        return data;
+      } catch (err) {
+        showFlash(err.message || 'Could not schedule follow-up.', true);
+        return null;
+      } finally {
+        followUpInFlight = false;
+      }
+    }
+    async function quickFollowUp(pick) {
+      const dueAt = quickDueIso(pick);
+      if (!dueAt) return showFlash('Invalid quick option.', true);
+      const reason = document.getElementById('fu-reason').value || 'Follow up';
+      const priority = document.getElementById('fu-priority').value || 'normal';
+      await postFollowUp({
+        due_at: dueAt,
+        reason,
+        priority,
+        replace_existing: true,
+        local_due_label: formatLocalLabel(dueAt),
+      });
+    }
+    async function scheduleCustomFollowUp() {
+      const localDue = document.getElementById('fu-custom-due').value;
+      if (!localDue) return showFlash('Choose a date and time.', true);
+      const dueAt = new Date(localDue).toISOString();
+      await postFollowUp({
+        due_at: dueAt,
+        reason: document.getElementById('fu-reason').value || 'Follow up',
+        priority: document.getElementById('fu-priority').value || 'normal',
+        replace_existing: true,
+        local_due_label: formatLocalLabel(dueAt),
+      });
+    }
+    async function completeFollowUpById(id) {
+      const res = await fetch(`/api/crm/follow-ups/${id}/complete`, {method: 'POST'});
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) return showFlash(data.error || 'Failed', true);
       location.reload();
     }
-    async function completeFollowUp() {
-      const res = await fetch(`/api/crm/leads/${leadId}/follow-up/complete`, {method: 'POST'});
-      const data = await res.json();
-      if (!res.ok) return showFlash(data.error || 'Failed', true);
-      location.reload();
-    }
-    async function dismissFollowUp() {
-      const res = await fetch(`/api/crm/leads/${leadId}/follow-up/dismiss`, {
+    async function dismissFollowUpById(id) {
+      const res = await fetch(`/api/crm/follow-ups/${id}/dismiss`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({reason: 'Dismissed by agent'}),
       });
-      if (!res.ok) return showFlash('Failed', true);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return showFlash(data.error || 'Failed', true);
+      location.reload();
+    }
+    async function rescheduleFollowUp(id) {
+      const localDue = window.prompt('New local date/time (YYYY-MM-DDTHH:MM)', '');
+      if (!localDue) return;
+      const due = new Date(localDue);
+      if (Number.isNaN(due.getTime())) return showFlash('Invalid date/time.', true);
+      const res = await fetch(`/api/crm/follow-ups/${id}`, {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          due_at: due.toISOString(),
+          local_due_label: formatLocalLabel(due.toISOString()),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return showFlash(data.error || 'Failed', true);
+      showFlash(`Follow-up rescheduled for ${formatLocalLabel(due.toISOString())}.`);
+      setTimeout(() => location.reload(), 700);
+    }
+    async function editFollowUpReason(id, current) {
+      const reason = window.prompt('Follow-up reason', current || 'Follow up');
+      if (reason == null) return;
+      const res = await fetch(`/api/crm/follow-ups/${id}`, {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({reason}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return showFlash(data.error || 'Failed', true);
+      location.reload();
+    }
+    async function changeFollowUpPriority(id, current) {
+      const priority = window.prompt('Priority (low, normal, high)', current || 'normal');
+      if (!priority) return;
+      const res = await fetch(`/api/crm/follow-ups/${id}`, {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({priority}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return showFlash(data.error || 'Failed', true);
       location.reload();
     }
     async function createTask() {

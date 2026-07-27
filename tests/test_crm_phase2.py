@@ -46,8 +46,8 @@ def test_follow_up_complete(two_users):
     u1, _ = two_users
     lead_id = _lead(u1)
     due = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
-    fid, err = crm_db.set_lead_follow_up(u1, lead_id, due, "Call back")
-    assert err is None and fid
+    result, err = crm_db.set_lead_follow_up(u1, lead_id, due, "Call back")
+    assert err is None and result and result["follow_up_id"]
     ok, err = crm_db.complete_lead_follow_up(u1, lead_id)
     assert ok and err is None
     lead = db.get_lead(lead_id, u1)

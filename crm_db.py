@@ -170,6 +170,28 @@ def add_lead_activity(lead_id, user_id, event_type, summary, payload=None, actor
         return cur.lastrowid
 
 
+def _consolidate_follow_up_activities(activities):
+    """Keep one visible follow_up_scheduled row per follow_up_id (newest wins)."""
+    seen = set()
+    out = []
+    for activity in activities:
+        if activity.get("event_type") != "follow_up_scheduled":
+            out.append(activity)
+            continue
+        payload = parse_activity_payload(activity)
+        key = payload.get("follow_up_id")
+        if key is None:
+            # Legacy rows without follow_up_id: collapse identical summaries.
+            key = ("summary", activity.get("summary") or "")
+        else:
+            key = ("id", int(key))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(activity)
+    return out
+
+
 def list_lead_activities(user_id, lead_id, limit=100, *, for_timeline=False):
     fetch_limit = max(int(limit or 100), 1)
     if for_timeline:
@@ -188,6 +210,7 @@ def list_lead_activities(user_id, lead_id, limit=100, *, for_timeline=False):
         items = [dict(r) for r in rows]
     if for_timeline:
         items = filter_voice_activities_for_timeline(items)
+        items = _consolidate_follow_up_activities(items)
     return items[: max(int(limit or 100), 1)]
 
 
@@ -279,16 +302,94 @@ def set_lead_status(user_id, lead_id, new_status, actor_user_id=None, from_autom
         return dict(lead) if lead else None, None
 
 
-def set_lead_follow_up(user_id, lead_id, due_at, reason, priority="normal", created_by=None):
-    priority = priority if priority in PRIORITIES else "normal"
+FOLLOW_UP_OPEN_STATUSES = ("pending",)
+FOLLOW_UP_DONE_STATUSES = ("done", "cancelled")
+
+
+def normalize_follow_up_reason(reason):
+    text = re.sub(r"\s+", " ", str(reason or "").strip().lower())
+    return text[:500] or "follow up"
+
+
+def _normalize_due_at_key(due_at):
+    """Collapse due timestamps to the minute for idempotent duplicate detection."""
+    if not due_at:
+        return ""
+    text = str(due_at).replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.astimezone(timezone.utc).replace(second=0, microsecond=0)
+        return dt.isoformat()
+    except ValueError:
+        return str(due_at)[:16]
+
+
+def _parse_iso_dt(value):
+    if not value:
+        return None
+    text = str(value).replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _local_date_for_due(due_at, tz_offset_minutes=None, local_date=None):
+    """Return YYYY-MM-DD in the agent's local timezone when offset is provided."""
+    dt = _parse_iso_dt(due_at)
+    if dt is None:
+        return str(due_at or "")[:10]
+    if tz_offset_minutes is None:
+        # Fall back to UTC calendar day (or caller-provided local_date context).
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        offset = int(tz_offset_minutes)
+    except (TypeError, ValueError):
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
+    local_dt = dt.astimezone(timezone.utc) - timedelta(minutes=offset)
+    return local_dt.strftime("%Y-%m-%d")
+
+
+def _follow_up_select_sql():
+    return """
+        SELECT f.*,
+               l.name AS lead_name,
+               l.phone_number,
+               u.email AS created_by_email
+        FROM lead_follow_ups f
+        JOIN leads l ON l.id = f.lead_id
+        LEFT JOIN users u ON u.id = f.created_by
+    """
+
+
+def _row_to_follow_up(row):
+    if not row:
+        return None
+    item = dict(row)
+    item["reason_normalized"] = normalize_follow_up_reason(item.get("reason"))
+    item["is_open"] = item.get("status") in FOLLOW_UP_OPEN_STATUSES
+    return item
+
+
+def _sync_lead_next_follow_up(conn, user_id, lead_id):
+    """Keep denormalized lead next-follow-up fields aligned with open rows."""
     now = _now()
-    with get_db() as conn:
-        lead = conn.execute(
-            "SELECT id FROM leads WHERE id = ? AND user_id = ?",
-            (lead_id, user_id),
-        ).fetchone()
-        if not lead:
-            return None, "Lead not found."
+    nxt = conn.execute(
+        """
+        SELECT due_at, reason, priority, created_by
+        FROM lead_follow_ups
+        WHERE user_id = ? AND lead_id = ? AND status = 'pending'
+        ORDER BY due_at ASC, id ASC
+        LIMIT 1
+        """,
+        (user_id, lead_id),
+    ).fetchone()
+    if nxt:
         conn.execute(
             """
             UPDATE leads
@@ -296,87 +397,619 @@ def set_lead_follow_up(user_id, lead_id, due_at, reason, priority="normal", crea
                 follow_up_completed_at = NULL, follow_up_created_by = ?, updated_at = ?
             WHERE id = ? AND user_id = ?
             """,
-            (due_at, reason, priority, created_by or user_id, now, lead_id, user_id),
+            (
+                nxt["due_at"],
+                nxt["reason"],
+                nxt["priority"] or "normal",
+                nxt["created_by"] or user_id,
+                now,
+                lead_id,
+                user_id,
+            ),
         )
+    else:
+        conn.execute(
+            """
+            UPDATE leads
+            SET next_follow_up_at = NULL, follow_up_reason = NULL, follow_up_priority = NULL,
+                updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (now, lead_id, user_id),
+        )
+
+
+def _activity_summary_for_schedule(due_at, reason, local_due_label=None):
+    reason_text = str(reason or "Follow up").strip() or "Follow up"
+    label = str(local_due_label or "").strip()
+    if not label:
+        dt = _parse_iso_dt(due_at)
+        if dt:
+            label = dt.astimezone(timezone.utc).strftime("%B %d, %Y at %H:%M UTC")
+        else:
+            label = str(due_at or "")[:16]
+    return f"Follow-up scheduled for {label} — {reason_text}."
+
+
+def set_lead_follow_up(
+    user_id,
+    lead_id,
+    due_at,
+    reason,
+    priority="normal",
+    created_by=None,
+    *,
+    replace_existing=True,
+    force_create=False,
+    local_due_label=None,
+):
+    """Create or update a follow-up. Source of truth: lead_follow_ups.
+
+    Dedupes open follow-ups for the same tenant/lead/normalized reason/due minute.
+    Quick actions default to replace_existing=True so repeated clicks reschedule
+    instead of inserting duplicates.
+    """
+    priority = priority if priority in PRIORITIES else "normal"
+    reason = str(reason or "Follow up").strip()[:500] or "Follow up"
+    reason_key = normalize_follow_up_reason(reason)
+    due_key = _normalize_due_at_key(due_at)
+    actor = created_by or user_id
+    now = _now()
+
+    if not due_at:
+        return None, "due_at is required."
+
+    with get_db() as conn:
+        lead = conn.execute(
+            "SELECT id FROM leads WHERE id = ? AND user_id = ?",
+            (lead_id, user_id),
+        ).fetchone()
+        if not lead:
+            return None, "Lead not found."
+
+        open_rows = conn.execute(
+            """
+            SELECT * FROM lead_follow_ups
+            WHERE user_id = ? AND lead_id = ? AND status = 'pending'
+            ORDER BY due_at ASC, id ASC
+            """,
+            (user_id, lead_id),
+        ).fetchall()
+        open_rows = [dict(r) for r in open_rows]
+
+        exact = next(
+            (
+                r
+                for r in open_rows
+                if normalize_follow_up_reason(r.get("reason")) == reason_key
+                and _normalize_due_at_key(r.get("due_at")) == due_key
+            ),
+            None,
+        )
+        if exact and not force_create:
+            _sync_lead_next_follow_up(conn, user_id, lead_id)
+            return {
+                "follow_up_id": exact["id"],
+                "due_at": exact["due_at"],
+                "reason": exact.get("reason") or reason,
+                "priority": exact.get("priority") or priority,
+                "created": False,
+                "updated": False,
+                "duplicate": True,
+                "confirmation": _activity_summary_for_schedule(
+                    exact["due_at"], exact.get("reason") or reason, local_due_label
+                ).rstrip(".")
+                + " (already scheduled).",
+            }, None
+
+        same_reason = next(
+            (
+                r
+                for r in open_rows
+                if normalize_follow_up_reason(r.get("reason")) == reason_key
+            ),
+            None,
+        )
+        if same_reason and not force_create:
+            if not replace_existing:
+                return {
+                    "conflict": True,
+                    "existing_follow_up_id": same_reason["id"],
+                    "existing_due_at": same_reason["due_at"],
+                    "existing_reason": same_reason.get("reason") or reason,
+                    "message": (
+                        "An open follow-up with this reason already exists. "
+                        "Replace it or create another?"
+                    ),
+                }, "conflict"
+
+            conn.execute(
+                """
+                UPDATE lead_follow_ups
+                SET due_at = ?, reason = ?, priority = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (due_at, reason, priority, same_reason["id"], user_id),
+            )
+            follow_up_id = same_reason["id"]
+            _sync_lead_next_follow_up(conn, user_id, lead_id)
+            summary = _activity_summary_for_schedule(due_at, reason, local_due_label)
+            # One timeline entry for reschedule — avoid spam on repeated clicks.
+            existing_activity = conn.execute(
+                """
+                SELECT id, payload_json FROM lead_activities
+                WHERE user_id = ? AND lead_id = ? AND event_type = 'follow_up_scheduled'
+                ORDER BY id DESC LIMIT 20
+                """,
+                (user_id, lead_id),
+            ).fetchall()
+            updated_activity = False
+            for act in existing_activity:
+                try:
+                    payload = json.loads(act["payload_json"] or "{}")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    payload = {}
+                if int(payload.get("follow_up_id") or 0) == int(follow_up_id):
+                    conn.execute(
+                        """
+                        UPDATE lead_activities
+                        SET summary = ?, payload_json = ?, created_at = ?
+                        WHERE id = ? AND user_id = ?
+                        """,
+                        (
+                            summary,
+                            json.dumps(
+                                {
+                                    "due_at": due_at,
+                                    "priority": priority,
+                                    "follow_up_id": follow_up_id,
+                                    "reason": reason,
+                                    "rescheduled": True,
+                                }
+                            )[:4000],
+                            now,
+                            act["id"],
+                            user_id,
+                        ),
+                    )
+                    updated_activity = True
+                    break
+            if not updated_activity:
+                _insert_activity(
+                    conn,
+                    lead_id,
+                    user_id,
+                    "follow_up_scheduled",
+                    summary,
+                    {
+                        "due_at": due_at,
+                        "priority": priority,
+                        "follow_up_id": follow_up_id,
+                        "reason": reason,
+                        "rescheduled": True,
+                    },
+                    actor_user_id=actor,
+                )
+            return {
+                "follow_up_id": follow_up_id,
+                "due_at": due_at,
+                "reason": reason,
+                "priority": priority,
+                "created": False,
+                "updated": True,
+                "duplicate": False,
+                "confirmation": summary.rstrip("."),
+            }, None
+
         cur = conn.execute(
             """
             INSERT INTO lead_follow_ups
                 (lead_id, user_id, due_at, reason, status, created_at, priority, created_by)
             VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
             """,
-            (lead_id, user_id, due_at, reason, now, priority, created_by or user_id),
+            (lead_id, user_id, due_at, reason, now, priority, actor),
         )
         follow_up_id = cur.lastrowid
-    add_lead_activity(
-        lead_id,
-        user_id,
-        "follow_up_scheduled",
-        f"Follow-up scheduled: {reason or 'Follow up'}",
-        {"due_at": due_at, "priority": priority, "follow_up_id": follow_up_id},
-        actor_user_id=created_by or user_id,
-    )
-    return follow_up_id, None
+        _sync_lead_next_follow_up(conn, user_id, lead_id)
+        summary = _activity_summary_for_schedule(due_at, reason, local_due_label)
+        _insert_activity(
+            conn,
+            lead_id,
+            user_id,
+            "follow_up_scheduled",
+            summary,
+            {
+                "due_at": due_at,
+                "priority": priority,
+                "follow_up_id": follow_up_id,
+                "reason": reason,
+            },
+            actor_user_id=actor,
+        )
+        return {
+            "follow_up_id": follow_up_id,
+            "due_at": due_at,
+            "reason": reason,
+            "priority": priority,
+            "created": True,
+            "updated": False,
+            "duplicate": False,
+            "confirmation": summary.rstrip("."),
+        }, None
 
 
-def complete_lead_follow_up(user_id, lead_id):
-    now = _now()
+def get_follow_up(user_id, follow_up_id):
+    with get_db() as conn:
+        row = conn.execute(
+            _follow_up_select_sql() + " WHERE f.id = ? AND f.user_id = ?",
+            (follow_up_id, user_id),
+        ).fetchone()
+        return _row_to_follow_up(row)
+
+
+def list_lead_follow_ups(user_id, lead_id, include_completed=True, limit=100):
     with get_db() as conn:
         lead = conn.execute(
-            "SELECT next_follow_up_at, follow_up_reason, follow_up_priority FROM leads WHERE id = ? AND user_id = ?",
+            "SELECT id FROM leads WHERE id = ? AND user_id = ?",
             (lead_id, user_id),
         ).fetchone()
         if not lead:
-            return False, "Lead not found."
+            return []
+        if include_completed:
+            rows = conn.execute(
+                _follow_up_select_sql()
+                + """
+                WHERE f.user_id = ? AND f.lead_id = ?
+                ORDER BY
+                  CASE WHEN f.status = 'pending' THEN 0 ELSE 1 END,
+                  f.due_at ASC, f.id ASC
+                LIMIT ?
+                """,
+                (user_id, lead_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                _follow_up_select_sql()
+                + """
+                WHERE f.user_id = ? AND f.lead_id = ? AND f.status = 'pending'
+                ORDER BY f.due_at ASC, f.id ASC
+                LIMIT ?
+                """,
+                (user_id, lead_id, limit),
+            ).fetchall()
+        return [_row_to_follow_up(r) for r in rows]
+
+
+def group_follow_ups_for_lead(follow_ups, local_date=None, tz_offset_minutes=None):
+    day = _calendar_day(local_date)
+    groups = {"overdue": [], "today": [], "upcoming": [], "completed": []}
+    for item in follow_ups:
+        if item.get("status") != "pending":
+            groups["completed"].append(item)
+            continue
+        due_day = _local_date_for_due(
+            item.get("due_at"), tz_offset_minutes=tz_offset_minutes, local_date=day
+        )
+        if due_day < day:
+            groups["overdue"].append(item)
+        elif due_day == day:
+            groups["today"].append(item)
+        else:
+            groups["upcoming"].append(item)
+    return groups
+
+
+def list_follow_ups(
+    user_id,
+    bucket="all",
+    limit=200,
+    local_date=None,
+    tz_offset_minutes=None,
+    start_at=None,
+    end_at=None,
+):
+    """List follow-ups for calendar / agenda views. Always scoped to user_id."""
+    day = _calendar_day(local_date)
+    with get_db() as conn:
+        rows = conn.execute(
+            _follow_up_select_sql()
+            + """
+            WHERE f.user_id = ?
+            ORDER BY f.due_at ASC, f.id ASC
+            LIMIT ?
+            """,
+            (user_id, max(int(limit), 1)),
+        ).fetchall()
+    items = [_row_to_follow_up(r) for r in rows]
+
+    if start_at or end_at:
+        filtered = []
+        for item in items:
+            due = str(item.get("due_at") or "")
+            if start_at and due < str(start_at):
+                continue
+            if end_at and due > str(end_at):
+                continue
+            filtered.append(item)
+        items = filtered
+
+    if bucket in (None, "", "all", "agenda"):
+        return items
+    if bucket == "completed":
+        return [i for i in items if i.get("status") != "pending"]
+    if bucket == "overdue":
+        return [
+            i
+            for i in items
+            if i.get("status") == "pending"
+            and _local_date_for_due(i.get("due_at"), tz_offset_minutes, day) < day
+        ]
+    if bucket == "today":
+        return [
+            i
+            for i in items
+            if i.get("status") == "pending"
+            and _local_date_for_due(i.get("due_at"), tz_offset_minutes, day) == day
+        ]
+    if bucket == "upcoming":
+        return [
+            i
+            for i in items
+            if i.get("status") == "pending"
+            and _local_date_for_due(i.get("due_at"), tz_offset_minutes, day) > day
+        ]
+    if bucket == "week":
+        start = datetime.strptime(day, "%Y-%m-%d").date()
+        end = start + timedelta(days=7)
+        out = []
+        for item in items:
+            if item.get("status") != "pending":
+                continue
+            due_day = _local_date_for_due(item.get("due_at"), tz_offset_minutes, day)
+            try:
+                d = datetime.strptime(due_day, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if start <= d < end:
+                out.append(item)
+        return out
+    return items
+
+
+def follow_up_dashboard_counts(user_id, local_date=None, tz_offset_minutes=None):
+    day = _calendar_day(local_date)
+    items = list_follow_ups(
+        user_id, bucket="all", limit=500, local_date=day, tz_offset_minutes=tz_offset_minutes
+    )
+    overdue = 0
+    today = 0
+    week = 0
+    start = datetime.strptime(day, "%Y-%m-%d").date()
+    end = start + timedelta(days=7)
+    for item in items:
+        if item.get("status") != "pending":
+            continue
+        due_day = _local_date_for_due(item.get("due_at"), tz_offset_minutes, day)
+        try:
+            d = datetime.strptime(due_day, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if d < start:
+            overdue += 1
+        if d == start:
+            today += 1
+        if start <= d < end:
+            week += 1
+    return {
+        "follow_ups_due_today": today,
+        "follow_ups_overdue": overdue,
+        "follow_ups_due_this_week": week,
+    }
+
+
+def update_follow_up(user_id, follow_up_id, *, due_at=None, reason=None, priority=None, local_due_label=None):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM lead_follow_ups WHERE id = ? AND user_id = ?",
+            (follow_up_id, user_id),
+        ).fetchone()
+        if not row:
+            return None, "Follow-up not found."
+        item = dict(row)
+        new_due = due_at if due_at is not None else item["due_at"]
+        new_reason = (
+            str(reason).strip()[:500]
+            if reason is not None
+            else (item.get("reason") or "Follow up")
+        ) or "Follow up"
+        new_priority = (
+            priority
+            if priority in PRIORITIES
+            else (item.get("priority") if item.get("priority") in PRIORITIES else "normal")
+        )
         conn.execute(
             """
-            UPDATE leads
-            SET follow_up_completed_at = ?, next_follow_up_at = NULL, updated_at = ?
+            UPDATE lead_follow_ups
+            SET due_at = ?, reason = ?, priority = ?
             WHERE id = ? AND user_id = ?
             """,
-            (now, now, lead_id, user_id),
+            (new_due, new_reason, new_priority, follow_up_id, user_id),
         )
+        _sync_lead_next_follow_up(conn, user_id, item["lead_id"])
+        if item.get("status") == "pending":
+            summary = _activity_summary_for_schedule(new_due, new_reason, local_due_label)
+            # Update newest matching activity instead of appending duplicates.
+            acts = conn.execute(
+                """
+                SELECT id, payload_json FROM lead_activities
+                WHERE user_id = ? AND lead_id = ? AND event_type = 'follow_up_scheduled'
+                ORDER BY id DESC LIMIT 30
+                """,
+                (user_id, item["lead_id"]),
+            ).fetchall()
+            touched = False
+            for act in acts:
+                try:
+                    payload = json.loads(act["payload_json"] or "{}")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    payload = {}
+                if int(payload.get("follow_up_id") or 0) == int(follow_up_id):
+                    conn.execute(
+                        """
+                        UPDATE lead_activities
+                        SET summary = ?, payload_json = ?
+                        WHERE id = ? AND user_id = ?
+                        """,
+                        (
+                            summary,
+                            json.dumps(
+                                {
+                                    "due_at": new_due,
+                                    "priority": new_priority,
+                                    "follow_up_id": follow_up_id,
+                                    "reason": new_reason,
+                                    "rescheduled": True,
+                                }
+                            )[:4000],
+                            act["id"],
+                            user_id,
+                        ),
+                    )
+                    touched = True
+                    break
+            if not touched:
+                _insert_activity(
+                    conn,
+                    item["lead_id"],
+                    user_id,
+                    "follow_up_scheduled",
+                    summary,
+                    {
+                        "due_at": new_due,
+                        "priority": new_priority,
+                        "follow_up_id": follow_up_id,
+                        "reason": new_reason,
+                        "rescheduled": True,
+                    },
+                    actor_user_id=user_id,
+                )
+    return get_follow_up(user_id, follow_up_id), None
+
+
+def complete_follow_up(user_id, follow_up_id):
+    now = _now()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM lead_follow_ups WHERE id = ? AND user_id = ?",
+            (follow_up_id, user_id),
+        ).fetchone()
+        if not row:
+            return False, "Follow-up not found."
+        item = dict(row)
+        if item.get("status") != "pending":
+            return True, None
         conn.execute(
             """
             UPDATE lead_follow_ups
             SET status = 'done', completed_at = ?
-            WHERE lead_id = ? AND user_id = ? AND status = 'pending'
+            WHERE id = ? AND user_id = ?
             """,
-            (now, lead_id, user_id),
+            (now, follow_up_id, user_id),
         )
-    add_lead_activity(
-        lead_id,
-        user_id,
-        "follow_up_completed",
-        "Follow-up marked complete",
-        {
-            "original_due_at": lead["next_follow_up_at"],
-            "reason": lead["follow_up_reason"],
-            "priority": lead["follow_up_priority"],
-        },
-    )
+        remaining = conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM lead_follow_ups
+            WHERE user_id = ? AND lead_id = ? AND status = 'pending'
+            """,
+            (user_id, item["lead_id"]),
+        ).fetchone()["count"]
+        if remaining == 0:
+            conn.execute(
+                """
+                UPDATE leads
+                SET follow_up_completed_at = ?, next_follow_up_at = NULL, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (now, now, item["lead_id"], user_id),
+            )
+        else:
+            _sync_lead_next_follow_up(conn, user_id, item["lead_id"])
+        _insert_activity(
+            conn,
+            item["lead_id"],
+            user_id,
+            "follow_up_completed",
+            f"Follow-up completed — {item.get('reason') or 'Follow up'}",
+            {
+                "follow_up_id": follow_up_id,
+                "original_due_at": item.get("due_at"),
+                "reason": item.get("reason"),
+                "priority": item.get("priority"),
+            },
+            actor_user_id=user_id,
+        )
     return True, None
 
 
-def dismiss_lead_follow_up(user_id, lead_id, reason="Dismissed"):
+def dismiss_follow_up(user_id, follow_up_id, reason="Dismissed"):
     now = _now()
+    reason = str(reason or "Dismissed")[:500]
     with get_db() as conn:
-        conn.execute(
-            """
-            UPDATE leads
-            SET next_follow_up_at = NULL, follow_up_reason = NULL, updated_at = ?
-            WHERE id = ? AND user_id = ?
-            """,
-            (now, lead_id, user_id),
-        )
-        conn.execute(
-            """
-            UPDATE lead_follow_ups
-            SET status = 'cancelled', completed_at = ?
-            WHERE lead_id = ? AND user_id = ? AND status = 'pending'
-            """,
-            (now, lead_id, user_id),
-        )
-    add_lead_activity(lead_id, user_id, "follow_up_dismissed", reason, {})
+        row = conn.execute(
+            "SELECT * FROM lead_follow_ups WHERE id = ? AND user_id = ?",
+            (follow_up_id, user_id),
+        ).fetchone()
+        if not row:
+            return False, "Follow-up not found."
+        item = dict(row)
+        if item.get("status") == "pending":
+            conn.execute(
+                """
+                UPDATE lead_follow_ups
+                SET status = 'cancelled', completed_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (now, follow_up_id, user_id),
+            )
+            _sync_lead_next_follow_up(conn, user_id, item["lead_id"])
+            _insert_activity(
+                conn,
+                item["lead_id"],
+                user_id,
+                "follow_up_dismissed",
+                reason,
+                {"follow_up_id": follow_up_id, "reason": item.get("reason")},
+                actor_user_id=user_id,
+            )
+    return True, None
+
+
+def complete_lead_follow_up(user_id, lead_id, follow_up_id=None):
+    """Complete one follow-up (by id) or the next open follow-up for the lead."""
+    if follow_up_id:
+        return complete_follow_up(user_id, follow_up_id)
+    open_items = list_lead_follow_ups(user_id, lead_id, include_completed=False, limit=1)
+    if not open_items:
+        lead = None
+        with get_db() as conn:
+            lead = conn.execute(
+                "SELECT id FROM leads WHERE id = ? AND user_id = ?",
+                (lead_id, user_id),
+            ).fetchone()
+        if not lead:
+            return False, "Lead not found."
+        return True, None
+    return complete_follow_up(user_id, open_items[0]["id"])
+
+
+def dismiss_lead_follow_up(user_id, lead_id, reason="Dismissed", follow_up_id=None):
+    if follow_up_id:
+        return dismiss_follow_up(user_id, follow_up_id, reason=reason)
+    open_items = list_lead_follow_ups(user_id, lead_id, include_completed=False, limit=50)
+    if not open_items:
+        return True
+    for item in open_items:
+        dismiss_follow_up(user_id, item["id"], reason=reason)
     return True
 
 
@@ -1483,7 +2116,10 @@ def get_pipeline_metrics(user_id, since_iso=None):
             )
         needs = count("SELECT COUNT(*) AS count FROM needs_attention WHERE user_id = ? AND status = 'open'", (user_id,))
         overdue_fu = count(
-            "SELECT COUNT(*) AS count FROM leads WHERE user_id = ? AND next_follow_up_at IS NOT NULL AND next_follow_up_at < ?",
+            """
+            SELECT COUNT(*) AS count FROM lead_follow_ups
+            WHERE user_id = ? AND status = 'pending' AND due_at < ?
+            """,
             (user_id, now),
         )
         tasks_today = count(
@@ -1530,11 +2166,14 @@ def get_pipeline_metrics(user_id, since_iso=None):
             "count": sum(by_status.get(s, 0) for s in members),
         })
     delivery_total = sent + failed
+    counts = follow_up_dashboard_counts(user_id)
     return {
         "active_leads": active,
         "new_leads": new_leads,
         "needs_attention": needs,
         "overdue_follow_ups": overdue_fu,
+        "follow_ups_due_today": counts["follow_ups_due_today"],
+        "follow_ups_due_this_week": counts["follow_ups_due_this_week"],
         "tasks_due_today": tasks_today,
         "appointments_today": appts_today,
         "unreviewed_inbound": unreviewed,
