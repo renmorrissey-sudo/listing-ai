@@ -335,12 +335,15 @@ def normalize_voice_webhook(payload):
         or (call.get("analysis") or {}).get("summary")
     )
 
-    outcome = (
-        message.get("endedReason")
+    ended_reason = message.get("endedReason") or payload.get("endedReason") or ""
+    lifecycle_status = (
+        call.get("status")
+        or message.get("status")
         or payload.get("status")
-        or call.get("status")
-        or event_type
+        or ""
     )
+    # Prefer endedReason for outcome; do not treat transient call.status as the outcome label.
+    outcome = ended_reason or lifecycle_status or event_type or ""
 
     appointment_requested = False
     summary_text = " ".join(str(x or "").lower() for x in [summary, transcript, outcome])
@@ -375,7 +378,10 @@ def normalize_voice_webhook(payload):
     return {
         "call_id": internal_call_id,
         "provider_call_id": provider_call_id,
+        "event_type": event_type,
         "status": status,
+        "lifecycle_status": str(lifecycle_status or "").lower() or None,
+        "ended_reason": str(ended_reason or "").lower() or None,
         "outcome": outcome,
         "transcript": transcript,
         "transcript_url": transcript_url,

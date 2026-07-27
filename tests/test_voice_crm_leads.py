@@ -170,10 +170,11 @@ def test_call_appears_in_lead_timeline(app_client, two_users, monkeypatch):
         },
     )
     lead_id = res.get_json()["lead_id"]
-    activities = crm_db.list_lead_activities(u1, lead_id)
-    types = {a["event_type"] for a in activities}
-    assert "voice_call_started" in types
-    assert "lead_created" in types or "status_change" in types
+    # Dialer "started/queued" noise must not appear on the agent timeline.
+    timeline = crm_db.list_lead_activities(u1, lead_id, for_timeline=True)
+    timeline_types = {a["event_type"] for a in timeline}
+    assert "voice_call_started" not in timeline_types
+    assert "lead_created" in timeline_types or "status_change" in timeline_types
 
 
 def test_vapi_webhook_updates_linked_lead(app_client, two_users, monkeypatch):

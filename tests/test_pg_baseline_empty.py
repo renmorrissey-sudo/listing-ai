@@ -285,6 +285,7 @@ def test_empty_postgres_migration_order_and_ledger(fake_postgres):
         "003_user_business_profile",
         "004_voice_call_lead_link",
         "005_voice_call_recording_fields",
+        "006_cleanup_transient_voice_activities",
     }
     create_users_idx = next(
         i for i, (sql, _) in enumerate(fake_postgres.executed)
@@ -345,6 +346,7 @@ def test_empty_postgres_user_lead_task_survive_restart(fake_postgres):
         "003_user_business_profile",
         "004_voice_call_lead_link",
         "005_voice_call_recording_fields",
+        "006_cleanup_transient_voice_activities",
     }
 
 
@@ -470,4 +472,5 @@ def test_genuine_empty_postgres_database(monkeypatch):
             "003_user_business_profile",
             "004_voice_call_lead_link",
             "005_voice_call_recording_fields",
+            "006_cleanup_transient_voice_activities",
         }

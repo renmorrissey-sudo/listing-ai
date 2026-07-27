@@ -76,6 +76,10 @@ def _enrich_lead_activities(user_id, activities):
             "voice_call_completed",
             "voice_call_updated",
             "voice_call_started",
+            "voice_call_failed",
+            "voice_call_connected",
+            "voice_call_unanswered",
+            "voice_call_cancelled",
         ):
             call = db.get_voice_call(voice_call_id, user_id)
             if call:
@@ -192,7 +196,8 @@ def crm_lead_detail_page(lead_id):
     if not lead:
         return redirect(url_for("crm.crm_leads_page"))
     activities = _enrich_lead_activities(
-        user["id"], crm_db.list_lead_activities(user["id"], lead_id)
+        user["id"],
+        crm_db.list_lead_activities(user["id"], lead_id, for_timeline=True),
     )
     tasks = [t for t in crm_db.list_tasks(user["id"], bucket="all") if t.get("lead_id") == lead_id]
     appointments = crm_db.list_appointments(user["id"], lead_id=lead_id)

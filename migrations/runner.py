@@ -30,6 +30,7 @@ MIGRATION_MODULES = [
     "migrations.versions.003_user_business_profile",
     "migrations.versions.004_voice_call_lead_link",
     "migrations.versions.005_voice_call_recording_fields",
+    "migrations.versions.006_cleanup_transient_voice_activities",
 ]
 
 # Required after 001_baseline. App has no separate accounts/tenants/subscriptions

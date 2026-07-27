@@ -155,8 +155,8 @@
           <ul class="timeline">
             {% for a in activities %}
             <li>
-              {% if a.voice and a.event_type == 'voice_call_completed' %}
-              <strong>Voice call completed</strong>
+              {% if a.voice and a.event_type in ['voice_call_completed', 'voice_call_failed', 'voice_call_unanswered', 'voice_call_cancelled'] %}
+              <strong>{{ a.summary or 'Voice call completed' }}</strong>
               <div class="muted" style="margin-top:4px;">
                 {% if a.voice.duration_label %}{{ a.voice.duration_label }}{% endif %}
                 {% if a.voice.duration_label and a.voice.when_label %} · {% endif %}
@@ -165,6 +165,13 @@
               {% if a.voice.summary %}
               <div style="margin-top:6px;">{{ a.voice.summary }}</div>
               {% endif %}
+              {% if a.payload and a.payload.outcome and a.event_type != 'voice_call_completed' %}
+              <div class="muted" style="margin-top:4px;">Outcome: {{ a.payload.outcome }}</div>
+              {% endif %}
+              {% if a.payload and a.payload.recommended_next_action %}
+              <div style="margin-top:6px;"><strong>Next:</strong> {{ a.payload.recommended_next_action }}</div>
+              {% endif %}
+              {% if a.event_type == 'voice_call_completed' %}
               <div class="voice-recording" style="margin-top:10px;">
                 {% if a.voice.has_recording and a.voice.recording_url %}
                 <audio controls preload="none" src="{{ a.voice.recording_url }}" style="width:100%;max-width:360px;"></audio>
@@ -182,6 +189,7 @@
                 <span class="pill">Recording unavailable</span>
                 {% endif %}
               </div>
+              {% endif %}
               {% else %}
               <strong>{{ a.summary or a.event_type.replace('_',' ') }}</strong>
               <div class="muted">{{ (a.created_at or '')[:16] }} UTC</div>

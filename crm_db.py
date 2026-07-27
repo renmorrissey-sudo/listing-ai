@@ -26,6 +26,124 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+# Transient Vapi / dialer states — never show these on the agent timeline.
+VOICE_TRANSIENT_STATUSES = frozenset(
+    {
+        "queued",
+        "ringing",
+        "initiated",
+        "pending",
+        "started",
+        "starting",
+        "scheduled",
+        "connecting",
+        "loading",
+        "queued-for-retry",
+    }
+)
+
+VOICE_ACTIVITY_EVENT_TYPES = frozenset(
+    {
+        "voice_call_started",
+        "voice_call_updated",
+        "voice_call_completed",
+        "voice_call_failed",
+        "voice_call_connected",
+        "voice_call_unanswered",
+        "voice_call_cancelled",
+    }
+)
+
+
+def parse_activity_payload(activity):
+    try:
+        payload = json.loads((activity or {}).get("payload_json") or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _voice_activity_status_tokens(activity):
+    payload = parse_activity_payload(activity)
+    tokens = {
+        str(payload.get("status") or "").lower().strip(),
+        str(payload.get("lifecycle_status") or "").lower().strip(),
+        str(payload.get("outcome") or "").lower().strip(),
+        str(payload.get("ended_reason") or "").lower().strip(),
+        str(payload.get("meaningful_status") or "").lower().strip(),
+    }
+    summary = str((activity or {}).get("summary") or "").lower()
+    for marker in VOICE_TRANSIENT_STATUSES:
+        if marker in summary:
+            tokens.add(marker)
+    return {t for t in tokens if t}
+
+
+def is_transient_voice_timeline_activity(activity):
+    """True for low-value dialer noise that should stay out of the agent timeline."""
+    event_type = (activity or {}).get("event_type") or ""
+    if event_type not in VOICE_ACTIVITY_EVENT_TYPES:
+        return False
+    if event_type == "voice_call_started":
+        return True
+    if event_type == "voice_call_completed":
+        return False
+    if event_type == "voice_call_failed":
+        return False
+
+    payload = parse_activity_payload(activity)
+    # Keep rows that already carry agent-useful artifacts.
+    if payload.get("has_recording") or payload.get("has_transcript") or payload.get("summary"):
+        if event_type == "voice_call_completed":
+            return False
+    tokens = _voice_activity_status_tokens(activity)
+    if tokens & VOICE_TRANSIENT_STATUSES and not (
+        payload.get("has_recording")
+        or payload.get("has_transcript")
+        or (payload.get("summary") and event_type == "voice_call_completed")
+    ):
+        return True
+    # Legacy noisy rows: "AI call started: queued", "AI call updated: ringing", etc.
+    summary = str((activity or {}).get("summary") or "").lower().strip()
+    if summary.startswith("ai call started") or summary.startswith("ai call updated"):
+        if any(marker in summary for marker in VOICE_TRANSIENT_STATUSES):
+            return True
+        if summary in {"ai call started", "ai call updated", "ai call started:", "ai call updated:"}:
+            return True
+    return False
+
+
+def filter_voice_activities_for_timeline(activities):
+    """Drop transient voice noise and superseded start/update rows for completed calls."""
+    completed_call_ids = set()
+    for activity in activities:
+        if activity.get("event_type") != "voice_call_completed":
+            continue
+        payload = parse_activity_payload(activity)
+        try:
+            voice_call_id = int(payload.get("voice_call_id") or 0)
+        except (TypeError, ValueError):
+            voice_call_id = 0
+        if voice_call_id:
+            completed_call_ids.add(voice_call_id)
+
+    filtered = []
+    for activity in activities:
+        if is_transient_voice_timeline_activity(activity):
+            continue
+        event_type = activity.get("event_type") or ""
+        if event_type in {"voice_call_started", "voice_call_updated", "voice_call_connected"}:
+            payload = parse_activity_payload(activity)
+            try:
+                voice_call_id = int(payload.get("voice_call_id") or 0)
+            except (TypeError, ValueError):
+                voice_call_id = 0
+            if voice_call_id and voice_call_id in completed_call_ids:
+                continue
+        filtered.append(activity)
+    return filtered
+
+
 def add_lead_activity(lead_id, user_id, event_type, summary, payload=None, actor_user_id=None):
     with get_db() as conn:
         cur = conn.execute(
@@ -47,7 +165,11 @@ def add_lead_activity(lead_id, user_id, event_type, summary, payload=None, actor
         return cur.lastrowid
 
 
-def list_lead_activities(user_id, lead_id, limit=100):
+def list_lead_activities(user_id, lead_id, limit=100, *, for_timeline=False):
+    fetch_limit = max(int(limit or 100), 1)
+    if for_timeline:
+        # Over-fetch so filtering transient voice noise still fills the page.
+        fetch_limit = min(max(fetch_limit * 4, 50), 400)
     with get_db() as conn:
         rows = conn.execute(
             """
@@ -56,23 +178,28 @@ def list_lead_activities(user_id, lead_id, limit=100):
             ORDER BY created_at DESC
             LIMIT ?
             """,
-            (user_id, lead_id, limit),
+            (user_id, lead_id, fetch_limit),
         ).fetchall()
-        return [dict(r) for r in rows]
+        items = [dict(r) for r in rows]
+    if for_timeline:
+        items = filter_voice_activities_for_timeline(items)
+    return items[: max(int(limit or 100), 1)]
 
 
-def find_lead_activity_for_voice_call(user_id, lead_id, voice_call_id, event_type):
-    """Return the newest matching activity for a voice call event, if any."""
+def find_lead_activity_for_voice_call(user_id, lead_id, voice_call_id, event_type=None):
+    """Return the newest matching activity for a voice call, if any.
+
+    When event_type is None, match any voice-call activity for that call so
+    retries can update one consolidated timeline row.
+    """
     if not voice_call_id:
         return None
     voice_call_id = int(voice_call_id)
-    for activity in list_lead_activities(user_id, lead_id, limit=200):
-        if activity.get("event_type") != event_type:
+    allowed = {event_type} if event_type else VOICE_ACTIVITY_EVENT_TYPES
+    for activity in list_lead_activities(user_id, lead_id, limit=200, for_timeline=False):
+        if activity.get("event_type") not in allowed:
             continue
-        try:
-            payload = json.loads(activity.get("payload_json") or "{}")
-        except (TypeError, ValueError, json.JSONDecodeError):
-            payload = {}
+        payload = parse_activity_payload(activity)
         try:
             if int(payload.get("voice_call_id") or 0) == voice_call_id:
                 return activity
@@ -81,7 +208,7 @@ def find_lead_activity_for_voice_call(user_id, lead_id, voice_call_id, event_typ
     return None
 
 
-def update_lead_activity(user_id, activity_id, summary=None, payload=None):
+def update_lead_activity(user_id, activity_id, summary=None, payload=None, event_type=None):
     with get_db() as conn:
         row = conn.execute(
             "SELECT * FROM lead_activities WHERE id = ? AND user_id = ?",
@@ -90,6 +217,7 @@ def update_lead_activity(user_id, activity_id, summary=None, payload=None):
         if not row:
             return None
         new_summary = summary if summary is not None else row["summary"]
+        new_event_type = event_type if event_type is not None else row["event_type"]
         if payload is not None:
             new_payload = json.dumps(payload)[:4000]
         else:
@@ -97,10 +225,10 @@ def update_lead_activity(user_id, activity_id, summary=None, payload=None):
         conn.execute(
             """
             UPDATE lead_activities
-            SET summary = ?, payload_json = ?
+            SET summary = ?, payload_json = ?, event_type = ?
             WHERE id = ? AND user_id = ?
             """,
-            (new_summary, new_payload, activity_id, user_id),
+            (new_summary, new_payload, new_event_type, activity_id, user_id),
         )
         updated = conn.execute(
             "SELECT * FROM lead_activities WHERE id = ? AND user_id = ?",
