@@ -438,18 +438,42 @@
     return `${secs} sec`;
   }
 
+  function closeVoiceTranscriptModal() {
+    const modal = document.getElementById('voice-transcript-modal');
+    if (!modal) return;
+    modal.style.display = 'none';
+    modal.hidden = true;
+    const body = document.getElementById('voice-transcript-modal-body');
+    if (body) body.textContent = '';
+  }
+
   async function viewVoiceTranscript(callId) {
     try {
       const data = await fetchJson(`/api/voice-calls/${callId}/transcript`, {cache: 'no-store'});
       if (!data) return;
-      const win = window.open('', '_blank', 'noopener,noreferrer,width=720,height=640');
-      if (!win) {
-        alert('Allow pop-ups to view the transcript.');
-        return;
+      let modal = document.getElementById('voice-transcript-modal');
+      if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'voice-transcript-modal';
+        modal.hidden = true;
+        modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:1000;display:none;align-items:center;justify-content:center;padding:20px;';
+        modal.innerHTML = `
+          <div style="background:#fff;border-radius:12px;max-width:720px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,0.18);">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid #eef2f7;">
+              <strong>Call transcript</strong>
+              <button type="button" class="logout-btn" style="padding:6px 12px;" onclick="closeVoiceTranscriptModal()">Close</button>
+            </div>
+            <pre id="voice-transcript-modal-body" style="margin:0;padding:16px;overflow:auto;white-space:pre-wrap;font:14px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#1a1a2e;"></pre>
+          </div>`;
+        document.body.appendChild(modal);
+        modal.addEventListener('click', (event) => {
+          if (event.target === modal) closeVoiceTranscriptModal();
+        });
       }
-      win.document.write('<pre style="white-space:pre-wrap;font:14px/1.5 system-ui,sans-serif;padding:16px;"></pre>');
-      win.document.title = 'Call transcript';
-      win.document.querySelector('pre').textContent = data.transcript || '';
+      document.getElementById('voice-transcript-modal-body').textContent =
+        data.transcript || 'No transcript text was saved for this call.';
+      modal.hidden = false;
+      modal.style.display = 'flex';
     } catch (err) {
       alert(err.message || 'Transcript unavailable');
     }

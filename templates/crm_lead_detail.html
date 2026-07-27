@@ -208,6 +208,15 @@
       </div>
     </div>
   </main>
+  <div id="transcript-modal" hidden style="position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:1000;display:none;align-items:center;justify-content:center;padding:20px;">
+    <div style="background:#fff;border-radius:12px;max-width:720px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,0.18);">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid #eef2f7;">
+        <strong>Call transcript</strong>
+        <button class="btn secondary" type="button" onclick="closeTranscriptModal()">Close</button>
+      </div>
+      <pre id="transcript-modal-body" style="margin:0;padding:16px;overflow:auto;white-space:pre-wrap;font:14px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#1a1a2e;"></pre>
+    </div>
+  </div>
   <script>
     const leadId = {{ lead.id }};
     function showFlash(msg, err) {
@@ -215,6 +224,12 @@
       el.textContent = msg;
       el.className = err ? 'flash err' : 'flash';
       el.style.display = 'block';
+    }
+    function closeTranscriptModal() {
+      const modal = document.getElementById('transcript-modal');
+      modal.style.display = 'none';
+      modal.hidden = true;
+      document.getElementById('transcript-modal-body').textContent = '';
     }
     async function setStatus() {
       const status = document.getElementById('status-select').value;
@@ -307,15 +322,11 @@
         const res = await fetch(`/api/voice-calls/${callId}/transcript`, {cache: 'no-store'});
         const data = await res.json();
         if (!res.ok) return showFlash(data.error || 'Transcript unavailable', true);
-        const text = data.transcript || '';
-        const win = window.open('', '_blank', 'noopener,noreferrer,width=720,height=640');
-        if (!win) {
-          showFlash('Allow pop-ups to view the transcript, or open the recording link.', true);
-          return;
-        }
-        win.document.write('<pre style="white-space:pre-wrap;font:14px/1.5 system-ui,sans-serif;padding:16px;"></pre>');
-        win.document.title = 'Call transcript';
-        win.document.querySelector('pre').textContent = text;
+        const modal = document.getElementById('transcript-modal');
+        const body = document.getElementById('transcript-modal-body');
+        body.textContent = data.transcript || 'No transcript text was saved for this call.';
+        modal.hidden = false;
+        modal.style.display = 'flex';
       } catch (err) {
         showFlash(err.message || 'Transcript unavailable', true);
       }
@@ -324,6 +335,9 @@
       await fetch('/logout', {method: 'POST'});
       window.location.href = '/';
     }
+    document.getElementById('transcript-modal').addEventListener('click', (event) => {
+      if (event.target.id === 'transcript-modal') closeTranscriptModal();
+    });
   </script>
 </body>
 </html>
