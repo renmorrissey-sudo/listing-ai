@@ -114,14 +114,36 @@
           <ul class="timeline">
             {% for appt in appointments %}
             <li>
-              <strong>{{ appt.appointment_type.replace('_',' ') }}</strong> · {{ (appt.start_at or '')[:16] }}
-              <div class="muted">{{ appt.status }}{% if appt.outcome %} · outcome: {{ appt.outcome }}{% endif %}</div>
-              {% if not appt.outcome and appt.status in ['scheduled','confirmed','completed'] %}
-              <div class="row" style="margin-top:6px;">
-                <select id="outcome-{{ appt.id }}">
-                  {% for o in appointment_outcomes %}<option value="{{ o }}">{{ o.replace('_',' ') }}</option>{% endfor %}
-                </select>
-                <button class="btn" type="button" onclick="recordOutcome({{ appt.id }})">Save outcome</button>
+              <strong>{{ appt.appointment_type.replace('_',' ') }}</strong>
+              <div class="muted" style="margin-top:4px;">
+                {{ (appt.start_at or '')[:16] }} UTC
+                · Status: {{ appt.status.replace('_',' ') }}
+              </div>
+              {% if appt.outcome %}
+              <div style="margin-top:8px;">
+                <div><strong>Outcome:</strong> {{ outcome_label(appt.outcome) }}</div>
+                {% if appt.outcome_notes %}<div class="muted" style="margin-top:4px;">{{ appt.outcome_notes }}</div>{% endif %}
+                {% if appt.next_action %}<div style="margin-top:4px;"><strong>Next action:</strong> {{ appt.next_action }}</div>{% endif %}
+              </div>
+              {% endif %}
+              {% if appt.status in ['scheduled','confirmed','completed','no_show'] %}
+              <div class="outcome-form" style="margin-top:10px;padding-top:10px;border-top:1px solid #eef2f7;">
+                <p class="muted" style="margin:0 0 8px;font-size:12px;line-height:1.45;">
+                  Record what happened during this appointment. The outcome may recommend a lead-status change, follow-up, task, or next appointment.
+                </p>
+                <div class="row" style="margin-top:6px;flex-wrap:wrap;">
+                  <select id="outcome-{{ appt.id }}" onchange="previewOutcome({{ appt.id }})">
+                    {% for o in appointment_outcomes %}
+                    <option value="{{ o }}" {% if appt.outcome == o %}selected{% endif %}>{{ outcome_label(o) }}</option>
+                    {% endfor %}
+                  </select>
+                  <input id="outcome-notes-{{ appt.id }}" placeholder="Outcome notes (optional)" value="{{ appt.outcome_notes or '' }}" style="min-width:180px;" />
+                </div>
+                <div id="outcome-preview-{{ appt.id }}" class="muted" style="margin-top:8px;font-size:13px;line-height:1.5;"></div>
+                <div id="outcome-approvals-{{ appt.id }}" style="margin-top:8px;display:none;"></div>
+                <div class="row" style="margin-top:8px;">
+                  <button class="btn" type="button" onclick="recordOutcome({{ appt.id }})">Save outcome</button>
+                </div>
               </div>
               {% endif %}
             </li>
@@ -305,16 +327,98 @@
       if (!res.ok) return showFlash(data.error || 'Failed', true);
       location.reload();
     }
+    async function previewOutcome(id) {
+      const outcome = document.getElementById(`outcome-${id}`).value;
+      const previewEl = document.getElementById(`outcome-preview-${id}`);
+      const approvalsEl = document.getElementById(`outcome-approvals-${id}`);
+      if (!previewEl || !approvalsEl) return;
+      previewEl.textContent = 'Loading suggestions…';
+      approvalsEl.style.display = 'none';
+      approvalsEl.innerHTML = '';
+      try {
+        const res = await fetch(`/api/crm/appointments/${id}/outcome-preview`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({outcome}),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          previewEl.textContent = data.error || 'Could not load suggestions.';
+          return;
+        }
+        const p = data.preview || {};
+        previewEl.innerHTML = [
+          `<div><strong>Outcome:</strong> ${escapeHtml(p.outcome_label || outcome)}</div>`,
+          `<div><strong>Appointment status:</strong> ${escapeHtml(p.appointment_status_label || '')}</div>`,
+          `<div><strong>Suggested lead status:</strong> ${escapeHtml(p.suggested_lead_status_label || '—')}` +
+            (p.current_lead_status_label ? ` <span class="muted">(currently ${escapeHtml(p.current_lead_status_label)})</span>` : '') +
+            `</div>`,
+          `<div><strong>Suggested next action:</strong> ${escapeHtml(p.suggested_next_action || '—')}</div>`,
+          `<div><strong>Suggested follow-up:</strong> ${escapeHtml(p.suggested_follow_up_label || '—')}</div>`,
+          p.suggested_task_title ? `<div><strong>Suggested task:</strong> ${escapeHtml(p.suggested_task_title)}</div>` : '',
+        ].join('');
+        const checks = [];
+        if (p.suggested_lead_status) {
+          checks.push(`<label class="checkbox-row" style="display:flex;gap:8px;align-items:flex-start;margin-top:6px;">
+            <input type="checkbox" id="apply-status-${id}" ${p.lead_status_would_change ? 'checked' : ''} />
+            <span>Apply lead status change to <strong>${escapeHtml(p.suggested_lead_status_label)}</strong></span>
+          </label>`);
+        }
+        if (p.suggested_follow_up_at) {
+          checks.push(`<label class="checkbox-row" style="display:flex;gap:8px;align-items:flex-start;margin-top:6px;">
+            <input type="checkbox" id="apply-followup-${id}" checked />
+            <span>Schedule follow-up (${escapeHtml(p.suggested_follow_up_label || 'soon')})</span>
+          </label>`);
+        }
+        if (p.suggested_task_title) {
+          checks.push(`<label class="checkbox-row" style="display:flex;gap:8px;align-items:flex-start;margin-top:6px;">
+            <input type="checkbox" id="apply-task-${id}" />
+            <span>Create task: ${escapeHtml(p.suggested_task_title)}</span>
+          </label>`);
+        }
+        if (p.needs_attention) {
+          checks.push(`<label class="checkbox-row" style="display:flex;gap:8px;align-items:flex-start;margin-top:6px;">
+            <input type="checkbox" id="apply-na-${id}" checked />
+            <span>Open a Needs Attention item</span>
+          </label>`);
+        }
+        checks.push(`<input type="hidden" id="suggested-next-${id}" value="${escapeHtml(p.suggested_next_action || '')}" />`);
+        approvalsEl.innerHTML = checks.join('') || '<div class="muted">No additional actions to approve.</div>';
+        approvalsEl.style.display = 'block';
+      } catch (err) {
+        previewEl.textContent = err.message || 'Could not load suggestions.';
+      }
+    }
+    function escapeHtml(value) {
+      return String(value || '').replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[char]));
+    }
     async function recordOutcome(id) {
       const outcome = document.getElementById(`outcome-${id}`).value;
+      const notesEl = document.getElementById(`outcome-notes-${id}`);
+      const nextEl = document.getElementById(`suggested-next-${id}`);
       const res = await fetch(`/api/crm/appointments/${id}/outcome`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({outcome}),
+        body: JSON.stringify({
+          outcome,
+          outcome_notes: notesEl ? notesEl.value : '',
+          next_action: nextEl ? nextEl.value : '',
+          apply_lead_status: !!(document.getElementById(`apply-status-${id}`) || {}).checked,
+          apply_follow_up: !!(document.getElementById(`apply-followup-${id}`) || {}).checked,
+          apply_task: !!(document.getElementById(`apply-task-${id}`) || {}).checked,
+          apply_needs_attention: !!(document.getElementById(`apply-na-${id}`) || {}).checked,
+        }),
       });
       const data = await res.json();
       if (!res.ok) return showFlash(data.error || 'Failed', true);
-      location.reload();
+      showFlash(data.confirmation || 'Outcome saved.');
+      setTimeout(() => location.reload(), 700);
     }
+    document.querySelectorAll('select[id^="outcome-"]').forEach((el) => {
+      const id = Number(String(el.id).replace('outcome-', ''));
+      if (id) previewOutcome(id);
+    });
     async function resolveNeed(id) {
       const reason = document.getElementById(`na-${id}`).value.trim();
       const res = await fetch(`/api/crm/needs-attention/${id}/resolve`, {

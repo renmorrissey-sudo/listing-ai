@@ -1,5 +1,7 @@
 """Phase 2 CRM constants and stage mappings."""
 
+from datetime import datetime, timedelta, timezone
+
 LEAD_STATUSES = [
     ("new", "New"),
     ("attempting_contact", "Attempting Contact"),
@@ -8,7 +10,7 @@ LEAD_STATUSES = [
     ("appointment_scheduled", "Appointment Scheduled"),
     ("appointment_completed", "Appointment Completed"),
     ("nurture", "Nurture"),
-    ("under_contract", "Under Contract"),
+    ("under_contract", "Active Client"),
     ("closed_won", "Closed Won"),
     ("closed_lost", "Closed Lost"),
     ("do_not_contact", "Do Not Contact"),
@@ -77,8 +79,134 @@ APPOINTMENT_OUTCOMES = [
     "not_qualified",
     "lost_to_another_agent",
     "no_response",
+    "no_show",
     "other",
 ]
+
+# Suggestions only — never applied unless the agent explicitly approves.
+# Fields are separate from appointment.status and appointment.outcome.
+APPOINTMENT_OUTCOME_SUGGESTIONS = {
+    "qualified_opportunity": {
+        "appointment_status": "completed",
+        "lead_status": "qualified",
+        "next_action": "Schedule buyer consultation",
+        "follow_up_business_days": 1,
+        "follow_up_label": "Within 1 business day",
+        "create_task_type": "buyer_consultation",
+        "create_task_title": "Schedule buyer consultation",
+        "needs_attention": False,
+    },
+    "follow_up_required": {
+        "appointment_status": "completed",
+        "lead_status": "contacted",
+        "next_action": "Complete the agreed follow-up from the appointment",
+        "follow_up_business_days": 2,
+        "follow_up_label": "Within 2 business days",
+        "create_task_type": "general_follow_up",
+        "create_task_title": "Appointment follow-up",
+        "needs_attention": False,
+    },
+    "showing_scheduled": {
+        "appointment_status": "completed",
+        "lead_status": "appointment_scheduled",
+        "next_action": "Confirm showing details and send reminder",
+        "follow_up_business_days": 1,
+        "follow_up_label": "Before the showing",
+        "create_task_type": "schedule_showing",
+        "create_task_title": "Confirm upcoming showing",
+        "needs_attention": False,
+    },
+    "listing_appointment_scheduled": {
+        "appointment_status": "completed",
+        "lead_status": "appointment_scheduled",
+        "next_action": "Prepare listing appointment materials",
+        "follow_up_business_days": 1,
+        "follow_up_label": "Before the listing appointment",
+        "create_task_type": "listing_consultation",
+        "create_task_title": "Prepare for listing appointment",
+        "needs_attention": False,
+    },
+    "buyer_agreement_signed": {
+        "appointment_status": "completed",
+        "lead_status": "under_contract",
+        "next_action": "Upload buyer agreement and start active-client checklist",
+        "follow_up_business_days": 1,
+        "follow_up_label": "Within 1 business day",
+        "create_task_type": "review_documents",
+        "create_task_title": "Process signed buyer agreement",
+        "needs_attention": False,
+    },
+    "listing_agreement_signed": {
+        "appointment_status": "completed",
+        "lead_status": "under_contract",
+        "next_action": "Upload listing agreement and launch listing checklist",
+        "follow_up_business_days": 1,
+        "follow_up_label": "Within 1 business day",
+        "create_task_type": "review_documents",
+        "create_task_title": "Process signed listing agreement",
+        "needs_attention": False,
+    },
+    "not_ready": {
+        "appointment_status": "completed",
+        "lead_status": "nurture",
+        "next_action": "Add nurture touchpoint and check back later",
+        "follow_up_business_days": 7,
+        "follow_up_label": "Within 1 week",
+        "create_task_type": "general_follow_up",
+        "create_task_title": "Nurture follow-up",
+        "needs_attention": False,
+    },
+    "not_qualified": {
+        "appointment_status": "completed",
+        "lead_status": "closed_lost",
+        "next_action": "Close lead and note disqualification reason",
+        "follow_up_business_days": None,
+        "follow_up_label": None,
+        "create_task_type": None,
+        "create_task_title": None,
+        "needs_attention": False,
+    },
+    "lost_to_another_agent": {
+        "appointment_status": "completed",
+        "lead_status": "closed_lost",
+        "next_action": "Close lead and capture competitor notes",
+        "follow_up_business_days": None,
+        "follow_up_label": None,
+        "create_task_type": None,
+        "create_task_title": None,
+        "needs_attention": False,
+    },
+    "no_response": {
+        "appointment_status": "completed",
+        "lead_status": "attempting_contact",
+        "next_action": "Retry contact after no response at appointment",
+        "follow_up_business_days": 1,
+        "follow_up_label": "Within 1 business day",
+        "create_task_type": "call",
+        "create_task_title": "Retry contact after no response",
+        "needs_attention": False,
+    },
+    "no_show": {
+        "appointment_status": "no_show",
+        "lead_status": "attempting_contact",
+        "next_action": "Reschedule after no-show and confirm interest",
+        "follow_up_business_days": 1,
+        "follow_up_label": "Within 1 business day",
+        "create_task_type": "call",
+        "create_task_title": "Follow up after appointment no-show",
+        "needs_attention": True,
+    },
+    "other": {
+        "appointment_status": "completed",
+        "lead_status": "appointment_completed",
+        "next_action": "Review appointment notes and choose next step",
+        "follow_up_business_days": 2,
+        "follow_up_label": "Within 2 business days",
+        "create_task_type": None,
+        "create_task_title": None,
+        "needs_attention": False,
+    },
+}
 
 NEEDS_ATTENTION_REASONS = {
     "unreviewed_inbound": "New inbound SMS not reviewed",
@@ -92,6 +220,7 @@ NEEDS_ATTENTION_REASONS = {
     "no_first_contact": "No first contact within response target",
     "delivery_failed": "Message failed or undelivered",
     "appointment_outcome_missing": "Appointment outcome not recorded",
+    "appointment_no_show": "Appointment no-show — follow up required",
     "opt_out": "Opt-out request received",
     "call_failed": "AI call failed or did not connect",
     "review_call_outcome": "Review AI call outcome",
@@ -125,3 +254,66 @@ def status_label(status):
         if item_slug == slug:
             return label
     return slug.replace("_", " ").title()
+
+
+def outcome_label(outcome):
+    return str(outcome or "").replace("_", " ").strip().title()
+
+
+def appointment_status_label(status):
+    return str(status or "").replace("_", " ").strip().title()
+
+
+def next_business_day_iso(business_days=1, hour_utc=15):
+    """Return an ISO timestamp N business days ahead (Mon–Fri), UTC."""
+    try:
+        days = int(business_days)
+    except (TypeError, ValueError):
+        return None
+    if days is None or days <= 0:
+        return None
+    dt = datetime.now(timezone.utc)
+    added = 0
+    while added < days:
+        dt += timedelta(days=1)
+        if dt.weekday() < 5:
+            added += 1
+    return dt.replace(hour=hour_utc, minute=0, second=0, microsecond=0).isoformat()
+
+
+def build_appointment_outcome_suggestion(outcome, *, current_lead_status=None, next_action_override=None):
+    """Build agent-facing suggestions for an appointment outcome. Never auto-applies."""
+    outcome = str(outcome or "").strip().lower()
+    if outcome not in APPOINTMENT_OUTCOME_SUGGESTIONS:
+        return None
+    base = dict(APPOINTMENT_OUTCOME_SUGGESTIONS[outcome])
+    suggested_status = base.get("lead_status")
+    follow_up_at = next_business_day_iso(base.get("follow_up_business_days"))
+    next_action = str(next_action_override or base.get("next_action") or "").strip()
+    return {
+        "outcome": outcome,
+        "outcome_label": outcome_label(outcome),
+        "appointment_status": base.get("appointment_status") or "completed",
+        "appointment_status_label": appointment_status_label(
+            base.get("appointment_status") or "completed"
+        ),
+        "suggested_lead_status": suggested_status,
+        "suggested_lead_status_label": status_label(suggested_status) if suggested_status else None,
+        "current_lead_status": normalize_lead_status(current_lead_status)
+        if current_lead_status
+        else None,
+        "current_lead_status_label": status_label(current_lead_status)
+        if current_lead_status
+        else None,
+        "suggested_next_action": next_action or None,
+        "suggested_follow_up_at": follow_up_at,
+        "suggested_follow_up_label": base.get("follow_up_label"),
+        "suggested_task_type": base.get("create_task_type"),
+        "suggested_task_title": base.get("create_task_title"),
+        "needs_attention": bool(base.get("needs_attention")),
+        "lead_status_would_change": bool(
+            suggested_status
+            and current_lead_status
+            and normalize_lead_status(current_lead_status) != suggested_status
+        ),
+    }

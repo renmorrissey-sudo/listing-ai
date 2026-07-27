@@ -175,8 +175,8 @@ def test_appointment_outcome_required_for_resolve_path(two_users):
     crm_db.refresh_needs_attention(u1)
     items = crm_db.list_needs_attention(u1)
     assert any(i["reason_code"] == "appointment_outcome_missing" for i in items)
-    ok, err = crm_db.record_appointment_outcome(u1, appt_id, "follow_up_required")
-    assert ok and err is None
+    result, err = crm_db.record_appointment_outcome(u1, appt_id, "follow_up_required")
+    assert err is None and result and result.get("ok")
     items = [i for i in crm_db.list_needs_attention(u1) if i["reason_code"] == "appointment_outcome_missing"]
     assert items == []
 

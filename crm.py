@@ -15,6 +15,7 @@ from crm_constants import (
     NEEDS_ATTENTION_REASONS,
     PRIORITIES,
     TASK_TYPES,
+    outcome_label,
     normalize_lead_status,
     status_label,
 )
@@ -217,6 +218,7 @@ def crm_lead_detail_page(lead_id):
         appointment_outcomes=APPOINTMENT_OUTCOMES,
         priorities=PRIORITIES,
         status_label=status_label,
+        outcome_label=outcome_label,
         **_nav_context(user, "leads"),
     )
 
@@ -452,21 +454,40 @@ def api_appointments():
     return jsonify({"ok": True, "id": appt_id}), 201
 
 
+@crm_bp.route("/api/crm/appointments/<int:appointment_id>/outcome-preview", methods=["GET", "POST"])
+@auth.subscription_required
+def api_appointment_outcome_preview(appointment_id):
+    user = auth.get_current_user()
+    data = request.get_json(silent=True) or {}
+    outcome = request.args.get("outcome") or data.get("outcome")
+    next_action = request.args.get("next_action") or data.get("next_action") or ""
+    preview, error = crm_db.preview_appointment_outcome(
+        user["id"], appointment_id, outcome, next_action=str(next_action or "")
+    )
+    if error:
+        return jsonify({"error": error}), 400
+    return jsonify({"preview": preview})
+
+
 @crm_bp.route("/api/crm/appointments/<int:appointment_id>/outcome", methods=["POST"])
 @auth.subscription_required
 def api_appointment_outcome(appointment_id):
     user = auth.get_current_user()
     data = request.get_json(silent=True) or {}
-    ok, error = crm_db.record_appointment_outcome(
+    result, error = crm_db.record_appointment_outcome(
         user["id"],
         appointment_id,
         data.get("outcome"),
         outcome_notes=str(data.get("outcome_notes") or ""),
         next_action=str(data.get("next_action") or ""),
+        apply_lead_status=bool(data.get("apply_lead_status")),
+        apply_follow_up=bool(data.get("apply_follow_up")),
+        apply_task=bool(data.get("apply_task")),
+        apply_needs_attention=bool(data.get("apply_needs_attention")),
     )
     if error:
         return jsonify({"error": error}), 400
-    return jsonify({"ok": True})
+    return jsonify(result)
 
 
 @crm_bp.route("/api/crm/needs-attention")
