@@ -35,14 +35,20 @@
   </nav>
   <main>
     <p class="muted"><a href="/crm/leads">← All leads</a></p>
+    {% if flash_message %}
+    <div id="flash" class="flash" style="display:block;">{{ flash_message }}</div>
+    {% elif flash_error %}
+    <div id="flash" class="flash err" style="display:block;">{{ flash_error }}</div>
+    {% else %}
     <div id="flash" class="flash"></div>
+    {% endif %}
     <div class="card">
       <h1>{{ lead.name or 'Lead' }}</h1>
       <div class="muted">{{ lead.phone_number }} · {{ lead.lead_type or 'N/A' }} · {{ lead.source or 'sms' }}</div>
       <div class="status-hero">{{ status_label(lead.status) }}</div>
       {% if lead.opt_out_status == 'opted_out' %}<span class="pill danger">Opted out — Do Not Contact</span>{% endif %}
       <p>{% if lead.next_action %}<strong>Next action:</strong> {{ lead.next_action }}{% endif %}</p>
-      <p class="muted">{% if lead.next_follow_up_at or lead.follow_up_at %}Follow-up: {{ (lead.next_follow_up_at or lead.follow_up_at)[:16] }} UTC{% if lead.follow_up_reason %} — {{ lead.follow_up_reason }}{% endif %}{% else %}No follow-up scheduled{% endif %}</p>
+      <p class="muted">{% if lead.next_follow_up_at or lead.follow_up_at %}Follow-up: <span class="local-dt" data-utc="{{ lead.next_follow_up_at or lead.follow_up_at }}">{{ (lead.next_follow_up_at or lead.follow_up_at)[:16] }}</span>{% if lead.follow_up_reason %} — {{ lead.follow_up_reason }}{% endif %}{% else %}No follow-up scheduled{% endif %}</p>
 
       <div class="quick-actions">
         <a class="btn" href="/#sms">Draft SMS</a>
@@ -127,24 +133,43 @@
               </div>
               {% endif %}
               {% if appt.status in ['scheduled','confirmed','completed','no_show'] %}
-              <div class="outcome-form" style="margin-top:10px;padding-top:10px;border-top:1px solid #eef2f7;">
+              {% set draft = (outcome_draft or {}).get(appt.id) or (outcome_draft or {}).get(appt.id|string) or {} %}
+              <form
+                class="outcome-form"
+                id="outcome-form-{{ appt.id }}"
+                method="POST"
+                action="/crm/leads/{{ lead.id }}/appointments/{{ appt.id }}/outcome"
+                style="margin-top:10px;padding-top:10px;border-top:1px solid #eef2f7;"
+              >
                 <p class="muted" style="margin:0 0 8px;font-size:12px;line-height:1.45;">
                   Record what happened during this appointment. The outcome may recommend a lead-status change, follow-up, task, or next appointment.
                 </p>
                 <div class="row" style="margin-top:6px;flex-wrap:wrap;">
-                  <select id="outcome-{{ appt.id }}" onchange="previewOutcome({{ appt.id }})">
+                  <select name="outcome" id="outcome-{{ appt.id }}" onchange="previewOutcome({{ appt.id }})" required>
                     {% for o in appointment_outcomes %}
-                    <option value="{{ o }}" {% if appt.outcome == o %}selected{% endif %}>{{ outcome_label(o) }}</option>
+                    <option value="{{ o }}" {% if (draft.outcome or appt.outcome) == o %}selected{% endif %}>{{ outcome_label(o) }}</option>
                     {% endfor %}
                   </select>
-                  <input id="outcome-notes-{{ appt.id }}" placeholder="Outcome notes (optional)" value="{{ appt.outcome_notes or '' }}" style="min-width:180px;" />
+                  <input
+                    name="outcome_notes"
+                    id="outcome-notes-{{ appt.id }}"
+                    placeholder="Outcome notes (optional)"
+                    value="{{ draft.outcome_notes if draft.outcome_notes is defined else (appt.outcome_notes or '') }}"
+                    style="min-width:180px;"
+                  />
+                  <input type="hidden" name="next_action" id="suggested-next-{{ appt.id }}" value="{{ draft.next_action or appt.next_action or '' }}" />
                 </div>
                 <div id="outcome-preview-{{ appt.id }}" class="muted" style="margin-top:8px;font-size:13px;line-height:1.5;"></div>
-                <div id="outcome-approvals-{{ appt.id }}" style="margin-top:8px;display:none;"></div>
+                <div id="outcome-approvals-{{ appt.id }}" style="margin-top:8px;display:none;"
+                     data-apply-status="{{ 1 if draft.apply_lead_status else '' }}"
+                     data-apply-follow-up="{{ 1 if draft.apply_follow_up else '' }}"
+                     data-apply-task="{{ 1 if draft.apply_task else '' }}"
+                     data-apply-na="{{ 1 if draft.apply_needs_attention else '' }}"
+                     data-has-draft="{{ 1 if draft else '' }}"></div>
                 <div class="row" style="margin-top:8px;">
-                  <button class="btn" type="button" onclick="recordOutcome({{ appt.id }})">Save outcome</button>
+                  <button class="btn" type="submit" id="save-outcome-{{ appt.id }}">Save outcome</button>
                 </div>
-              </div>
+              </form>
               {% endif %}
             </li>
             {% endfor %}
@@ -357,32 +382,45 @@
           `<div><strong>Suggested follow-up:</strong> ${escapeHtml(p.suggested_follow_up_label || '—')}</div>`,
           p.suggested_task_title ? `<div><strong>Suggested task:</strong> ${escapeHtml(p.suggested_task_title)}</div>` : '',
         ].join('');
+        const draftStatus = approvalsEl.dataset.hasDraft === '1'
+          ? approvalsEl.dataset.applyStatus === '1'
+          : !!p.lead_status_would_change;
+        const draftFollowUp = approvalsEl.dataset.hasDraft === '1'
+          ? approvalsEl.dataset.applyFollowUp === '1'
+          : true;
+        const draftTask = approvalsEl.dataset.hasDraft === '1'
+          ? approvalsEl.dataset.applyTask === '1'
+          : false;
+        const draftNa = approvalsEl.dataset.hasDraft === '1'
+          ? approvalsEl.dataset.applyNa === '1'
+          : true;
         const checks = [];
         if (p.suggested_lead_status) {
           checks.push(`<label class="checkbox-row" style="display:flex;gap:8px;align-items:flex-start;margin-top:6px;">
-            <input type="checkbox" id="apply-status-${id}" ${p.lead_status_would_change ? 'checked' : ''} />
+            <input type="checkbox" name="apply_lead_status" value="1" id="apply-status-${id}" ${draftStatus ? 'checked' : ''} />
             <span>Apply lead status change to <strong>${escapeHtml(p.suggested_lead_status_label)}</strong></span>
           </label>`);
         }
         if (p.suggested_follow_up_at) {
           checks.push(`<label class="checkbox-row" style="display:flex;gap:8px;align-items:flex-start;margin-top:6px;">
-            <input type="checkbox" id="apply-followup-${id}" checked />
+            <input type="checkbox" name="apply_follow_up" value="1" id="apply-followup-${id}" ${draftFollowUp ? 'checked' : ''} />
             <span>Schedule follow-up (${escapeHtml(p.suggested_follow_up_label || 'soon')})</span>
           </label>`);
         }
         if (p.suggested_task_title) {
           checks.push(`<label class="checkbox-row" style="display:flex;gap:8px;align-items:flex-start;margin-top:6px;">
-            <input type="checkbox" id="apply-task-${id}" />
+            <input type="checkbox" name="apply_task" value="1" id="apply-task-${id}" ${draftTask ? 'checked' : ''} />
             <span>Create task: ${escapeHtml(p.suggested_task_title)}</span>
           </label>`);
         }
         if (p.needs_attention) {
           checks.push(`<label class="checkbox-row" style="display:flex;gap:8px;align-items:flex-start;margin-top:6px;">
-            <input type="checkbox" id="apply-na-${id}" checked />
+            <input type="checkbox" name="apply_needs_attention" value="1" id="apply-na-${id}" ${draftNa ? 'checked' : ''} />
             <span>Open a Needs Attention item</span>
           </label>`);
         }
-        checks.push(`<input type="hidden" id="suggested-next-${id}" value="${escapeHtml(p.suggested_next_action || '')}" />`);
+        const nextEl = document.getElementById(`suggested-next-${id}`);
+        if (nextEl && p.suggested_next_action) nextEl.value = p.suggested_next_action;
         approvalsEl.innerHTML = checks.join('') || '<div class="muted">No additional actions to approve.</div>';
         approvalsEl.style.display = 'block';
       } catch (err) {
@@ -394,30 +432,34 @@
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
       }[char]));
     }
-    async function recordOutcome(id) {
-      const outcome = document.getElementById(`outcome-${id}`).value;
-      const notesEl = document.getElementById(`outcome-notes-${id}`);
-      const nextEl = document.getElementById(`suggested-next-${id}`);
-      const res = await fetch(`/api/crm/appointments/${id}/outcome`, {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          outcome,
-          outcome_notes: notesEl ? notesEl.value : '',
-          next_action: nextEl ? nextEl.value : '',
-          apply_lead_status: !!(document.getElementById(`apply-status-${id}`) || {}).checked,
-          apply_follow_up: !!(document.getElementById(`apply-followup-${id}`) || {}).checked,
-          apply_task: !!(document.getElementById(`apply-task-${id}`) || {}).checked,
-          apply_needs_attention: !!(document.getElementById(`apply-na-${id}`) || {}).checked,
-        }),
+    function formatLocalDateTimes() {
+      document.querySelectorAll('.local-dt').forEach((el) => {
+        const raw = el.getAttribute('data-utc');
+        if (!raw) return;
+        const dt = new Date(raw);
+        if (Number.isNaN(dt.getTime())) return;
+        el.textContent = dt.toLocaleString(undefined, {
+          year: 'numeric', month: 'short', day: 'numeric',
+          hour: 'numeric', minute: '2-digit',
+        });
       });
-      const data = await res.json();
-      if (!res.ok) return showFlash(data.error || 'Failed', true);
-      showFlash(data.confirmation || 'Outcome saved.');
-      setTimeout(() => location.reload(), 700);
     }
+    formatLocalDateTimes();
     document.querySelectorAll('select[id^="outcome-"]').forEach((el) => {
       const id = Number(String(el.id).replace('outcome-', ''));
       if (id) previewOutcome(id);
+    });
+    document.querySelectorAll('form.outcome-form').forEach((form) => {
+      form.addEventListener('submit', (event) => {
+        const btn = form.querySelector('button[type="submit"]');
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = 'Saving…';
+        }
+        // Native form POST — do not intercept. Disable only to prevent double-clicks.
+        // If JS later needs fetch, wrap in try/catch and keep values on failure.
+        void event;
+      });
     });
     async function resolveNeed(id) {
       const reason = document.getElementById(`na-${id}`).value.trim();

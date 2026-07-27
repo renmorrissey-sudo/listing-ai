@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 import re
 
 from crm_constants import (
@@ -22,6 +23,8 @@ from crm_constants import (
     status_label,
 )
 from db import get_db, merge_lead_call_outcome_notes
+
+logger = logging.getLogger(__name__)
 
 
 def _now():
@@ -738,6 +741,26 @@ def preview_appointment_outcome(user_id, appointment_id, outcome, next_action=""
     return suggestion, None
 
 
+def _insert_activity(conn, lead_id, user_id, event_type, summary, payload, actor_user_id=None):
+    cur = conn.execute(
+        """
+        INSERT INTO lead_activities
+            (lead_id, user_id, actor_user_id, event_type, summary, payload_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            lead_id,
+            user_id,
+            actor_user_id or user_id,
+            event_type,
+            summary,
+            json.dumps(payload or {})[:4000],
+            _now(),
+        ),
+    )
+    return cur.lastrowid
+
+
 def record_appointment_outcome(
     user_id,
     appointment_id,
@@ -750,9 +773,21 @@ def record_appointment_outcome(
     apply_task=False,
     apply_needs_attention=False,
 ):
-    """Save appointment outcome. Lead/status/task/follow-up changes require approval flags."""
+    """Save appointment outcome and approved side-effects in one DB transaction."""
+    logger.info(
+        "appointment_outcome_start appointment_id=%s outcome_present=%s "
+        "apply_status=%s apply_follow_up=%s apply_task=%s apply_needs_attention=%s",
+        appointment_id,
+        bool(outcome),
+        bool(apply_lead_status),
+        bool(apply_follow_up),
+        bool(apply_task),
+        bool(apply_needs_attention),
+    )
     if outcome not in APPOINTMENT_OUTCOMES:
+        logger.info("appointment_outcome_invalid appointment_id=%s", appointment_id)
         return None, "Invalid appointment outcome."
+
     now = _now()
     outcome_notes = str(outcome_notes or "")[:2000]
     next_action = str(next_action or "")[:500]
@@ -761,189 +796,369 @@ def record_appointment_outcome(
     apply_task = bool(apply_task)
     apply_needs_attention = bool(apply_needs_attention)
 
-    with get_db() as conn:
-        appt = conn.execute(
-            "SELECT * FROM appointments WHERE id = ? AND user_id = ?",
-            (appointment_id, user_id),
-        ).fetchone()
-        if not appt:
-            return None, "Appointment not found."
-        lead = conn.execute(
-            "SELECT * FROM leads WHERE id = ? AND user_id = ?",
-            (appt["lead_id"], user_id),
-        ).fetchone()
-    if not lead:
-        return None, "Lead not found."
+    try:
+        with get_db() as conn:
+            appt = conn.execute(
+                "SELECT * FROM appointments WHERE id = ? AND user_id = ?",
+                (appointment_id, user_id),
+            ).fetchone()
+            if not appt:
+                logger.info(
+                    "appointment_outcome_not_found appointment_id=%s", appointment_id
+                )
+                return None, "Appointment not found."
+            lead = conn.execute(
+                "SELECT * FROM leads WHERE id = ? AND user_id = ?",
+                (appt["lead_id"], user_id),
+            ).fetchone()
+            if not lead:
+                return None, "Lead not found."
 
-    suggestion = build_appointment_outcome_suggestion(
-        outcome,
-        current_lead_status=lead["status"],
-        next_action_override=next_action,
-    )
-    if not suggestion:
-        return None, "Invalid appointment outcome."
-
-    appointment_status = suggestion["appointment_status"]
-    if next_action == "" and suggestion.get("suggested_next_action"):
-        next_action = suggestion["suggested_next_action"]
-
-    same_outcome = (
-        (appt.get("outcome") or "") == outcome
-        and (appt.get("outcome_notes") or "") == outcome_notes
-        and (appt.get("next_action") or "") == next_action
-        and (appt.get("status") or "") == appointment_status
-    )
-    any_apply = apply_lead_status or apply_follow_up or apply_task or apply_needs_attention
-    if same_outcome and not any_apply:
-        return {
-            "ok": True,
-            "duplicate": True,
-            "confirmation": "Outcome already saved. No changes.",
-            "appointment_id": appointment_id,
-            "applied": {},
-        }, None
-
-    with get_db() as conn:
-        conn.execute(
-            """
-            UPDATE appointments
-            SET outcome = ?, outcome_notes = ?, next_action = ?, status = ?, updated_at = ?
-            WHERE id = ? AND user_id = ?
-            """,
-            (
+            suggestion = build_appointment_outcome_suggestion(
                 outcome,
-                outcome_notes,
-                next_action,
-                appointment_status,
-                now,
+                current_lead_status=lead["status"],
+                next_action_override=next_action,
+            )
+            if not suggestion:
+                return None, "Invalid appointment outcome."
+
+            appointment_status = suggestion["appointment_status"]
+            if next_action == "" and suggestion.get("suggested_next_action"):
+                next_action = suggestion["suggested_next_action"]
+
+            same_outcome = (
+                (appt.get("outcome") or "") == outcome
+                and (appt.get("outcome_notes") or "") == outcome_notes
+                and (appt.get("next_action") or "") == next_action
+                and (appt.get("status") or "") == appointment_status
+            )
+            any_apply = (
+                apply_lead_status or apply_follow_up or apply_task or apply_needs_attention
+            )
+            if same_outcome and not any_apply:
+                logger.info(
+                    "appointment_outcome_duplicate appointment_id=%s", appointment_id
+                )
+                return {
+                    "ok": True,
+                    "duplicate": True,
+                    "confirmation": "Outcome already saved. No changes.",
+                    "appointment_id": appointment_id,
+                    "lead_id": appt["lead_id"],
+                    "applied": {},
+                }, None
+
+            # a/b) Save outcome + mark appointment status.
+            conn.execute(
+                """
+                UPDATE appointments
+                SET outcome = ?, outcome_notes = ?, next_action = ?, status = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    outcome,
+                    outcome_notes,
+                    next_action,
+                    appointment_status,
+                    now,
+                    appointment_id,
+                    user_id,
+                ),
+            )
+
+            applied = {
+                "appointment_status": appointment_status,
+                "lead_status": None,
+                "follow_up_at": None,
+                "task_id": None,
+                "needs_attention": False,
+                "next_action": next_action or None,
+            }
+            confirmation_bits = ["Outcome saved"]
+
+            if not same_outcome:
+                _insert_activity(
+                    conn,
+                    appt["lead_id"],
+                    user_id,
+                    "appointment_outcome",
+                    f"Appointment outcome saved: {outcome_label(outcome)}",
+                    {
+                        "appointment_id": appointment_id,
+                        "outcome": outcome,
+                        "appointment_status": appointment_status,
+                        "next_action": next_action,
+                        "outcome_notes": outcome_notes,
+                        "suggested_lead_status": suggestion.get("suggested_lead_status"),
+                    },
+                    actor_user_id=user_id,
+                )
+
+            previous_status = normalize_lead_status(lead["status"])
+            if apply_lead_status and suggestion.get("suggested_lead_status"):
+                new_status = normalize_lead_status(suggestion["suggested_lead_status"])
+                if previous_status != new_status:
+                    if previous_status == "do_not_contact" and new_status != "do_not_contact":
+                        # Still allow agent-approved manual change.
+                        pass
+                    conn.execute(
+                        "UPDATE leads SET status = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                        (new_status, now, appt["lead_id"], user_id),
+                    )
+                    _insert_activity(
+                        conn,
+                        appt["lead_id"],
+                        user_id,
+                        "status_change",
+                        (
+                            f"Lead status changed from {status_label(previous_status)} "
+                            f"to {status_label(new_status)}"
+                        ),
+                        {
+                            "previous_status": previous_status,
+                            "new_status": new_status,
+                            "source": "appointment_outcome",
+                            "appointment_id": appointment_id,
+                        },
+                        actor_user_id=user_id,
+                    )
+                    confirmation_bits.append(
+                        f"Lead status changed to {status_label(new_status)}"
+                    )
+                else:
+                    confirmation_bits.append(
+                        f"Lead status already {status_label(new_status)}"
+                    )
+                applied["lead_status"] = suggestion["suggested_lead_status"]
+
+            if next_action:
+                conn.execute(
+                    """
+                    UPDATE leads
+                    SET next_action = COALESCE(?, next_action), updated_at = ?
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (next_action, now, appt["lead_id"], user_id),
+                )
+
+            if apply_follow_up and suggestion.get("suggested_follow_up_at"):
+                due_at = suggestion["suggested_follow_up_at"]
+                reason = (
+                    f"Follow-up after appointment outcome: {outcome_label(outcome)} "
+                    f"[appointment:{appointment_id}]"
+                )
+                existing_fu = conn.execute(
+                    """
+                    SELECT id FROM lead_follow_ups
+                    WHERE user_id = ? AND lead_id = ? AND status = 'pending'
+                      AND reason LIKE ?
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (user_id, appt["lead_id"], f"%[appointment:{appointment_id}]%"),
+                ).fetchone()
+                priority = "high" if suggestion.get("needs_attention") else "normal"
+                if existing_fu:
+                    conn.execute(
+                        """
+                        UPDATE lead_follow_ups
+                        SET due_at = ?, reason = ?, priority = ?
+                        WHERE id = ? AND user_id = ?
+                        """,
+                        (due_at, reason, priority, existing_fu["id"], user_id),
+                    )
+                    follow_id = existing_fu["id"]
+                else:
+                    cur = conn.execute(
+                        """
+                        INSERT INTO lead_follow_ups
+                            (lead_id, user_id, due_at, reason, status, created_at, priority, created_by)
+                        VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
+                        """,
+                        (
+                            appt["lead_id"],
+                            user_id,
+                            due_at,
+                            reason,
+                            now,
+                            priority,
+                            user_id,
+                        ),
+                    )
+                    follow_id = cur.lastrowid
+                    _insert_activity(
+                        conn,
+                        appt["lead_id"],
+                        user_id,
+                        "follow_up_scheduled",
+                        f"Follow-up scheduled: {reason}",
+                        {
+                            "due_at": due_at,
+                            "priority": priority,
+                            "follow_up_id": follow_id,
+                            "appointment_id": appointment_id,
+                        },
+                        actor_user_id=user_id,
+                    )
+                conn.execute(
+                    """
+                    UPDATE leads
+                    SET next_follow_up_at = ?, follow_up_reason = ?, follow_up_priority = ?,
+                        follow_up_completed_at = NULL, follow_up_created_by = ?, updated_at = ?
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (
+                        due_at,
+                        reason,
+                        priority,
+                        user_id,
+                        now,
+                        appt["lead_id"],
+                        user_id,
+                    ),
+                )
+                applied["follow_up_at"] = due_at
+                applied["follow_up_id"] = follow_id
+                confirmation_bits.append(f"Follow-up scheduled for {due_at[:10]}")
+
+            if apply_task and suggestion.get("suggested_task_title"):
+                title = suggestion["suggested_task_title"]
+                task_type = suggestion.get("suggested_task_type") or "general_follow_up"
+                marker = f"appointment_id:{appointment_id}"
+                existing_task = conn.execute(
+                    """
+                    SELECT id FROM tasks
+                    WHERE user_id = ? AND lead_id = ? AND title = ?
+                      AND status IN ('open', 'in_progress')
+                      AND description LIKE ?
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (user_id, appt["lead_id"], title, f"%{marker}%"),
+                ).fetchone()
+                if existing_task:
+                    task_id = existing_task["id"]
+                else:
+                    cur = conn.execute(
+                        """
+                        INSERT INTO tasks
+                            (user_id, lead_id, assigned_user_id, title, description, due_at,
+                             priority, status, task_type, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
+                        """,
+                        (
+                            user_id,
+                            appt["lead_id"],
+                            user_id,
+                            title,
+                            f"Created from appointment outcome ({marker})",
+                            suggestion.get("suggested_follow_up_at"),
+                            "high" if suggestion.get("needs_attention") else "normal",
+                            task_type,
+                            now,
+                            now,
+                        ),
+                    )
+                    task_id = cur.lastrowid
+                    _insert_activity(
+                        conn,
+                        appt["lead_id"],
+                        user_id,
+                        "task_created",
+                        f"Task created: {title}",
+                        {
+                            "task_id": task_id,
+                            "task_type": task_type,
+                            "appointment_id": appointment_id,
+                        },
+                        actor_user_id=user_id,
+                    )
+                    confirmation_bits.append(f"Task created: {title}")
+                applied["task_id"] = task_id
+                if existing_task:
+                    confirmation_bits.append(f"Task already exists: {title}")
+
+            if apply_needs_attention and suggestion.get("needs_attention"):
+                reason_code = (
+                    "appointment_no_show" if outcome == "no_show" else "review_call_outcome"
+                )
+                existing_na = conn.execute(
+                    """
+                    SELECT id FROM needs_attention
+                    WHERE user_id = ? AND lead_id = ? AND reason_code = ?
+                      AND status = 'open'
+                      AND source_ref_type = 'appointment' AND source_ref_id = ?
+                    LIMIT 1
+                    """,
+                    (user_id, appt["lead_id"], reason_code, appointment_id),
+                ).fetchone()
+                if not existing_na:
+                    conn.execute(
+                        """
+                        INSERT INTO needs_attention
+                            (user_id, lead_id, reason_code, reason_text, priority,
+                             source_ref_type, source_ref_id, status, created_at)
+                        VALUES (?, ?, ?, ?, 'high', 'appointment', ?, 'open', ?)
+                        """,
+                        (
+                            user_id,
+                            appt["lead_id"],
+                            reason_code,
+                            (
+                                "Lead no-showed appointment — reschedule or confirm interest."
+                                if outcome == "no_show"
+                                else (
+                                    f"Appointment outcome {outcome_label(outcome)} "
+                                    "needs agent follow-through."
+                                )
+                            ),
+                            appointment_id,
+                            now,
+                        ),
+                    )
+                applied["needs_attention"] = True
+                confirmation_bits.append("Needs Attention item opened")
+
+            # Resolve missing-outcome NA items for this lead.
+            conn.execute(
+                """
+                UPDATE needs_attention
+                SET status = 'resolved', resolved_at = ?, resolution_reason = ?
+                WHERE user_id = ? AND lead_id = ? AND reason_code = 'appointment_outcome_missing'
+                  AND status = 'open'
+                """,
+                (now, "Outcome recorded", user_id, appt["lead_id"]),
+            )
+
+            confirmation = ". ".join(confirmation_bits) + "."
+            logger.info(
+                "appointment_outcome_success appointment_id=%s lead_id=%s "
+                "status_applied=%s follow_up_applied=%s task_applied=%s",
                 appointment_id,
-                user_id,
-            ),
-        )
-
-    applied = {
-        "appointment_status": appointment_status,
-        "lead_status": None,
-        "follow_up_at": None,
-        "task_id": None,
-        "needs_attention": False,
-        "next_action": next_action or None,
-    }
-    confirmation_bits = ["Outcome saved"]
-
-    if not same_outcome:
-        add_lead_activity(
-            appt["lead_id"],
-            user_id,
-            "appointment_outcome",
-            f"Appointment outcome saved: {outcome_label(outcome)}",
-            {
+                appt["lead_id"],
+                bool(applied.get("lead_status")),
+                bool(applied.get("follow_up_at")),
+                bool(applied.get("task_id")),
+            )
+            return {
+                "ok": True,
+                "duplicate": False,
+                "confirmation": confirmation,
                 "appointment_id": appointment_id,
+                "lead_id": appt["lead_id"],
                 "outcome": outcome,
                 "appointment_status": appointment_status,
                 "next_action": next_action,
-                "outcome_notes": outcome_notes,
-                "suggested_lead_status": suggestion.get("suggested_lead_status"),
-            },
-            actor_user_id=user_id,
+                "applied": applied,
+                "suggestion": suggestion,
+            }, None
+    except Exception:
+        # Log and re-raise so the route can return 500 and surface a visible error.
+        # get_db() already rolled back the transaction.
+        logger.exception(
+            "appointment_outcome_failed appointment_id=%s outcome=%s",
+            appointment_id,
+            outcome,
         )
-
-    if apply_lead_status and suggestion.get("suggested_lead_status"):
-        previous = normalize_lead_status(lead["status"])
-        updated_lead, err = set_lead_status(
-            user_id,
-            appt["lead_id"],
-            suggestion["suggested_lead_status"],
-            actor_user_id=user_id,
-            from_automation=False,
-        )
-        if err:
-            return None, err
-        applied["lead_status"] = suggestion["suggested_lead_status"]
-        if updated_lead and normalize_lead_status(updated_lead.get("status")) != previous:
-            confirmation_bits.append(
-                f"Lead status changed to {status_label(suggestion['suggested_lead_status'])}"
-            )
-        elif previous == suggestion["suggested_lead_status"]:
-            confirmation_bits.append(
-                f"Lead status already {status_label(suggestion['suggested_lead_status'])}"
-            )
-
-    if next_action:
-        merge_lead_call_outcome_notes(
-            appt["lead_id"],
-            user_id,
-            next_action=next_action,
-        )
-
-    if apply_follow_up and suggestion.get("suggested_follow_up_at"):
-        follow_id, err = set_lead_follow_up(
-            user_id,
-            appt["lead_id"],
-            suggestion["suggested_follow_up_at"],
-            f"Follow-up after appointment outcome: {outcome_label(outcome)}",
-            priority="high" if suggestion.get("needs_attention") else "normal",
-            created_by=user_id,
-        )
-        if err:
-            return None, err
-        applied["follow_up_at"] = suggestion["suggested_follow_up_at"]
-        applied["follow_up_id"] = follow_id
-        due_day = (suggestion["suggested_follow_up_at"] or "")[:10]
-        confirmation_bits.append(
-            f"Follow-up scheduled for {due_day or suggestion.get('suggested_follow_up_label') or 'soon'}"
-        )
-
-    if apply_task and suggestion.get("suggested_task_title"):
-        task_id, err = create_task(
-            user_id,
-            {
-                "lead_id": appt["lead_id"],
-                "title": suggestion["suggested_task_title"],
-                "task_type": suggestion.get("suggested_task_type") or "general_follow_up",
-                "priority": "high" if suggestion.get("needs_attention") else "normal",
-                "due_at": suggestion.get("suggested_follow_up_at"),
-            },
-        )
-        if err:
-            return None, err
-        applied["task_id"] = task_id
-        confirmation_bits.append(f"Task created: {suggestion['suggested_task_title']}")
-
-    if apply_needs_attention and suggestion.get("needs_attention"):
-        reason_code = "appointment_no_show" if outcome == "no_show" else "review_call_outcome"
-        upsert_needs_attention(
-            user_id,
-            appt["lead_id"],
-            reason_code,
-            priority="high",
-            source_ref_type="appointment",
-            source_ref_id=appointment_id,
-            reason_text=(
-                "Lead no-showed appointment — reschedule or confirm interest."
-                if outcome == "no_show"
-                else f"Appointment outcome {outcome_label(outcome)} needs agent follow-through."
-            ),
-        )
-        applied["needs_attention"] = True
-        confirmation_bits.append("Needs Attention item opened")
-
-    resolve_needs_attention_by_reason(
-        user_id, appt["lead_id"], "appointment_outcome_missing", "Outcome recorded"
-    )
-
-    confirmation = ". ".join(confirmation_bits) + "."
-    return {
-        "ok": True,
-        "duplicate": False,
-        "confirmation": confirmation,
-        "appointment_id": appointment_id,
-        "outcome": outcome,
-        "appointment_status": appointment_status,
-        "next_action": next_action,
-        "applied": applied,
-        "suggestion": suggestion,
-    }, None
+        raise
 
 
 def list_appointments(user_id, lead_id=None, limit=50):

@@ -1,9 +1,10 @@
 """Phase 2 CRM pages and JSON APIs. All routes require subscription + ownership."""
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
-from flask import Blueprint, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, flash, get_flashed_messages, jsonify, redirect, render_template, request, url_for
 
 import auth
 import crm_db
@@ -21,6 +22,7 @@ from crm_constants import (
 )
 
 crm_bp = Blueprint("crm", __name__)
+logger = logging.getLogger(__name__)
 
 
 def _user_or_redirect():
@@ -169,6 +171,46 @@ def _nav_context(user, active):
     }
 
 
+def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_error=None):
+    lead = db.get_lead(lead_id, user["id"])
+    if not lead:
+        return None
+    activities = _enrich_lead_activities(
+        user["id"],
+        crm_db.list_lead_activities(user["id"], lead_id, for_timeline=True),
+    )
+    tasks = [t for t in crm_db.list_tasks(user["id"], bucket="all") if t.get("lead_id") == lead_id]
+    appointments = crm_db.list_appointments(user["id"], lead_id=lead_id)
+    needs = [n for n in crm_db.list_needs_attention(user["id"]) if n.get("lead_id") == lead_id]
+    messages = db.list_lead_messages(user["id"], lead_id)
+    flash_message = request.args.get("notice") or ""
+    flash_error = form_error or request.args.get("error") or ""
+    for category, message in get_flashed_messages(with_categories=True):
+        if category == "error":
+            flash_error = flash_error or message
+        else:
+            flash_message = flash_message or message
+    return {
+        "lead": lead,
+        "activities": activities,
+        "tasks": tasks,
+        "appointments": appointments,
+        "needs": needs,
+        "messages": messages,
+        "statuses": LEAD_STATUSES,
+        "task_types": TASK_TYPES,
+        "appointment_types": APPOINTMENT_TYPES,
+        "appointment_outcomes": APPOINTMENT_OUTCOMES,
+        "priorities": PRIORITIES,
+        "status_label": status_label,
+        "outcome_label": outcome_label,
+        "flash_message": flash_message,
+        "flash_error": flash_error,
+        "outcome_draft": outcome_draft or {},
+        **_nav_context(user, "leads"),
+    }
+
+
 @crm_bp.route("/crm/leads")
 def crm_leads_page():
     user = _user_or_redirect()
@@ -193,34 +235,10 @@ def crm_lead_detail_page(lead_id):
     user = _user_or_redirect()
     if not user:
         return redirect(url_for("index"))
-    lead = db.get_lead(lead_id, user["id"])
-    if not lead:
+    ctx = _lead_detail_template_kwargs(user, lead_id)
+    if not ctx:
         return redirect(url_for("crm.crm_leads_page"))
-    activities = _enrich_lead_activities(
-        user["id"],
-        crm_db.list_lead_activities(user["id"], lead_id, for_timeline=True),
-    )
-    tasks = [t for t in crm_db.list_tasks(user["id"], bucket="all") if t.get("lead_id") == lead_id]
-    appointments = crm_db.list_appointments(user["id"], lead_id=lead_id)
-    needs = [n for n in crm_db.list_needs_attention(user["id"]) if n.get("lead_id") == lead_id]
-    messages = db.list_lead_messages(user["id"], lead_id)
-    return render_template(
-        "crm_lead_detail.html",
-        lead=lead,
-        activities=activities,
-        tasks=tasks,
-        appointments=appointments,
-        needs=needs,
-        messages=messages,
-        statuses=LEAD_STATUSES,
-        task_types=TASK_TYPES,
-        appointment_types=APPOINTMENT_TYPES,
-        appointment_outcomes=APPOINTMENT_OUTCOMES,
-        priorities=PRIORITIES,
-        status_label=status_label,
-        outcome_label=outcome_label,
-        **_nav_context(user, "leads"),
-    )
+    return render_template("crm_lead_detail.html", **ctx)
 
 
 @crm_bp.route("/crm/tasks")
@@ -454,6 +472,34 @@ def api_appointments():
     return jsonify({"ok": True, "id": appt_id}), 201
 
 
+def _truthy_form_flag(value):
+    return str(value or "").strip().lower() in {"1", "true", "on", "yes"}
+
+
+def _parse_outcome_request():
+    data = request.get_json(silent=True)
+    if isinstance(data, dict):
+        return {
+            "outcome": data.get("outcome"),
+            "outcome_notes": str(data.get("outcome_notes") or ""),
+            "next_action": str(data.get("next_action") or ""),
+            "apply_lead_status": bool(data.get("apply_lead_status")),
+            "apply_follow_up": bool(data.get("apply_follow_up")),
+            "apply_task": bool(data.get("apply_task")),
+            "apply_needs_attention": bool(data.get("apply_needs_attention")),
+        }
+    form = request.form
+    return {
+        "outcome": form.get("outcome"),
+        "outcome_notes": str(form.get("outcome_notes") or ""),
+        "next_action": str(form.get("next_action") or ""),
+        "apply_lead_status": _truthy_form_flag(form.get("apply_lead_status")),
+        "apply_follow_up": _truthy_form_flag(form.get("apply_follow_up")),
+        "apply_task": _truthy_form_flag(form.get("apply_task")),
+        "apply_needs_attention": _truthy_form_flag(form.get("apply_needs_attention")),
+    }
+
+
 @crm_bp.route("/api/crm/appointments/<int:appointment_id>/outcome-preview", methods=["GET", "POST"])
 @auth.subscription_required
 def api_appointment_outcome_preview(appointment_id):
@@ -461,11 +507,17 @@ def api_appointment_outcome_preview(appointment_id):
     data = request.get_json(silent=True) or {}
     outcome = request.args.get("outcome") or data.get("outcome")
     next_action = request.args.get("next_action") or data.get("next_action") or ""
+    logger.info(
+        "appointment_outcome_preview route_reached appointment_id=%s outcome_present=%s",
+        appointment_id,
+        bool(outcome),
+    )
     preview, error = crm_db.preview_appointment_outcome(
         user["id"], appointment_id, outcome, next_action=str(next_action or "")
     )
     if error:
-        return jsonify({"error": error}), 400
+        status = 404 if "not found" in error.lower() else 400
+        return jsonify({"error": error}), status
     return jsonify({"preview": preview})
 
 
@@ -473,21 +525,136 @@ def api_appointment_outcome_preview(appointment_id):
 @auth.subscription_required
 def api_appointment_outcome(appointment_id):
     user = auth.get_current_user()
-    data = request.get_json(silent=True) or {}
-    result, error = crm_db.record_appointment_outcome(
-        user["id"],
+    payload = _parse_outcome_request()
+    logger.info(
+        "appointment_outcome_api route_reached appointment_id=%s outcome_present=%s "
+        "apply_status=%s apply_follow_up=%s apply_task=%s",
         appointment_id,
-        data.get("outcome"),
-        outcome_notes=str(data.get("outcome_notes") or ""),
-        next_action=str(data.get("next_action") or ""),
-        apply_lead_status=bool(data.get("apply_lead_status")),
-        apply_follow_up=bool(data.get("apply_follow_up")),
-        apply_task=bool(data.get("apply_task")),
-        apply_needs_attention=bool(data.get("apply_needs_attention")),
+        bool(payload.get("outcome")),
+        payload.get("apply_lead_status"),
+        payload.get("apply_follow_up"),
+        payload.get("apply_task"),
     )
+    try:
+        result, error = crm_db.record_appointment_outcome(
+            user["id"],
+            appointment_id,
+            payload.get("outcome"),
+            outcome_notes=payload.get("outcome_notes") or "",
+            next_action=payload.get("next_action") or "",
+            apply_lead_status=payload.get("apply_lead_status"),
+            apply_follow_up=payload.get("apply_follow_up"),
+            apply_task=payload.get("apply_task"),
+            apply_needs_attention=payload.get("apply_needs_attention"),
+        )
+    except Exception:
+        logger.exception(
+            "appointment_outcome_api unexpected_failure appointment_id=%s",
+            appointment_id,
+        )
+        return jsonify(
+            {"error": "Could not save appointment outcome. Please try again."}
+        ), 500
     if error:
-        return jsonify({"error": error}), 400
+        status = 404 if "not found" in error.lower() else 400
+        logger.info(
+            "appointment_outcome_api failure appointment_id=%s status=%s",
+            appointment_id,
+            status,
+        )
+        return jsonify({"error": error}), status
+    logger.info(
+        "appointment_outcome_api success appointment_id=%s", appointment_id
+    )
     return jsonify(result)
+
+
+@crm_bp.route(
+    "/crm/leads/<int:lead_id>/appointments/<int:appointment_id>/outcome",
+    methods=["POST"],
+)
+def crm_appointment_outcome_form(lead_id, appointment_id):
+    """Form POST + redirect (PRG) for Save outcome — avoids silent JS failures."""
+    user = _user_or_redirect()
+    if not user:
+        return redirect(url_for("index"))
+    lead = db.get_lead(lead_id, user["id"])
+    if not lead:
+        return redirect(url_for("crm.crm_leads_page"))
+
+    payload = _parse_outcome_request()
+    logger.info(
+        "appointment_outcome_form route_reached lead_id=%s appointment_id=%s "
+        "outcome_present=%s apply_status=%s apply_follow_up=%s apply_task=%s",
+        lead_id,
+        appointment_id,
+        bool(payload.get("outcome")),
+        payload.get("apply_lead_status"),
+        payload.get("apply_follow_up"),
+        payload.get("apply_task"),
+    )
+
+    # Ownership: appointment must belong to this authenticated user and this lead.
+    owned = None
+    for appt in crm_db.list_appointments(user["id"], lead_id=lead_id, limit=200):
+        if int(appt["id"]) == int(appointment_id):
+            owned = appt
+            break
+    if not owned:
+        ctx = _lead_detail_template_kwargs(
+            user, lead_id, form_error="Appointment not found."
+        )
+        return render_template("crm_lead_detail.html", **ctx), 404
+
+    try:
+        result, error = crm_db.record_appointment_outcome(
+            user["id"],
+            appointment_id,
+            payload.get("outcome"),
+            outcome_notes=payload.get("outcome_notes") or "",
+            next_action=payload.get("next_action") or "",
+            apply_lead_status=payload.get("apply_lead_status"),
+            apply_follow_up=payload.get("apply_follow_up"),
+            apply_task=payload.get("apply_task"),
+            apply_needs_attention=payload.get("apply_needs_attention"),
+        )
+    except Exception:
+        logger.exception(
+            "appointment_outcome_form unexpected_failure lead_id=%s appointment_id=%s",
+            lead_id,
+            appointment_id,
+        )
+        ctx = _lead_detail_template_kwargs(
+            user,
+            lead_id,
+            outcome_draft={appointment_id: payload},
+            form_error="Could not save appointment outcome. Please try again.",
+        )
+        return render_template("crm_lead_detail.html", **ctx), 500
+
+    if error:
+        logger.info(
+            "appointment_outcome_form failure lead_id=%s appointment_id=%s",
+            lead_id,
+            appointment_id,
+        )
+        status = 404 if "not found" in error.lower() else 400
+        ctx = _lead_detail_template_kwargs(
+            user,
+            lead_id,
+            outcome_draft={appointment_id: payload},
+            form_error=error,
+        )
+        return render_template("crm_lead_detail.html", **ctx), status
+
+    notice = result.get("confirmation") or "Outcome saved."
+    flash(notice, "success")
+    logger.info(
+        "appointment_outcome_form success lead_id=%s appointment_id=%s",
+        lead_id,
+        appointment_id,
+    )
+    return redirect(url_for("crm.crm_lead_detail_page", lead_id=lead_id), code=303)
 
 
 @crm_bp.route("/api/crm/needs-attention")
