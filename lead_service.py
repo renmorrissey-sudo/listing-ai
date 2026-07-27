@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import crm_db
 import db
@@ -122,6 +122,108 @@ def record_voice_call_started(user_id, lead_id, call_id, *, phone_number, provid
     states are noise for agents and are filtered from the Activity Timeline.
     """
     db.touch_lead_call_timestamps(lead_id, user_id)
+
+
+def _default_follow_up_due(*, days=1, hour_utc=15):
+    due = datetime.now(timezone.utc) + timedelta(days=days)
+    due = due.replace(hour=hour_utc, minute=0, second=0, microsecond=0)
+    return due.isoformat()
+
+
+def recommend_voice_next_action(*, appointment_requested, meaningful_status, summary, recommended_next_action=None):
+    explicit = str(recommended_next_action or "").strip()
+    if explicit:
+        return explicit[:500]
+    if appointment_requested:
+        return "Confirm appointment details and send a calendar invite"
+    status = (meaningful_status or "").lower()
+    if status in {"failed", "unanswered", "declined", "cancelled"}:
+        return "Retry outreach — prior AI call did not connect"
+    if status == "completed":
+        if summary:
+            return f"Follow up on call: {str(summary).strip()[:160]}"
+        return "Review call summary and follow up with the lead"
+    return None
+
+
+def ensure_lead_follow_through(
+    user_id,
+    lead_id,
+    *,
+    appointment_requested=False,
+    meaningful_status=None,
+    summary=None,
+    recommended_next_action=None,
+    follow_up_at=None,
+):
+    """Populate Next Action and Follow-up after a meaningful voice outcome."""
+    lead = db.get_lead(lead_id, user_id)
+    if not lead:
+        return None
+
+    next_action = recommend_voice_next_action(
+        appointment_requested=appointment_requested
+        or normalize_lead_status(lead.get("status")) == "appointment_scheduled",
+        meaningful_status=meaningful_status,
+        summary=summary,
+        recommended_next_action=recommended_next_action,
+    )
+    if next_action:
+        db.merge_lead_call_outcome_notes(
+            lead_id,
+            user_id,
+            next_action=next_action,
+            follow_up_at=follow_up_at,
+        )
+
+    # Schedule a follow-up date when missing (idempotent on webhook retry).
+    lead = db.get_lead(lead_id, user_id) or lead
+    if follow_up_at and not lead.get("next_follow_up_at"):
+        reason = (
+            "Confirm appointment from AI call"
+            if appointment_requested
+            else (str(summary or "Follow up after AI call")[:200])
+        )
+        crm_db.set_lead_follow_up(
+            user_id,
+            lead_id,
+            follow_up_at,
+            reason,
+            priority="high" if appointment_requested else "normal",
+        )
+    elif not lead.get("next_follow_up_at") and (
+        appointment_requested
+        or meaningful_status in {
+            "completed",
+            "failed",
+            "unanswered",
+            "declined",
+            "cancelled",
+        }
+    ):
+        days = 1 if appointment_requested or meaningful_status in {
+            "failed",
+            "unanswered",
+            "declined",
+            "cancelled",
+        } else 2
+        reason = (
+            "Confirm appointment from AI call"
+            if appointment_requested
+            else (
+                "Retry outreach after missed AI call"
+                if meaningful_status in {"failed", "unanswered", "declined", "cancelled"}
+                else "Follow up after AI call"
+            )
+        )
+        crm_db.set_lead_follow_up(
+            user_id,
+            lead_id,
+            _default_follow_up_due(days=days),
+            reason,
+            priority="high" if appointment_requested else "normal",
+        )
+    return db.get_lead(lead_id, user_id)
 
 
 def _normalize_token(value):
@@ -348,10 +450,15 @@ def apply_voice_call_webhook_to_lead(user_id, call_row, normalized):
         "recording_status": recording_status,
         "has_transcript": has_transcript,
         "completed_at": fresh_call.get("completed_at"),
-        "recommended_next_action": normalized.get("recommended_next_action")
-        or ("Schedule follow-up appointment" if appointment_requested else None),
+        "recommended_next_action": recommend_voice_next_action(
+            appointment_requested=appointment_requested,
+            meaningful_status=meaningful_status,
+            summary=summary,
+            recommended_next_action=normalized.get("recommended_next_action"),
+        ),
     }
 
+    emitted = False
     if classified.get("emit") and classified.get("event_type"):
         activity_summary = classified["summary"]
         if webhook_completed:
@@ -370,9 +477,8 @@ def apply_voice_call_webhook_to_lead(user_id, call_row, normalized):
                 user_id,
                 summary=summary,
                 outcome=outcome,
-                next_action=payload.get("recommended_next_action"),
-                follow_up_at=follow_up_at,
             )
+        emitted = True
     elif has_recording or has_transcript or summary:
         # Artifacts arrived without a classified event — still consolidate onto completed.
         _upsert_voice_call_activity(
@@ -383,11 +489,20 @@ def apply_voice_call_webhook_to_lead(user_id, call_row, normalized):
             payload,
         )
         db.touch_lead_call_timestamps(lead_id, user_id)
+        if summary or outcome:
+            db.merge_lead_call_outcome_notes(
+                lead_id,
+                user_id,
+                summary=summary,
+                outcome=outcome,
+            )
+        emitted = True
+        meaningful_status = meaningful_status or "completed"
 
     # Lead status automation only for meaningful terminal / completed states.
     current = normalize_lead_status(lead.get("status"))
     suggested_status = None
-    status_for_rules = meaningful_status if classified.get("emit") else None
+    status_for_rules = meaningful_status if emitted else None
 
     if appointment_requested and current not in {"do_not_contact", "closed_won", "closed_lost"}:
         if current in {"new", "attempting_contact", "contacted", "qualified", "nurture"}:
@@ -429,6 +544,17 @@ def apply_voice_call_webhook_to_lead(user_id, call_row, normalized):
             suggested_status = "closed_lost"
         elif "nurture" in (summary or "").lower() or "later" in (summary or "").lower():
             suggested_status = "nurture"
+
+    if emitted or appointment_requested:
+        ensure_lead_follow_through(
+            user_id,
+            lead_id,
+            appointment_requested=appointment_requested,
+            meaningful_status=meaningful_status or status_for_rules,
+            summary=summary,
+            recommended_next_action=payload.get("recommended_next_action"),
+            follow_up_at=follow_up_at,
+        )
 
     if suggested_status and suggested_status != normalize_lead_status(
         db.get_lead(lead_id, user_id).get("status")

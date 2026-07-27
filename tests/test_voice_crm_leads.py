@@ -223,7 +223,10 @@ def test_vapi_webhook_updates_linked_lead(app_client, two_users, monkeypatch):
     lead = db.get_lead(lead_id, u1)
     assert lead["status"] == "contacted"
     assert lead.get("latest_call_at")
-    activities = crm_db.list_lead_activities(u1, lead_id)
+    assert lead.get("next_action")
+    assert "Follow up" in lead["next_action"] or "call" in lead["next_action"].lower()
+    assert lead.get("next_follow_up_at")
+    activities = crm_db.list_lead_activities(u1, lead_id, for_timeline=True)
     assert any(a["event_type"] == "voice_call_completed" for a in activities)
 
 

@@ -158,6 +158,59 @@ def test_completed_failed_unanswered_appear_and_retries_idempotent(app_client, t
     assert denied_rec.status_code == 404
 
 
+def test_appointment_call_populates_follow_up_and_next_action(app_client, two_users, monkeypatch):
+    u1, _ = two_users
+    apply_pending_migrations()
+    _profile(u1)
+    persona_id = _persona(u1)
+    started = _start_call(app_client, u1, persona_id, "3035550208", "vapi_appt", monkeypatch)
+    lead_id = started["lead_id"]
+    res = app_client.post(
+        "/webhook/voice",
+        json={
+            "message": {
+                "type": "end-of-call-report",
+                "endedReason": "customer-ended-call",
+                "durationSeconds": 120,
+                "call": {"id": "vapi_appt"},
+                "summary": "Lead asked to book an appointment for a showing next week",
+                "analysis": {
+                    "summary": "Lead asked to book an appointment for a showing next week",
+                    "nextAction": "Text two showing times",
+                },
+                "artifact": {"transcript": "User: Can we set an appointment?"},
+            }
+        },
+    )
+    assert res.status_code == 200
+    lead = db.get_lead(lead_id, u1)
+    assert lead["status"] == "appointment_scheduled"
+    assert lead.get("next_action")
+    assert "appointment" in lead["next_action"].lower() or "showing" in lead["next_action"].lower()
+    assert lead.get("next_follow_up_at")
+    # Retry must not clear fields or create a second competing follow-up date wipe.
+    app_client.post(
+        "/webhook/voice",
+        json={
+            "message": {
+                "type": "end-of-call-report",
+                "endedReason": "customer-ended-call",
+                "call": {"id": "vapi_appt"},
+                "summary": "Lead asked to book an appointment for a showing next week",
+                "artifact": {"transcript": "User: Can we set an appointment?"},
+            }
+        },
+    )
+    lead2 = db.get_lead(lead_id, u1)
+    assert lead2["next_action"]
+    assert lead2["next_follow_up_at"] == lead["next_follow_up_at"]
+
+    page = app_client.get("/crm/leads")
+    html = page.get_data(as_text=True)
+    assert lead2["next_action"][:40] in html
+    assert (lead2["next_follow_up_at"] or "")[:10] in html
+
+
 def test_timeline_hides_legacy_queued_rows_without_deleting_completed(two_users):
     from datetime import datetime, timezone
 

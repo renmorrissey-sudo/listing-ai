@@ -73,6 +73,7 @@ def test_empty_database_bootstrap_creates_baseline_tables(empty_sqlite_db):
         "004_voice_call_lead_link",
         "005_voice_call_recording_fields",
         "006_cleanup_transient_voice_activities",
+        "007_backfill_lead_follow_through",
     }
 
 
@@ -86,6 +87,7 @@ def test_migration_order_baseline_before_additive(empty_sqlite_db, monkeypatch):
     m4 = import_module("migrations.versions.004_voice_call_lead_link")
     m5 = import_module("migrations.versions.005_voice_call_recording_fields")
     m6 = import_module("migrations.versions.006_cleanup_transient_voice_activities")
+    m7 = import_module("migrations.versions.007_backfill_lead_follow_through")
 
     real_sq1 = m1.upgrade_sqlite
     real_sq2 = m2.upgrade_sqlite
@@ -93,6 +95,7 @@ def test_migration_order_baseline_before_additive(empty_sqlite_db, monkeypatch):
     real_sq4 = m4.upgrade_sqlite
     real_sq5 = m5.upgrade_sqlite
     real_sq6 = m6.upgrade_sqlite
+    real_sq7 = m7.upgrade_sqlite
 
     def wrap(name, real):
         def _inner(conn):
@@ -107,9 +110,10 @@ def test_migration_order_baseline_before_additive(empty_sqlite_db, monkeypatch):
     monkeypatch.setattr(m4, "upgrade_sqlite", wrap("004", real_sq4))
     monkeypatch.setattr(m5, "upgrade_sqlite", wrap("005", real_sq5))
     monkeypatch.setattr(m6, "upgrade_sqlite", wrap("006", real_sq6))
+    monkeypatch.setattr(m7, "upgrade_sqlite", wrap("007", real_sq7))
 
     apply_pending_migrations()
-    assert order == ["001", "002", "003", "004", "005", "006"]
+    assert order == ["001", "002", "003", "004", "005", "006", "007"]
 
 
 def test_false_001_stamp_without_users_is_repaired(empty_sqlite_db):
@@ -152,6 +156,7 @@ def test_false_001_stamp_without_users_is_repaired(empty_sqlite_db):
         "004_voice_call_lead_link",
         "005_voice_call_recording_fields",
         "006_cleanup_transient_voice_activities",
+        "007_backfill_lead_follow_through",
     }
 
 
@@ -266,4 +271,5 @@ def test_empty_postgres_bootstrap(monkeypatch):
         "004_voice_call_lead_link",
         "005_voice_call_recording_fields",
         "006_cleanup_transient_voice_activities",
+        "007_backfill_lead_follow_through",
     }

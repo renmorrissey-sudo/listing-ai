@@ -60,7 +60,12 @@
               <div class="muted">{{ lead.phone_number }} · {{ lead.message_count or 0 }} msgs</div>
             </td>
             <td><span class="pill">{{ status_label(lead.status) }}</span></td>
-            <td class="muted">{{ (lead.next_follow_up_at or lead.follow_up_at or '—')[:16] }}</td>
+            <td class="muted">
+              {% if lead.next_follow_up_at or lead.follow_up_at %}
+                {{ (lead.next_follow_up_at or lead.follow_up_at)[:16] }}
+                {% if lead.follow_up_reason %}<div style="margin-top:2px;">{{ lead.follow_up_reason[:60] }}{% if lead.follow_up_reason|length > 60 %}…{% endif %}</div>{% endif %}
+              {% else %}—{% endif %}
+            </td>
             <td>{{ (lead.next_action or '—')[:80] }}</td>
             <td><a class="cta" href="/crm/leads/{{ lead.id }}">Open</a></td>
           </tr>
