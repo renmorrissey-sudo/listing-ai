@@ -8,23 +8,9 @@
   {% include 'crm_base_styles.html' %}
 </head>
 <body>
-  <header>
-    <div>
-      <div class="logo">TopAI <span>Real Estate Tools</span></div>
-      <div class="tagline">Duplicate follow-up cleanup</div>
-    </div>
-    <div class="subscriber-info">
-      <span class="subscriber-email">&#10003; {{ email }}</span>
-      <button class="logout-btn" type="button" onclick="fetch('/logout',{method:'POST'}).then(()=>location.href='/')">Sign out</button>
-    </div>
-  </header>
-  <div class="public-nav">
-    <a href="/dashboard">Dashboard</a>
-    <a href="/crm/leads">Leads</a>
-    <a href="/crm/calendar">Leads Calendar</a>
-    <a href="/crm/follow-ups">Follow-ups</a>
-    <a href="/crm/tasks">Tasks</a>
-  </div>
+  {% set page_tagline = 'Duplicate follow-up cleanup' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
   <main>
     <h1>Cleanup duplicate follow-ups</h1>
     <p class="muted">
@@ -66,5 +52,7 @@
       </form>
     </div>
   </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
 </body>
 </html>

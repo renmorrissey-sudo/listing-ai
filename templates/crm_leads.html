@@ -8,35 +8,9 @@
   {% include 'crm_base_styles.html' %}
 </head>
 <body>
-  <header>
-    <div>
-      <div class="logo">TopAI <span>Real Estate Tools</span></div>
-      <div class="tagline">CRM leads</div>
-    </div>
-    <div class="subscriber-info">
-      <span class="subscriber-email">&#10003; {{ email }}</span>
-      {% if has_billing_portal %}<a class="billing-link" href="/billing/portal">Manage billing</a>{% endif %}
-      <button class="logout-btn" type="button" onclick="doLogout()">Sign out</button>
-    </div>
-  </header>
-  <div class="public-nav">
-    <a href="/dashboard">Dashboard</a>
-    <a href="/crm/leads" class="active">Leads</a>
-    <a href="/crm/calendar">Leads Calendar</a>
-    <a href="/crm/follow-ups">Follow-ups</a>
-    <a href="/crm/tasks">Tasks</a>
-    <a href="/crm/needs-attention">Needs Attention</a>
-    <a href="/#sms">AI SMS</a>
-  </div>
-  <nav class="tool-nav">
-    <a href="/dashboard">Dashboard</a>
-    <a href="/crm/leads" class="active">Leads</a>
-    <a href="/crm/calendar">Leads Calendar</a>
-    <a href="/crm/follow-ups">Follow-ups</a>
-    <a href="/crm/tasks">Tasks</a>
-    <a href="/crm/needs-attention">Needs Attention</a>
-    <a href="/#sms">AI SMS Assistant</a>
-  </nav>
+  {% set page_tagline = 'CRM leads' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
   <main>
     <h1>Leads</h1>
     <p class="muted">Filter and open lead records. Status changes are always agent-controlled.</p>
@@ -91,11 +65,7 @@
       {% endif %}
     </div>
   </main>
-  <script>
-    async function doLogout() {
-      await fetch('/logout', {method: 'POST'});
-      window.location.href = '/';
-    }
-  </script>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
 </body>
 </html>

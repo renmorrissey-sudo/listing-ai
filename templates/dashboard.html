@@ -5,35 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Dashboard - {{ product_name }}</title>
   <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
   <style>
-    *, *::before, *::after { box-sizing: border-box; }
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; line-height: 1.55; }
-    header { background: #1a1a2e; color: white; padding: 16px 32px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-    .logo { font-size: 20px; font-weight: 700; }
-    .logo span { color: #4f8ef7; }
-    .tagline { font-size: 12px; color: #8899aa; margin-top: 2px; }
-    .subscriber-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .subscriber-email { font-size: 12px; color: #22c55e; font-weight: 600; }
-    .billing-link { border: 1.5px solid #4f8ef7; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #dce8ff; text-decoration: none; }
-    .logout-btn { background: none; border: 1.5px solid #445; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #aab; cursor: pointer; }
-    .public-nav { background: #eef2f7; border-bottom: 1px solid #dde4f0; padding: 9px 32px; font-size: 13px; }
-    .public-nav a { color: #445; text-decoration: none; margin-right: 18px; font-weight: 600; }
-    .public-nav a:hover, .public-nav a.active { color: #4f8ef7; }
-    .tool-nav { background: #232344; display: flex; padding: 0 32px; gap: 4px; overflow-x: auto; }
-    .tool-nav a { padding: 12px 20px; font-size: 13px; font-weight: 600; color: #8899bb; text-decoration: none; border-bottom: 3px solid transparent; white-space: nowrap; }
-    .tool-nav a:hover { color: #ccd; }
-    .tool-nav a.active { color: #4f8ef7; border-bottom-color: #4f8ef7; }
-    main { max-width: 1100px; margin: 28px auto 40px; padding: 0 20px; }
-    h1 { font-size: 28px; margin: 0 0 8px; }
-    h2 { font-size: 18px; margin: 0 0 12px; }
-    .muted { color: #667; }
     .overview { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 18px 0 22px; }
     .stat { background: white; border-radius: 12px; padding: 18px; box-shadow: 0 1px 5px rgba(0,0,0,0.08); }
     .stat .label { font-size: 12px; font-weight: 700; color: #667; text-transform: uppercase; letter-spacing: 0.4px; }
     .stat .value { font-size: 30px; font-weight: 800; margin-top: 6px; color: #1a1a2e; }
     .stat .sub { font-size: 12px; color: #889; margin-top: 4px; }
     .grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 16px; }
-    .card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 5px rgba(0,0,0,0.08); margin-bottom: 16px; }
     .tool-card { border: 1px solid #e5ebf5; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
     .tool-card h3 { margin: 0 0 8px; font-size: 16px; }
     .metrics-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
@@ -53,65 +32,20 @@
       border-color: #4f8ef7;
       box-shadow: 0 0 0 3px rgba(79, 142, 247, 0.35);
     }
-    .cta { display: inline-block; margin-top: 10px; background: #4f8ef7; color: white; border-radius: 8px; padding: 8px 12px; font-size: 13px; font-weight: 700; text-decoration: none; }
     .activity { list-style: none; padding: 0; margin: 0; }
     .activity li { padding: 10px 0; border-bottom: 1px solid #eef2f7; font-size: 13px; }
     .activity li:last-child { border-bottom: none; }
-    .pill { display: inline-block; background: #eef5ff; color: #1d4ed8; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700; }
-    .empty { color: #889; font-size: 13px; padding: 8px 0; }
-    footer { max-width: 1100px; margin: 0 auto 36px; padding: 0 20px; color: #667; font-size: 14px; }
-    footer a { color: #4f8ef7; }
     @media (max-width: 900px) {
       .overview { grid-template-columns: repeat(2, 1fr); }
       .grid { grid-template-columns: 1fr; }
       .metrics-row { grid-template-columns: 1fr 1fr; }
-      header, .public-nav, .tool-nav { padding-left: 16px; padding-right: 16px; }
     }
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <div class="logo">TopAI <span>Real Estate Tools</span></div>
-      <div class="tagline">Subscriber dashboard</div>
-    </div>
-    <div class="subscriber-info">
-      <span class="subscriber-email">&#10003; {{ email }}</span>
-      {% if has_billing_portal %}
-      <a class="billing-link" href="/billing/portal">Manage billing</a>
-      {% endif %}
-      <button class="logout-btn" type="button" onclick="doLogout()">Sign out</button>
-    </div>
-  </header>
-
-  <div class="public-nav">
-    <a href="/dashboard" class="active">Dashboard</a>
-    <a href="/crm/leads">Leads</a>
-    <a href="/crm/calendar">Leads Calendar</a>
-    <a href="/crm/follow-ups">Follow-ups</a>
-    <a href="/crm/tasks">Tasks</a>
-    <a href="/crm/needs-attention">Needs Attention</a>
-    <a href="/tutorial">Tutorial</a>
-    <a href="/terms">Terms</a>
-    <a href="/privacy">Privacy</a>
-    <a href="/refund-policy">Refund Policy</a>
-    <a href="/contact">Contact</a>
-  </div>
-
-    <nav class="tool-nav">
-    <a href="/dashboard" class="active">Dashboard</a>
-    <a href="/crm/leads">Leads</a>
-    <a href="/crm/calendar">Leads Calendar</a>
-    <a href="/crm/follow-ups">Follow-ups</a>
-    <a href="/crm/tasks">Tasks</a>
-    <a href="/crm/needs-attention">Needs Attention</a>
-    <a href="/">Listing Generator</a>
-    <a href="/#coldcall">Cold Call Scripts</a>
-    <a href="/#voice">AI Calling Assistant</a>
-    <a href="/#sms">AI SMS Assistant</a>
-    <a href="/tutorial">Tutorial</a>
-  </nav>
-
+  {% set page_tagline = 'Subscriber dashboard' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
   <main>
     <h1>Dashboard</h1>
     <p class="muted">Track how you use each TopAI tool to market listings, create scripts, and follow up with leads. {{ metrics.overview.activity_30d }} actions in the last 30 days ({{ metrics.overview.activity_7d }} in the last 7).</p>
@@ -407,10 +341,7 @@
     </div>
   </main>
 
-  <footer>
-    <strong>{{ business_name }}</strong> operates {{ product_name }}.<br />
-    Contact: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>
-  </footer>
+  {% include 'subscriber_footer.html' %}
 
   <script>
     (function ensureLocalDate() {
@@ -422,10 +353,7 @@
       params.set('tz_offset_minutes', String(d.getTimezoneOffset()));
       window.location.replace(`${window.location.pathname}?${params.toString()}`);
     })();
-    async function doLogout() {
-      await fetch('/logout', {method: 'POST'});
-      window.location.href = '/';
-    }
   </script>
+  {% include 'subscriber_nav_script.html' %}
 </body>
 </html>

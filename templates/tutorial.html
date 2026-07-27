@@ -6,30 +6,11 @@
   <title>Tutorial - {{ product_name }}</title>
   <meta name="robots" content="noindex" />
   <meta name="description" content="Subscriber tutorial for TopAI Real Estate Tools: Listing Generator, Cold Call Scripts, AI Calling, AI SMS, and CRM lead workflow." />
+  {% include 'crm_base_styles.html' %}
   <style>
-    *, *::before, *::after { box-sizing: border-box; }
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; line-height: 1.65; }
-    header { background: #1a1a2e; color: white; padding: 16px 32px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-    .logo { font-size: 20px; font-weight: 700; }
-    .logo span { color: #4f8ef7; }
-    .tagline { font-size: 12px; color: #8899aa; margin-top: 2px; }
-    .subscriber-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .subscriber-email { font-size: 12px; color: #22c55e; font-weight: 600; }
-    .billing-link { border: 1.5px solid #4f8ef7; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #dce8ff; text-decoration: none; }
-    .logout-btn { background: none; border: 1.5px solid #445; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #aab; cursor: pointer; }
-    .public-nav { background: #eef2f7; border-bottom: 1px solid #dde4f0; padding: 9px 32px; font-size: 13px; }
-    .public-nav a { color: #445; text-decoration: none; margin-right: 18px; font-weight: 600; }
-    .public-nav a:hover, .public-nav a.active { color: #4f8ef7; }
-    .tool-nav { background: #232344; display: flex; padding: 0 32px; gap: 4px; overflow-x: auto; }
-    .tool-nav a { padding: 12px 20px; font-size: 13px; font-weight: 600; color: #8899bb; text-decoration: none; border-bottom: 3px solid transparent; white-space: nowrap; }
-    .tool-nav a:hover { color: #ccd; }
-    .tool-nav a.active { color: #4f8ef7; border-bottom-color: #4f8ef7; }
-    main { max-width: 920px; margin: 28px auto 40px; padding: 0 20px; }
+    main { max-width: 920px; }
     .hero, .section { background: white; border-radius: 14px; padding: 28px; box-shadow: 0 1px 5px rgba(0,0,0,0.08); margin-bottom: 18px; }
     h1 { font-size: 30px; margin: 0 0 10px; line-height: 1.2; }
-    h2 { font-size: 20px; margin: 0 0 10px; }
-    h3 { font-size: 15px; margin: 18px 0 8px; }
-    .muted { color: #667; }
     .toc { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 16px; }
     .toc a { display: block; background: #f8fafc; border: 1px solid #dde4f0; border-radius: 10px; padding: 12px; text-decoration: none; color: #1a1a2e; font-weight: 600; font-size: 13px; }
     .toc a:hover { border-color: #4f8ef7; color: #4f8ef7; }
@@ -37,57 +18,16 @@
     ol, ul { padding-left: 20px; margin: 8px 0 0; }
     li { margin-bottom: 7px; }
     .tip { background: #fff8e6; border: 1px solid #f0d98c; color: #7a5c00; border-radius: 8px; padding: 12px; font-size: 13px; margin-top: 14px; }
-    .cta { display: inline-block; margin-top: 14px; background: #4f8ef7; color: white; border-radius: 9px; padding: 11px 16px; font-weight: 700; text-decoration: none; }
     .cta.secondary { background: white; color: #1d4ed8; border: 1.5px solid #cfe0ff; margin-left: 8px; }
-    footer { max-width: 920px; margin: 0 auto 36px; padding: 0 20px; color: #667; font-size: 14px; }
-    footer a { color: #4f8ef7; }
     @media (max-width: 720px) {
-      header, .public-nav, .tool-nav { padding-left: 16px; padding-right: 16px; }
       .toc { grid-template-columns: 1fr; }
-      .tool-nav { overflow-x: auto; }
-      .tool-nav a { flex: 0 0 auto; white-space: nowrap; }
     }
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <div class="logo">TopAI <span>Real Estate Tools</span></div>
-      <div class="tagline">Subscriber tutorial</div>
-    </div>
-    <div class="subscriber-info">
-      <span class="subscriber-email">&#10003; {{ email }}</span>
-      {% if has_billing_portal %}
-      <a class="billing-link" href="/billing/portal">Manage billing</a>
-      {% endif %}
-      <button class="logout-btn" type="button" onclick="doLogout()">Sign out</button>
-    </div>
-  </header>
-
-  <div class="public-nav">
-    <a href="/dashboard">Dashboard</a>
-    <a href="/crm/leads">Leads</a>
-    <a href="/crm/tasks">Tasks</a>
-    <a href="/crm/needs-attention">Needs Attention</a>
-    <a href="/tutorial" class="active">Tutorial</a>
-    <a href="/terms">Terms</a>
-    <a href="/privacy">Privacy</a>
-    <a href="/refund-policy">Refund Policy</a>
-    <a href="/contact">Contact</a>
-  </div>
-
-  <nav class="tool-nav">
-    <a href="/dashboard">Dashboard</a>
-    <a href="/crm/leads">Leads</a>
-    <a href="/crm/tasks">Tasks</a>
-    <a href="/crm/needs-attention">Needs Attention</a>
-    <a href="/">Listing Generator</a>
-    <a href="/#coldcall">Cold Call Scripts</a>
-    <a href="/#voice">AI Calling Assistant</a>
-    <a href="/#sms">AI SMS Assistant</a>
-    <a href="/tutorial" class="active">Tutorial</a>
-  </nav>
-
+  {% set page_tagline = 'Subscriber tutorial' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
   <main>
     <section class="hero">
       <h1>How to use your TopAI tools</h1>
@@ -332,16 +272,7 @@
     </section>
   </main>
 
-  <footer>
-    <strong>{{ business_name }}</strong> operates {{ product_name }}.<br />
-    Contact: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>
-  </footer>
-
-  <script>
-    async function doLogout() {
-      await fetch('/logout', {method: 'POST'});
-      window.location.href = '/';
-    }
-  </script>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
 </body>
 </html>

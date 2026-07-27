@@ -104,6 +104,13 @@
     .gate-links { margin-top: 18px; font-size: 12px; color: #889; line-height: 1.8; }
     .gate-links a { color: #667; text-decoration: none; margin: 0 4px; }
     .gate-links a:hover { color: #4f8ef7; text-decoration: underline; }
+    .subscriber-footer {
+      max-width: 1100px; margin: 0 auto 36px; padding: 0 20px; color: #667; font-size: 14px;
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+    }
+    .subscriber-footer a { color: #4f8ef7; text-decoration: none; }
+    .subscriber-footer a:hover { text-decoration: underline; }
+    .footer-utility { display: flex; flex-wrap: wrap; gap: 12px 16px; font-size: 13px; }
     .business-note { font-size: 12px; color: #8899aa; margin-top: 4px; }
     .public-nav { background: #eef2f7; border-bottom: 1px solid #dde4f0; padding: 9px 32px; font-size: 13px; }
     .public-nav a { color: #445; text-decoration: none; margin-right: 18px; font-weight: 600; }
@@ -384,6 +391,19 @@
   </main>
 </div>
 
+<footer class="subscriber-footer" id="subscriber-footer" style="display:none;" aria-label="Site footer">
+  <div class="footer-main">
+    <strong>{{ business_name }}</strong> operates {{ product_name }}.
+  </div>
+  <nav class="footer-utility" aria-label="Legal and contact">
+    <a href="/terms">Terms</a>
+    <a href="/privacy">Privacy</a>
+    <a href="/refund-policy">Refund Policy</a>
+    <a href="/contact">Contact</a>
+    <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>
+  </nav>
+</footer>
+
 <script>
   let voiceCallsRefreshTimer = null;
 
@@ -397,6 +417,10 @@
   }
 
   function setSubscriberNav(isSubscriber) {
+    const publicNav = document.getElementById('public-nav');
+    if (publicNav) publicNav.style.display = isSubscriber ? 'none' : '';
+    const subscriberFooter = document.getElementById('subscriber-footer');
+    if (subscriberFooter) subscriberFooter.style.display = isSubscriber ? 'flex' : 'none';
     document.querySelectorAll('.nav-marketing').forEach(el => {
       el.style.display = isSubscriber ? 'none' : '';
     });

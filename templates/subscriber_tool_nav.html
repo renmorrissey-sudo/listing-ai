@@ -1,0 +1,25 @@
+<div class="tool-nav-bar" id="tool-nav-bar">
+  <button
+    type="button"
+    class="tool-nav-toggle"
+    id="tool-nav-toggle"
+    aria-expanded="false"
+    aria-controls="tool-nav"
+  >
+  <span class="tool-nav-toggle-icon" aria-hidden="true"></span>
+  <span class="tool-nav-toggle-label">Menu</span>
+  </button>
+  <nav class="tool-nav" id="tool-nav" aria-label="Main application navigation">
+    <a href="/dashboard" class="{% if active_nav == 'dashboard' %}active{% endif %}">Dashboard</a>
+    <a href="/crm/leads" class="{% if active_nav == 'leads' %}active{% endif %}">Leads</a>
+    <a href="/crm/calendar" class="{% if active_nav == 'calendar' %}active{% endif %}">Leads Calendar</a>
+    <a href="/crm/follow-ups" class="{% if active_nav == 'follow-ups' %}active{% endif %}">Follow-ups</a>
+    <a href="/crm/tasks" class="{% if active_nav == 'tasks' %}active{% endif %}">Tasks</a>
+    <a href="/crm/needs-attention" class="{% if active_nav == 'needs' %}active{% endif %}">Needs Attention</a>
+    <a href="/" class="{% if active_nav == 'listing' %}active{% endif %}">Listing Generator</a>
+    <a href="/#coldcall" class="{% if active_nav == 'coldcall' %}active{% endif %}">Cold Call Scripts</a>
+    <a href="/#voice" class="{% if active_nav == 'voice' %}active{% endif %}">AI Calling Assistant</a>
+    <a href="/#sms" class="{% if active_nav == 'sms' %}active{% endif %}">AI SMS Assistant</a>
+    <a href="/tutorial" class="{% if active_nav == 'tutorial' %}active{% endif %}">Tutorial</a>
+  </nav>
+</div>

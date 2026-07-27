@@ -1,6 +1,7 @@
 <style>
   *, *::before, *::after { box-sizing: border-box; }
-  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; line-height: 1.55; }
+  html { overflow-x: hidden; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; line-height: 1.55; overflow-x: hidden; }
   header { background: #1a1a2e; color: white; padding: 16px 32px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
   .logo { font-size: 20px; font-weight: 700; }
   .logo span { color: #4f8ef7; }
@@ -9,12 +10,32 @@
   .subscriber-email { font-size: 12px; color: #22c55e; font-weight: 600; }
   .billing-link { border: 1.5px solid #4f8ef7; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #dce8ff; text-decoration: none; }
   .logout-btn { background: none; border: 1.5px solid #445; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #aab; cursor: pointer; }
-  .public-nav { background: #eef2f7; border-bottom: 1px solid #dde4f0; padding: 9px 32px; font-size: 13px; }
-  .public-nav a { color: #445; text-decoration: none; margin-right: 18px; font-weight: 600; }
-  .public-nav a:hover, .public-nav a.active { color: #4f8ef7; }
-  .tool-nav { background: #232344; display: flex; padding: 0 32px; gap: 4px; overflow-x: auto; }
-  .tool-nav a { padding: 12px 20px; font-size: 13px; font-weight: 600; color: #8899bb; text-decoration: none; border-bottom: 3px solid transparent; white-space: nowrap; }
+  .tool-nav-bar { background: #232344; padding: 0 32px; }
+  .tool-nav-toggle {
+    display: none; align-items: center; gap: 8px; width: 100%;
+    background: transparent; border: none; color: #ccd; font-size: 13px; font-weight: 700;
+    padding: 10px 0; cursor: pointer;
+  }
+  .tool-nav-toggle:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 2px; }
+  .tool-nav-toggle-icon {
+    width: 18px; height: 2px; background: #ccd; position: relative; display: inline-block;
+  }
+  .tool-nav-toggle-icon::before,
+  .tool-nav-toggle-icon::after {
+    content: ''; position: absolute; left: 0; width: 18px; height: 2px; background: #ccd;
+  }
+  .tool-nav-toggle-icon::before { top: -6px; }
+  .tool-nav-toggle-icon::after { top: 6px; }
+  .tool-nav {
+    display: flex; gap: 4px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin; max-width: 100%;
+  }
+  .tool-nav a {
+    padding: 12px 16px; font-size: 13px; font-weight: 600; color: #8899bb;
+    text-decoration: none; border-bottom: 3px solid transparent; white-space: nowrap; flex: 0 0 auto;
+  }
   .tool-nav a:hover { color: #ccd; }
+  .tool-nav a:focus-visible { outline: 2px solid #4f8ef7; outline-offset: -2px; }
   .tool-nav a.active { color: #4f8ef7; border-bottom-color: #4f8ef7; }
   main { max-width: 1100px; margin: 28px auto 40px; padding: 0 20px; }
   h1 { font-size: 28px; margin: 0 0 8px; }
@@ -51,10 +72,23 @@
   .quick-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
   .flash { display: none; background: #ecfdf5; color: #065f46; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 13px; }
   .flash.err { background: #fef2f2; color: #991b1b; }
-  footer { max-width: 1100px; margin: 0 auto 36px; padding: 0 20px; color: #667; font-size: 14px; }
-  footer a { color: #4f8ef7; }
+  .subscriber-footer {
+    max-width: 1100px; margin: 0 auto 36px; padding: 0 20px; color: #667; font-size: 14px;
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .subscriber-footer a { color: #4f8ef7; text-decoration: none; }
+  .subscriber-footer a:hover { text-decoration: underline; }
+  .footer-utility { display: flex; flex-wrap: wrap; gap: 12px 16px; font-size: 13px; }
   @media (max-width: 900px) {
     .grid-2 { grid-template-columns: 1fr; }
-    header, .public-nav, .tool-nav { padding-left: 16px; padding-right: 16px; }
+    header, .tool-nav-bar { padding-left: 16px; padding-right: 16px; }
+    .tool-nav-toggle { display: flex; }
+    .tool-nav {
+      display: none; flex-direction: column; overflow-x: visible; padding-bottom: 8px;
+    }
+    .tool-nav-bar.is-open .tool-nav { display: flex; }
+    .tool-nav a { border-bottom: none; border-left: 3px solid transparent; padding: 10px 8px; }
+    .tool-nav a.active { border-left-color: #4f8ef7; }
+    .subscriber-footer { flex-direction: column; align-items: flex-start; }
   }
 </style>

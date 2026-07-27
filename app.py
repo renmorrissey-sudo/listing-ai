@@ -1554,6 +1554,7 @@ def tutorial():
         "tutorial.html",
         email=user["email"],
         has_billing_portal=bool(user.get("stripe_customer_id")),
+        active_nav="tutorial",
     )
 
 
@@ -1582,6 +1583,7 @@ def dashboard():
         "dashboard.html",
         email=user["email"],
         has_billing_portal=bool(user.get("stripe_customer_id")),
+        active_nav="dashboard",
         metrics=metrics,
         pipeline=pipeline,
         needs_attention=needs,
