@@ -292,7 +292,7 @@
       actions.innerHTML = '';
       if (ev.lead_id) {
         actions.innerHTML += `<a class="btn" href="/crm/leads/${ev.lead_id}">Open lead</a>`;
-        actions.innerHTML += `<a class="btn secondary" href="/#sms">Draft SMS</a>`;
+        actions.innerHTML += `<a class="btn secondary" href="/app#sms">Draft SMS</a>`;
         if (ev.phone_number) actions.innerHTML += `<a class="btn secondary" href="tel:${ev.phone_number}">Call</a>`;
       }
       if (ev.source_type === 'follow_up' && ev.status === 'pending') {

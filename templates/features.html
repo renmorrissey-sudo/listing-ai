@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Features - {{ product_name }}</title>
   <meta name="description" content="Explore the AI real estate tools included with {{ product_name }}: listing copy, social posts, prospect emails, cold call scripts, and consent-based AI calling." />
+  <link rel="canonical" href="{{ canonical_url }}" />
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; line-height: 1.65; }
@@ -62,11 +63,13 @@
       <div class="business">Operated by {{ business_name }}</div>
     </div>
     <nav class="nav">
-      <a href="/">App</a>
+      <a href="/">Home</a>
       <a href="/features">Features</a>
       <a href="/how-it-works">How It Works</a>
       <a href="/pricing">Pricing</a>
       <a href="/contact">Contact</a>
+      <a href="/app">Access Tools</a>
+      <a href="/login">Sign in</a>
     </nav>
   </header>
 
@@ -90,6 +93,7 @@
       </div>
       <a class="cta" href="/pricing">View pricing</a>
       <a class="cta secondary" href="/how-it-works">See how it works</a>
+      <a class="cta secondary" href="/app" id="access-tools-cta">Access Tools</a>
     </section>
 
     <section class="feature" id="listing-generator">

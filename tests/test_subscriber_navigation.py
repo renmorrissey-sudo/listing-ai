@@ -17,10 +17,10 @@ APP_NAV_LINKS = [
     ("Follow-ups", "/crm/follow-ups"),
     ("Tasks", "/crm/tasks"),
     ("Needs Attention", "/crm/needs-attention"),
-    ("Listing Generator", "/"),
-    ("Cold Call Scripts", "/#coldcall"),
-    ("AI Calling Assistant", "/#voice"),
-    ("AI SMS Assistant", "/#sms"),
+    ("Listing Generator", "/app"),
+    ("Cold Call Scripts", "/app#coldcall"),
+    ("AI Calling Assistant", "/app#voice"),
+    ("AI SMS Assistant", "/app#sms"),
     ("Tutorial", "/tutorial"),
 ]
 
@@ -56,9 +56,18 @@ def test_public_pages_keep_marketing_navigation(app_client):
 
 def test_index_public_nav_for_visitors(app_client):
     html = app_client.get("/").get_data(as_text=True)
-    assert 'id="public-nav"' in html
     assert "Features" in html
     assert "Pricing" in html
+    assert "How It Works" in html
+    assert "Access Tools" in html
+    assert 'id="gate"' not in html
+
+
+def test_app_tools_page_has_gate_for_visitors(app_client):
+    html = app_client.get("/app").get_data(as_text=True)
+    assert 'id="public-nav"' in html
+    assert 'id="gate"' in html
+    assert "Subscriber Access" in html
 
 
 def test_all_application_links_in_tool_nav(app_client, two_users):
@@ -121,7 +130,12 @@ def test_mobile_nav_toggle_present(app_client, two_users):
 def test_index_hides_public_nav_when_logged_in(app_client, two_users):
     u1, _ = two_users
     _login(app_client, u1)
-    html = app_client.get("/").get_data(as_text=True)
+    # Logged-in subscribers hitting / are redirected to the dashboard.
+    home = app_client.get("/", follow_redirects=False)
+    assert home.status_code in (301, 302)
+    assert "/dashboard" in home.headers.get("Location", "")
+
+    html = app_client.get("/app").get_data(as_text=True)
     assert 'id="subscriber-footer"' in html
     assert 'id="public-nav"' in html
     # Subscriber footer provides legal links when JS hides public-nav.

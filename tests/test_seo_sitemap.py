@@ -112,6 +112,7 @@ def test_private_pages_have_noindex(app_client, two_users):
         "/dashboard?local_date=2026-07-26&tz_offset_minutes=0",
         "/crm/leads",
         "/tutorial",
+        "/app",
     ):
         html = app_client.get(path).get_data(as_text=True)
         assert re.search(r'name=["\']robots["\']\s+content=["\']noindex', html, re.I)

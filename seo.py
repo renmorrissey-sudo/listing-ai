@@ -6,7 +6,7 @@ from xml.sax.saxutils import escape as xml_escape
 CANONICAL_ORIGIN = "https://topairealestatetools.com"
 
 # Public, indexable paths that exist and return 200 without login.
-# Do not list /tutorial (subscription-gated) or private/CRM routes.
+# Do not list /tutorial, /app (subscription-gated) or private/CRM routes.
 PUBLIC_SITEMAP_ENTRIES = (
     {"path": "/", "changefreq": "weekly", "priority": "1.0"},
     {"path": "/pricing", "changefreq": "monthly", "priority": "0.9"},
@@ -18,16 +18,30 @@ PUBLIC_SITEMAP_ENTRIES = (
     {"path": "/contact", "changefreq": "yearly", "priority": "0.4"},
 )
 
+# Marketing / informational pages — never auto-open the Subscriber Access modal.
+PUBLIC_MARKETING_PATHS = frozenset(entry["path"] for entry in PUBLIC_SITEMAP_ENTRIES)
+
 ROBOTS_DISALLOW = (
+    "/app",
     "/dashboard",
     "/crm/",
     "/account/",
     "/billing/",
     "/api/",
     "/webhook/",
+    "/webhooks/",
     "/recordings/",
     "/transcripts/",
 )
+
+
+def is_public_marketing_path(path: str) -> bool:
+    if not path:
+        return False
+    normalized = path if path.startswith("/") else f"/{path}"
+    if normalized != "/" and normalized.endswith("/"):
+        normalized = normalized.rstrip("/")
+    return normalized in PUBLIC_MARKETING_PATHS
 
 
 def canonical_loc(path: str) -> str:

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>How It Works - {{ product_name }}</title>
   <meta name="description" content="Step-by-step explanation of how {{ product_name }} works: subscribe, access the web app, generate real estate content, and run consent-based AI calling workflows." />
+  <link rel="canonical" href="{{ canonical_url }}" />
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; line-height: 1.65; }
@@ -61,11 +62,13 @@
       <div class="business">Operated by {{ business_name }}</div>
     </div>
     <nav class="nav">
-      <a href="/">App</a>
+      <a href="/">Home</a>
       <a href="/features">Features</a>
       <a href="/how-it-works">How It Works</a>
       <a href="/pricing">Pricing</a>
       <a href="/contact">Contact</a>
+      <a href="/app">Access Tools</a>
+      <a href="/login">Sign in</a>
     </nav>
   </header>
 
@@ -89,6 +92,7 @@
       </div>
       <a class="cta" href="/features">Browse features</a>
       <a class="cta secondary" href="/pricing">View pricing</a>
+      <a class="cta secondary" href="/app" id="access-tools-cta">Access Tools</a>
     </section>
 
     <section class="step" id="step-1">
@@ -117,7 +121,7 @@
         <h2>Access the web app</h2>
         <p class="muted">After payment, the customer visits the app homepage and enters the same email address used at Stripe checkout.</p>
         <ol>
-          <li>Open <a href="/">topairealestatetools.com</a></li>
+          <li>Open <a href="/app">Access Tools</a> on topairealestatetools.com</li>
           <li>Enter the subscriber email on the access screen</li>
           <li>The app verifies that the email belongs to an active or eligible subscription</li>
           <li>Subscriber tools unlock for that session</li>

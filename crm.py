@@ -254,7 +254,7 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
 def crm_leads_page():
     user = _user_or_redirect()
     if not user:
-        return redirect(url_for("index"))
+        return redirect(url_for("subscriber_app"))
     status = (request.args.get("status") or "").strip() or None
     source = (request.args.get("source") or "").strip() or None
     scope = (request.args.get("scope") or "").strip() or None
@@ -294,7 +294,7 @@ def crm_leads_page():
 def crm_lead_detail_page(lead_id):
     user = _user_or_redirect()
     if not user:
-        return redirect(url_for("index"))
+        return redirect(url_for("subscriber_app"))
     ctx = _lead_detail_template_kwargs(user, lead_id)
     if not ctx:
         return redirect(url_for("crm.crm_leads_page"))
@@ -305,7 +305,7 @@ def crm_lead_detail_page(lead_id):
 def crm_tasks_page():
     user = _user_or_redirect()
     if not user:
-        return redirect(url_for("index"))
+        return redirect(url_for("subscriber_app"))
     local_date = (request.args.get("local_date") or "").strip()[:10] or None
     range_key = (request.args.get("range") or "").strip().lower() or None
     status = (request.args.get("status") or "").strip().lower() or None
@@ -350,7 +350,7 @@ def crm_tasks_page():
 def crm_needs_attention_page():
     user = _user_or_redirect()
     if not user:
-        return redirect(url_for("index"))
+        return redirect(url_for("subscriber_app"))
     local_date = (request.args.get("local_date") or "").strip()[:10] or None
     status = (request.args.get("status") or "open").strip().lower() or "open"
     item_type = (request.args.get("type") or "").strip().lower() or None
@@ -659,7 +659,7 @@ def api_cancel_follow_up_by_id(follow_up_id):
 def crm_follow_ups_page():
     user = _user_or_redirect()
     if not user:
-        return redirect(url_for("index"))
+        return redirect(url_for("subscriber_app"))
     local_date = (request.args.get("local_date") or "").strip()[:10] or None
     try:
         tz_offset = int(request.args.get("tz_offset_minutes"))
@@ -823,7 +823,7 @@ def api_calendar_events():
 def crm_leads_calendar_page():
     user = _user_or_redirect()
     if not user:
-        return redirect(url_for("index"))
+        return redirect(url_for("subscriber_app"))
     local_date = (request.args.get("local_date") or "").strip()[:10] or None
     try:
         tz_offset = int(request.args.get("tz_offset_minutes"))
@@ -928,7 +928,7 @@ def crm_leads_calendar_page():
 def crm_cleanup_duplicate_follow_ups():
     user = _user_or_redirect()
     if not user:
-        return redirect(url_for("index"))
+        return redirect(url_for("subscriber_app"))
     dry_run = True
     if request.method == "POST":
         dry_run = str(request.form.get("dry_run") or "1") != "0"
@@ -1120,7 +1120,7 @@ def crm_appointment_outcome_form(lead_id, appointment_id):
     """Form POST + redirect (PRG) for Save outcome — avoids silent JS failures."""
     user = _user_or_redirect()
     if not user:
-        return redirect(url_for("index"))
+        return redirect(url_for("subscriber_app"))
     lead = db.get_lead(lead_id, user["id"])
     if not lead:
         return redirect(url_for("crm.crm_leads_page"))

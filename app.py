@@ -80,12 +80,15 @@ limiter = Limiter(
 
 @app.context_processor
 def inject_business_context():
+    path = request.path or "/"
     return {
         "business_name": config.BUSINESS_NAME,
         "product_name": config.PRODUCT_NAME,
         "contact_email": config.CONTACT_EMAIL,
         "subscription_price": config.SUBSCRIPTION_PRICE,
         "trial_offer": config.TRIAL_OFFER,
+        "canonical_url": seo.canonical_loc(path),
+        "is_public_marketing_page": seo.is_public_marketing_path(path),
     }
 
 
@@ -258,6 +261,19 @@ def robots_txt():
 
 @app.route("/")
 def index():
+    """Public marketing homepage — never auto-opens the Subscriber Access modal."""
+    user = auth.get_current_user()
+    if user and auth.user_has_active_subscription(user):
+        return redirect(url_for("dashboard"))
+    return render_template("landing.html")
+
+
+@app.route("/app")
+def subscriber_app():
+    """
+    Subscriber tools (Listing Generator, Cold Call Scripts, AI Calling, AI SMS).
+    The Subscriber Access modal opens here for visitors who intentionally open tools.
+    """
     return render_template("index.html")
 
 
@@ -318,7 +334,7 @@ def verify():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if auth.get_current_user():
-        return redirect(url_for("index"))
+        return redirect(url_for("subscriber_app"))
     error = None
     if request.method == "POST":
         email = request.form.get("email", "").strip()
@@ -326,7 +342,7 @@ def login():
         user = db.get_user_by_email(email)
         if user and auth.verify_password(user["password_hash"], password):
             auth.login_user(user["id"])
-            return redirect(request.args.get("next") or url_for("index"))
+            return redirect(request.args.get("next") or url_for("subscriber_app"))
         error = "Invalid email or password."
     return render_template(
         "auth_form.html",
@@ -341,7 +357,7 @@ def login():
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if auth.get_current_user():
-        return redirect(url_for("index"))
+        return redirect(url_for("subscriber_app"))
     error = None
     if request.method == "POST":
         email = request.form.get("email", "").strip()
@@ -358,7 +374,7 @@ def register():
         else:
             user_id = db.create_user(email, auth.hash_password(password))
             auth.login_user(user_id)
-            return redirect(url_for("index"))
+            return redirect(url_for("subscriber_app"))
     return render_template(
         "auth_form.html",
         title="Create account",
@@ -380,7 +396,7 @@ def logout():
 def subscribe():
     user = auth.get_current_user()
     if auth.user_has_active_subscription(user):
-        return redirect(url_for("index"))
+        return redirect(url_for("subscriber_app"))
 
     if not config.STRIPE_SECRET_KEY or not config.STRIPE_PRICE_ID:
         return render_template("error.html", message="Billing is not configured yet."), 503
@@ -423,7 +439,7 @@ def billing_success():
                 )
         except stripe.StripeError:
             logger.exception("Failed to sync checkout session")
-    return redirect(url_for("index"))
+    return redirect(url_for("subscriber_app"))
 
 
 @app.route("/billing/portal")
@@ -1428,7 +1444,7 @@ def how_it_works():
 def tutorial():
     user = auth.get_current_user()
     if not user or not auth.user_has_active_subscription(user):
-        return redirect(url_for("index"))
+        return redirect(url_for("subscriber_app"))
     return render_template(
         "tutorial.html",
         email=user["email"],
@@ -1441,7 +1457,7 @@ def tutorial():
 def dashboard():
     user = auth.get_current_user()
     if not user or not auth.user_has_active_subscription(user):
-        return redirect(url_for("index"))
+        return redirect(url_for("subscriber_app"))
     local_date = (request.args.get("local_date") or "").strip()[:10] or None
     try:
         tz_offset = int(request.args.get("tz_offset_minutes"))
