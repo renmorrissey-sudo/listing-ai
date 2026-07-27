@@ -794,33 +794,32 @@ def list_follow_ups(
 
 
 def follow_up_dashboard_counts(user_id, local_date=None, tz_offset_minutes=None):
-    day = _calendar_day(local_date)
-    items = list_follow_ups(
-        user_id, bucket="all", limit=500, local_date=day, tz_offset_minutes=tz_offset_minutes
-    )
-    overdue = 0
-    today = 0
-    week = 0
-    start = datetime.strptime(day, "%Y-%m-%d").date()
-    end = start + timedelta(days=7)
-    for item in items:
-        if item.get("status") != "pending":
-            continue
-        due_day = _local_date_for_due(item.get("due_at"), tz_offset_minutes, day)
-        try:
-            d = datetime.strptime(due_day, "%Y-%m-%d").date()
-        except ValueError:
-            continue
-        if d < start:
-            overdue += 1
-        if d == start:
-            today += 1
-        if start <= d < end:
-            week += 1
+    """Counts for dashboard cards — must match list_follow_ups_for_dashboard_range."""
     return {
-        "follow_ups_due_today": today,
-        "follow_ups_overdue": overdue,
-        "follow_ups_due_this_week": week,
+        "follow_ups_due_today": len(
+            list_follow_ups_for_dashboard_range(
+                user_id,
+                "today",
+                local_date=local_date,
+                tz_offset_minutes=tz_offset_minutes,
+            )
+        ),
+        "follow_ups_overdue": len(
+            list_follow_ups_for_dashboard_range(
+                user_id,
+                "overdue",
+                local_date=local_date,
+                tz_offset_minutes=tz_offset_minutes,
+            )
+        ),
+        "follow_ups_due_this_week": len(
+            list_follow_ups_for_dashboard_range(
+                user_id,
+                "this_week",
+                local_date=local_date,
+                tz_offset_minutes=tz_offset_minutes,
+            )
+        ),
     }
 
 
@@ -2276,52 +2275,31 @@ def apply_coach_queue_flags(user_id, lead_id, analysis, insight_id=None):
             upsert_needs_attention(user_id, lead_id, code, priority="high", source_ref_type="insight", source_ref_id=insight_id)
 
 
-def get_pipeline_metrics(user_id, since_iso=None):
-    refresh_needs_attention(user_id)
+def get_pipeline_metrics(user_id, since_iso=None, local_date=None, tz_offset_minutes=None):
+    """Pipeline card counts. Uses the same helpers as filtered destination lists."""
+    refresh_needs_attention(user_id, local_date=local_date)
     now = _now()
-    today = now[:10]
     week_end = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
-    month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    month_start = datetime.now(timezone.utc).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    ).isoformat()
+    day = _calendar_day(local_date)
+
     with get_db() as conn:
         def count(sql, params):
             return conn.execute(sql, params).fetchone()["count"]
 
-        active = count(
-            "SELECT COUNT(*) AS count FROM leads WHERE user_id = ? AND status NOT IN ('closed_won','closed_lost','do_not_contact')",
+        new_leads = count(
+            "SELECT COUNT(*) AS count FROM leads WHERE user_id = ? AND status = 'new'",
             (user_id,),
         )
-        new_leads = count("SELECT COUNT(*) AS count FROM leads WHERE user_id = ? AND status = 'new'", (user_id,))
         if since_iso:
             new_leads = count(
                 "SELECT COUNT(*) AS count FROM leads WHERE user_id = ? AND created_at >= ?",
                 (user_id, since_iso),
             )
-        needs = count("SELECT COUNT(*) AS count FROM needs_attention WHERE user_id = ? AND status = 'open'", (user_id,))
-        overdue_fu = count(
-            """
-            SELECT COUNT(*) AS count FROM lead_follow_ups
-            WHERE user_id = ? AND status = 'pending' AND due_at < ?
-            """,
-            (user_id, now),
-        )
-        tasks_today = count(
-            """
-            SELECT COUNT(*) AS count FROM tasks
-            WHERE user_id = ? AND status IN ('open','in_progress') AND due_at IS NOT NULL
-              AND substr(due_at,1,10) = ?
-            """,
-            (user_id, today),
-        )
-        appts_today = count(
-            "SELECT COUNT(*) AS count FROM appointments WHERE user_id = ? AND substr(start_at,1,10) = ?",
-            (user_id, today),
-        )
         unreviewed = count(
             "SELECT COUNT(*) AS count FROM needs_attention WHERE user_id = ? AND status='open' AND reason_code='unreviewed_inbound'",
-            (user_id,),
-        )
-        drafts = count(
-            "SELECT COUNT(*) AS count FROM lead_insights WHERE user_id = ? AND status='pending'",
             (user_id,),
         )
         appts_week = count(
@@ -2332,8 +2310,14 @@ def get_pipeline_metrics(user_id, since_iso=None):
             "SELECT COUNT(*) AS count FROM appointments WHERE user_id = ? AND outcome IS NOT NULL AND updated_at >= ?",
             (user_id, month_start),
         )
-        sent = count("SELECT COUNT(*) AS count FROM sms_messages WHERE user_id = ? AND status IN ('sent','delivered','queued')", (user_id,))
-        failed = count("SELECT COUNT(*) AS count FROM sms_messages WHERE user_id = ? AND status='failed'", (user_id,))
+        sent = count(
+            "SELECT COUNT(*) AS count FROM sms_messages WHERE user_id = ? AND status IN ('sent','delivered','queued')",
+            (user_id,),
+        )
+        failed = count(
+            "SELECT COUNT(*) AS count FROM sms_messages WHERE user_id = ? AND status='failed'",
+            (user_id,),
+        )
         status_rows = conn.execute(
             "SELECT status, COUNT(*) AS count FROM leads WHERE user_id = ? GROUP BY status",
             (user_id,),
@@ -2342,27 +2326,35 @@ def get_pipeline_metrics(user_id, since_iso=None):
     by_status = {normalize_lead_status(r["status"]): r["count"] for r in status_rows}
     stages = []
     for stage_id, label, members in PIPELINE_STAGES:
-        stages.append({
-            "id": stage_id,
-            "label": label,
-            "count": sum(by_status.get(s, 0) for s in members),
-        })
+        stages.append(
+            {
+                "id": stage_id,
+                "label": label,
+                # Same helper as /crm/leads?stage=… destination list.
+                "count": count_filtered_leads(user_id, stage=stage_id),
+                "href": f"/crm/leads?stage={stage_id}",
+            }
+        )
     delivery_total = sent + failed
-    counts = follow_up_dashboard_counts(user_id)
+    fu_counts = follow_up_dashboard_counts(
+        user_id, local_date=day, tz_offset_minutes=tz_offset_minutes
+    )
     return {
-        "active_leads": active,
+        "active_leads": count_filtered_leads(user_id, scope="active"),
         "new_leads": new_leads,
-        "needs_attention": needs,
-        "overdue_follow_ups": overdue_fu,
-        "follow_ups_due_today": counts["follow_ups_due_today"],
-        "follow_ups_due_this_week": counts["follow_ups_due_this_week"],
-        "tasks_due_today": tasks_today,
-        "appointments_today": appts_today,
+        "needs_attention": count_open_needs_attention(user_id, local_date=day),
+        "overdue_follow_ups": fu_counts["follow_ups_overdue"],
+        "follow_ups_due_today": fu_counts["follow_ups_due_today"],
+        "follow_ups_due_this_week": fu_counts["follow_ups_due_this_week"],
+        "tasks_due_today": count_tasks_due_today(user_id, local_date=day),
+        "appointments_today": count_appointments_today(user_id, local_date=day),
         "unreviewed_inbound": unreviewed,
-        "drafts_awaiting_approval": drafts,
+        "drafts_awaiting_approval": count_pending_draft_insights(user_id),
         "appointments_this_week": appts_week,
         "outcomes_this_month": outcomes_month,
-        "sms_delivery_success_rate": round((sent / delivery_total) * 100, 1) if delivery_total else 100.0,
+        "sms_delivery_success_rate": round((sent / delivery_total) * 100, 1)
+        if delivery_total
+        else 100.0,
         "leads_by_status": by_status,
         "pipeline_stages": stages,
         "average_first_response_hours": None,
@@ -2648,8 +2640,22 @@ def calendar_summary(user_id, local_date=None, tz_offset_minutes=None):
     }
 
 
-def filter_leads(user_id, status=None, source=None, limit=100):
+ACTIVE_LEAD_EXCLUDED_STATUSES = ("closed_won", "closed_lost", "do_not_contact")
+
+
+def pipeline_stage_statuses(stage):
+    """Return lead status members for a pipeline stage id, or empty set."""
+    stage = str(stage or "").strip().lower()
+    for stage_id, _label, members in PIPELINE_STAGES:
+        if stage_id == stage:
+            return set(members)
+    return set()
+
+
+def filter_leads(user_id, status=None, source=None, scope=None, stage=None, limit=200):
+    """List leads for this tenant. scope=active / stage=* match dashboard Pipeline cards."""
     from crm_constants import normalize_lead_status as norm
+
     with get_db() as conn:
         sql = """
             SELECT l.*,
@@ -2658,7 +2664,16 @@ def filter_leads(user_id, status=None, source=None, limit=100):
             WHERE l.user_id = ?
         """
         params = [user_id]
-        if status:
+        if scope == "active":
+            sql += (
+                " AND l.status NOT IN ('closed_won', 'closed_lost', 'do_not_contact')"
+            )
+        stage_members = pipeline_stage_statuses(stage) if stage else set()
+        if stage_members:
+            placeholders = ", ".join("?" for _ in stage_members)
+            sql += f" AND l.status IN ({placeholders})"
+            params.extend(sorted(stage_members))
+        elif status:
             sql += " AND l.status = ?"
             params.append(norm(status))
         if source:
@@ -2667,3 +2682,133 @@ def filter_leads(user_id, status=None, source=None, limit=100):
         sql += " ORDER BY l.updated_at DESC LIMIT ?"
         params.append(limit)
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def count_filtered_leads(user_id, status=None, source=None, scope=None, stage=None):
+    return len(
+        filter_leads(
+            user_id,
+            status=status,
+            source=source,
+            scope=scope,
+            stage=stage,
+            limit=100000,
+        )
+    )
+
+
+def list_follow_ups_for_dashboard_range(
+    user_id, range_key="today", local_date=None, tz_offset_minutes=None, limit=500
+):
+    """Follow-ups for dashboard cards. Same bucketing as follow_up_dashboard_counts."""
+    range_key = str(range_key or "today").strip().lower()
+    day = _calendar_day(local_date)
+    items = list_follow_ups(
+        user_id,
+        bucket="all",
+        limit=limit,
+        local_date=day,
+        tz_offset_minutes=tz_offset_minutes,
+    )
+    start = datetime.strptime(day, "%Y-%m-%d").date()
+    end = start + timedelta(days=7)
+    out = []
+    for item in items:
+        if item.get("status") != "pending":
+            continue
+        due_day = _local_date_for_due(item.get("due_at"), tz_offset_minutes, day)
+        try:
+            d = datetime.strptime(due_day, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if range_key in {"today", "due_today"} and d == start:
+            out.append(item)
+        elif range_key == "overdue" and d < start:
+            out.append(item)
+        elif range_key in {"this_week", "week"} and start <= d < end:
+            out.append(item)
+        elif range_key in {"upcoming"} and d > start:
+            out.append(item)
+        elif range_key in {"all", "open"}:
+            out.append(item)
+    return out
+
+
+def list_pending_draft_insights(user_id, limit=100):
+    """Pending Claude draft suggestions — same source as drafts_awaiting_approval."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT i.*, l.name AS lead_name, l.phone_number, l.status AS lead_status
+            FROM lead_insights i
+            LEFT JOIN leads l ON l.id = i.lead_id
+            WHERE i.user_id = ? AND i.status = 'pending'
+            ORDER BY i.created_at DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def count_pending_draft_insights(user_id):
+    with get_db() as conn:
+        return conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM lead_insights
+            WHERE user_id = ? AND status = 'pending'
+            """,
+            (user_id,),
+        ).fetchone()["count"]
+
+
+def count_open_needs_attention(user_id, local_date=None):
+    refresh_needs_attention(user_id, local_date=local_date)
+    with get_db() as conn:
+        return conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM needs_attention
+            WHERE user_id = ? AND status = 'open'
+            """,
+            (user_id,),
+        ).fetchone()["count"]
+
+
+def count_tasks_due_today(user_id, local_date=None):
+    day = _calendar_day(local_date)
+    return len(list_tasks(user_id, bucket="today", local_date=day, limit=10000))
+
+
+def count_appointments_today(user_id, local_date=None):
+    day = _calendar_day(local_date)
+    with get_db() as conn:
+        return conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM appointments
+            WHERE user_id = ? AND substr(start_at, 1, 10) = ?
+              AND status NOT IN ('cancelled')
+            """,
+            (user_id, day),
+        ).fetchone()["count"]
+
+
+def list_appointments_for_range(user_id, range_key="today", local_date=None, limit=200):
+    day = _calendar_day(local_date)
+    start = datetime.strptime(day, "%Y-%m-%d").date()
+    items = list_appointments(user_id, limit=limit)
+    out = []
+    for item in items:
+        if item.get("status") == "cancelled":
+            continue
+        due_day = str(item.get("start_at") or "")[:10]
+        try:
+            d = datetime.strptime(due_day, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if range_key == "today" and d == start:
+            out.append(item)
+        elif range_key == "overdue" and d < start:
+            out.append(item)
+        elif range_key in {"this_week", "week"} and start <= d < start + timedelta(days=7):
+            out.append(item)
+    return out

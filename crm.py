@@ -17,6 +17,7 @@ from crm_constants import (
     FOLLOW_UP_CANCEL_REASONS,
     LEAD_STATUSES,
     NEEDS_ATTENTION_REASONS,
+    PIPELINE_STAGES,
     PRIORITIES,
     TASK_TYPES,
     cancel_reason_label,
@@ -256,13 +257,34 @@ def crm_leads_page():
         return redirect(url_for("index"))
     status = (request.args.get("status") or "").strip() or None
     source = (request.args.get("source") or "").strip() or None
-    leads = crm_db.filter_leads(user["id"], status=status, source=source)
+    scope = (request.args.get("scope") or "").strip() or None
+    stage = (request.args.get("stage") or "").strip() or None
+    leads = crm_db.filter_leads(
+        user["id"], status=status, source=source, scope=scope, stage=stage
+    )
+    active_filter = None
+    if scope == "active":
+        active_filter = "Active leads"
+    elif stage:
+        for stage_id, label, _members in PIPELINE_STAGES:
+            if stage_id == stage:
+                active_filter = f"Pipeline stage: {label}"
+                break
+        active_filter = active_filter or f"Pipeline stage: {stage}"
+    elif status:
+        active_filter = f"Status: {status_label(status)}"
+    if source:
+        active_filter = (active_filter + f" · Source: {source}") if active_filter else f"Source: {source}"
     return render_template(
         "crm_leads.html",
         leads=leads,
         statuses=LEAD_STATUSES,
         status_filter=status or "",
         source_filter=source or "",
+        scope_filter=scope or "",
+        stage_filter=stage or "",
+        active_filter=active_filter,
+        result_count=len(leads),
         status_label=status_label,
         **_nav_context(user, "leads"),
     )
@@ -285,14 +307,41 @@ def crm_tasks_page():
     if not user:
         return redirect(url_for("index"))
     local_date = (request.args.get("local_date") or "").strip()[:10] or None
+    range_key = (request.args.get("range") or "").strip().lower() or None
+    status = (request.args.get("status") or "").strip().lower() or None
+    overdue = crm_db.list_tasks(user["id"], "overdue", local_date=local_date)
+    today = crm_db.list_tasks(user["id"], "today", local_date=local_date)
+    upcoming = crm_db.list_tasks(user["id"], "upcoming", local_date=local_date)
+    if status == "open":
+        open_set = {"open", "in_progress"}
+        overdue = [t for t in overdue if t.get("status") in open_set]
+        today = [t for t in today if t.get("status") in open_set]
+        upcoming = [t for t in upcoming if t.get("status") in open_set]
+    if range_key == "today":
+        overdue, upcoming = [], []
+    elif range_key == "overdue":
+        today, upcoming = [], []
+    elif range_key == "upcoming":
+        overdue, today = [], []
+    active_filter = None
+    if range_key == "today":
+        active_filter = "Tasks due today"
+    elif range_key == "overdue":
+        active_filter = "Overdue tasks"
+    elif range_key:
+        active_filter = f"Range: {range_key}"
     return render_template(
         "crm_tasks.html",
-        overdue=crm_db.list_tasks(user["id"], "overdue", local_date=local_date),
-        today=crm_db.list_tasks(user["id"], "today", local_date=local_date),
-        upcoming=crm_db.list_tasks(user["id"], "upcoming", local_date=local_date),
+        overdue=overdue,
+        today=today,
+        upcoming=upcoming,
         task_types=TASK_TYPES,
         priorities=PRIORITIES,
         local_date=local_date or "",
+        range_filter=range_key or "",
+        status_filter=status or "",
+        active_filter=active_filter,
+        result_count=len(overdue) + len(today) + len(upcoming),
         **_nav_context(user, "tasks"),
     )
 
@@ -303,12 +352,30 @@ def crm_needs_attention_page():
     if not user:
         return redirect(url_for("index"))
     local_date = (request.args.get("local_date") or "").strip()[:10] or None
-    items = crm_db.list_needs_attention(user["id"], local_date=local_date)
+    status = (request.args.get("status") or "open").strip().lower() or "open"
+    item_type = (request.args.get("type") or "").strip().lower() or None
+    drafts = []
+    items = []
+    if item_type in {"draft_reply", "draft", "drafts"}:
+        drafts = crm_db.list_pending_draft_insights(user["id"])
+        active_filter = "Drafts awaiting approval"
+        result_count = len(drafts)
+    else:
+        items = crm_db.list_needs_attention(user["id"], local_date=local_date)
+        if status and status != "open":
+            items = [i for i in items if i.get("status") == status]
+        active_filter = "Open Needs Attention" if status == "open" else f"Status: {status}"
+        result_count = len(items)
     return render_template(
         "crm_needs_attention.html",
         items=items,
+        drafts=drafts,
         reason_labels=NEEDS_ATTENTION_REASONS,
         local_date=local_date or "",
+        status_filter=status,
+        type_filter=item_type or "",
+        active_filter=active_filter,
+        result_count=result_count,
         **_nav_context(user, "needs"),
     )
 
@@ -601,19 +668,75 @@ def crm_follow_ups_page():
     view = (request.args.get("view") or "agenda").strip().lower()
     if view not in {"agenda", "month", "week"}:
         view = "agenda"
-    follow_ups = crm_db.list_follow_ups(
-        user["id"],
-        bucket="all",
-        limit=500,
-        local_date=local_date,
-        tz_offset_minutes=tz_offset,
-    )
+    range_key = (request.args.get("range") or "").strip().lower() or None
+    status = (request.args.get("status") or "").strip().lower() or None
+
+    if range_key in {"today", "overdue", "this_week", "week"} and (
+        not status or status == "open"
+    ):
+        # Same query path as dashboard Pipeline cards.
+        ranged = crm_db.list_follow_ups_for_dashboard_range(
+            user["id"],
+            "this_week" if range_key == "week" else range_key,
+            local_date=local_date,
+            tz_offset_minutes=tz_offset,
+        )
+        groups = crm_db.group_follow_ups_for_lead(
+            ranged, local_date=local_date, tz_offset_minutes=tz_offset
+        )
+        follow_ups = ranged
+    else:
+        follow_ups = crm_db.list_follow_ups(
+            user["id"],
+            bucket="all",
+            limit=500,
+            local_date=local_date,
+            tz_offset_minutes=tz_offset,
+        )
+        if status == "open":
+            follow_ups = [f for f in follow_ups if f.get("status") == "pending"]
+        groups = crm_db.group_follow_ups_for_lead(
+            follow_ups, local_date=local_date, tz_offset_minutes=tz_offset
+        )
+        if range_key == "today":
+            groups = {
+                "overdue": [],
+                "today": groups["today"],
+                "upcoming": [],
+                "completed": [],
+                "cancelled": [],
+            }
+            follow_ups = groups["today"]
+        elif range_key == "overdue":
+            groups = {
+                "overdue": groups["overdue"],
+                "today": [],
+                "upcoming": [],
+                "completed": [],
+                "cancelled": [],
+            }
+            follow_ups = groups["overdue"]
+        elif range_key in {"this_week", "week"}:
+            follow_ups = crm_db.list_follow_ups_for_dashboard_range(
+                user["id"],
+                "this_week",
+                local_date=local_date,
+                tz_offset_minutes=tz_offset,
+            )
+            groups = crm_db.group_follow_ups_for_lead(
+                follow_ups, local_date=local_date, tz_offset_minutes=tz_offset
+            )
+
     counts = crm_db.follow_up_dashboard_counts(
         user["id"], local_date=local_date, tz_offset_minutes=tz_offset
     )
-    groups = crm_db.group_follow_ups_for_lead(
-        follow_ups, local_date=local_date, tz_offset_minutes=tz_offset
-    )
+    active_filter = None
+    if range_key == "today":
+        active_filter = "Follow-ups due today"
+    elif range_key == "overdue":
+        active_filter = "Overdue follow-ups"
+    elif range_key in {"this_week", "week"}:
+        active_filter = "Follow-ups due this week"
     return render_template(
         "crm_follow_ups.html",
         follow_ups=follow_ups,
@@ -624,6 +747,10 @@ def crm_follow_ups_page():
         follow_up_cancel_reasons=FOLLOW_UP_CANCEL_REASONS,
         cancel_reason_label=cancel_reason_label,
         local_date=local_date or "",
+        range_filter=range_key or "",
+        status_filter=status or "",
+        active_filter=active_filter,
+        result_count=len(follow_ups),
         user_timezone=db.get_user_timezone(user["id"]),
         **_nav_context(user, "follow-ups"),
     )
@@ -715,15 +842,66 @@ def crm_leads_calendar_page():
         "true",
         "yes",
     }
+    event_type = (request.args.get("event_type") or request.args.get("event_types") or "").strip()
+    range_key = (request.args.get("range") or "").strip().lower() or None
+    day = local_date or None
+    start_at = end_at = None
+    if range_key == "today":
+        day = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        start_at = f"{day}T00:00:00"
+        end_at = f"{day}T23:59:59"
+        view = "agenda"
+    event_types = [t.strip() for t in event_type.split(",") if t.strip()] or None
+    # Dashboard "Appointments today" includes appointment-family event types.
+    if event_types == ["appointment"]:
+        event_types = [
+            "appointment",
+            "showing",
+            "buyer_consultation",
+            "listing_consultation",
+            "call",
+            "outcome_required",
+        ]
     events = crm_db.list_calendar_events(
         user["id"],
+        start_at=start_at,
+        end_at=end_at,
+        event_types=event_types,
         include_cancelled=include_cancelled,
         include_completed=include_completed,
         limit=800,
     )
+    # Align with dashboard count_appointments_today (calendar-day prefix of start_at).
+    if range_key == "today" and event_type == "appointment":
+        day_key = day or crm_db._calendar_day(local_date)
+        appts = crm_db.list_appointments_for_range(
+            user["id"], range_key="today", local_date=day_key
+        )
+        events = [
+            {
+                "id": f"appointment:{a['id']}",
+                "source_type": "appointment",
+                "source_id": a["id"],
+                "event_type": crm_db._map_appointment_event_type(a),
+                "lead_id": a.get("lead_id"),
+                "lead_name": a.get("lead_name"),
+                "title": (a.get("appointment_type") or "appointment").replace("_", " ").title(),
+                "start_at": a.get("start_at"),
+                "end_at": a.get("end_at") or a.get("start_at"),
+                "status": a.get("status"),
+                "priority": "normal",
+                "assigned_agent": None,
+            }
+            for a in appts
+        ]
     summary = crm_db.calendar_summary(
         user["id"], local_date=local_date, tz_offset_minutes=tz_offset
     )
+    active_filter = None
+    if range_key == "today" and event_type == "appointment":
+        active_filter = "Appointments today"
+    elif event_type:
+        active_filter = f"Event type: {event_type}"
     return render_template(
         "crm_leads_calendar.html",
         events=events,
@@ -738,6 +916,10 @@ def crm_leads_calendar_page():
         include_cancelled=include_cancelled,
         include_completed=include_completed,
         local_date=local_date or "",
+        range_filter=range_key or "",
+        event_type_filter=event_type or "",
+        active_filter=active_filter,
+        result_count=len(events),
         **_nav_context(user, "calendar"),
     )
 

@@ -1562,10 +1562,22 @@ def dashboard():
     user = auth.get_current_user()
     if not user or not auth.user_has_active_subscription(user):
         return redirect(url_for("index"))
+    local_date = (request.args.get("local_date") or "").strip()[:10] or None
+    try:
+        tz_offset = int(request.args.get("tz_offset_minutes"))
+    except (TypeError, ValueError):
+        tz_offset = None
     metrics = db.get_dashboard_metrics(user["id"])
-    pipeline = crm_db.get_pipeline_metrics(user["id"])
-    needs = crm_db.list_needs_attention(user["id"])[:8]
+    pipeline = crm_db.get_pipeline_metrics(
+        user["id"], local_date=local_date, tz_offset_minutes=tz_offset
+    )
+    needs = crm_db.list_needs_attention(user["id"], local_date=local_date)[:8]
     notifications = crm_db.list_notifications(user["id"], unread_only=True, limit=8)
+    date_qs = ""
+    if local_date:
+        date_qs = f"&local_date={local_date}"
+        if tz_offset is not None:
+            date_qs += f"&tz_offset_minutes={tz_offset}"
     return render_template(
         "dashboard.html",
         email=user["email"],
@@ -1575,6 +1587,9 @@ def dashboard():
         needs_attention=needs,
         notifications=notifications,
         status_label=status_label,
+        local_date=local_date or "",
+        tz_offset_minutes=tz_offset,
+        date_qs=date_qs,
     )
 
 

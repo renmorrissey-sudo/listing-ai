@@ -40,7 +40,51 @@
   <main>
     <h1>Needs Attention</h1>
     <p class="muted">Inbound reviews, overdue work, sensitive topics, and delivery issues. Opt-out and sensitive items require a resolution reason.</p>
+    {% if active_filter %}
+    <div class="filter-banner" role="status">
+      <div>
+        <span class="filter-label">{{ active_filter }}</span>
+        <span class="filter-count"> · {{ result_count }} result{% if result_count != 1 %}s{% endif %}</span>
+      </div>
+      <a href="/crm/needs-attention">Clear filters</a>
+    </div>
+    {% endif %}
     <div id="flash" class="flash"></div>
+    {% if type_filter in ['draft_reply', 'draft', 'drafts'] %}
+    <div class="card">
+      {% if drafts %}
+      <table>
+        <thead><tr><th>Lead</th><th>Summary</th><th>Draft reply</th><th>Created</th><th></th></tr></thead>
+        <tbody>
+          {% for draft in drafts %}
+          <tr>
+            <td>
+              {% if draft.lead_id %}
+              <a href="/crm/leads/{{ draft.lead_id }}"><strong>{{ draft.lead_name or 'Lead' }}</strong></a>
+              <div class="muted">{{ draft.phone_number or '' }}</div>
+              {% else %}
+              <strong>Lead</strong>
+              {% endif %}
+            </td>
+            <td>{{ (draft.summary or draft.intent or '—')[:120] }}</td>
+            <td>{{ (draft.suggested_reply or '—')[:160] }}</td>
+            <td class="muted">{{ (draft.created_at or '')[:16] }}</td>
+            <td>
+              {% if draft.lead_id %}
+              <a class="btn" href="/crm/leads/{{ draft.lead_id }}">Review</a>
+              {% else %}
+              <a class="btn" href="/#sms">Open AI SMS</a>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">No drafts awaiting approval.</p>
+      {% endif %}
+    </div>
+    {% else %}
     <div class="card">
       {% if items %}
       <table>
@@ -82,10 +126,13 @@
       <p class="empty">Queue is clear. Nice work.</p>
       {% endif %}
     </div>
+    {% endif %}
   </main>
   <script>
     (function ensureLocalDate() {
       const params = new URLSearchParams(window.location.search);
+      // Draft queue does not depend on calendar day; skip redirect.
+      if (params.get('type') === 'draft_reply' || params.get('type') === 'draft' || params.get('type') === 'drafts') return;
       if (params.get('local_date')) return;
       const d = new Date();
       const pad = (n) => String(n).padStart(2, '0');

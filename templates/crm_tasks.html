@@ -40,6 +40,16 @@
   <main>
     <h1>Tasks</h1>
     <p class="muted">Overdue, due today, and upcoming follow-through work.</p>
+    {% if active_filter %}
+    <div class="filter-banner" role="status">
+      <div>
+        <span class="filter-label">{{ active_filter }}</span>
+        {% if status_filter %}<span class="filter-count"> · status={{ status_filter }}</span>{% endif %}
+        <span class="filter-count"> · {{ result_count }} result{% if result_count != 1 %}s{% endif %}</span>
+      </div>
+      <a href="/crm/tasks">Clear filters</a>
+    </div>
+    {% endif %}
     <div id="flash" class="flash"></div>
 
     <div class="card" id="task-form-card">
