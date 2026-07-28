@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SMS Consent &amp; Real Estate Inquiry - {{ product_name }}</title>
+  <meta name="description" content="Submit a real estate inquiry to TopAI RE Tools. Optionally consent to conversational SMS about your inquiry. Message frequency varies; message and data rates may apply. Reply STOP to opt out or HELP for help." />
+  <link rel="canonical" href="{{ canonical_url }}" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; line-height: 1.65; }
+    header { background: #1a1a2e; color: white; padding: 18px 32px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    .logo { font-size: 20px; font-weight: 700; color: white; text-decoration: none; }
+    .logo span { color: #4f8ef7; }
+    .business { color: #aab; font-size: 13px; margin-top: 2px; }
+    .nav a { color: #dce6ff; margin-left: 14px; text-decoration: none; font-size: 14px; font-weight: 600; }
+    main { max-width: 720px; margin: 36px auto; padding: 0 20px; }
+    .card { background: white; border-radius: 14px; padding: 32px; box-shadow: 0 1px 5px rgba(0,0,0,0.08); }
+    h1 { font-size: 28px; line-height: 1.2; margin: 0 0 12px; }
+    .muted { color: #667; }
+    .support { background: #eef5ff; border: 1px solid #cfe0ff; border-radius: 10px; padding: 12px 14px; margin: 16px 0 22px; font-size: 14px; }
+    label { display: block; font-size: 12px; font-weight: 700; color: #556; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 6px; }
+    input[type="text"], input[type="tel"], textarea {
+      width: 100%; padding: 11px 12px; border: 1.5px solid #e0e4ed; border-radius: 8px;
+      font-size: 15px; margin-bottom: 14px; background: #fafbfc;
+    }
+    textarea { min-height: 120px; resize: vertical; }
+    .consent-box {
+      border: 1.5px solid #dde4f0; border-radius: 10px; padding: 14px; margin: 8px 0 18px; background: #f8fafc;
+    }
+    .consent-row { display: flex; gap: 10px; align-items: flex-start; }
+    .consent-row input { width: auto; margin-top: 3px; flex: 0 0 auto; }
+    .consent-row label {
+      text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 14px; color: #2a2a3e; line-height: 1.5; margin: 0;
+    }
+    .legal-links { font-size: 13px; margin-top: 10px; color: #556; }
+    .legal-links a { color: #4f8ef7; }
+    .btn {
+      width: 100%; padding: 13px; background: #4f8ef7; color: white; border: none; border-radius: 9px;
+      font-size: 15px; font-weight: 700; cursor: pointer;
+    }
+    .btn:hover { background: #3a7de0; }
+    .error { background: #fff5f5; border: 1.5px solid #fca5a5; color: #dc2626; border-radius: 8px; padding: 12px; margin-bottom: 14px; font-size: 14px; }
+    .success { background: #ecfdf5; border: 1.5px solid #6ee7b7; color: #065f46; border-radius: 8px; padding: 12px; margin-bottom: 14px; font-size: 14px; }
+    .note { font-size: 13px; color: #667; margin-top: 14px; }
+    footer { max-width: 720px; margin: 24px auto 40px; padding: 0 20px; color: #667; font-size: 14px; }
+    footer a { color: #4f8ef7; text-decoration: none; margin-right: 10px; }
+    @media (max-width: 640px) {
+      header { padding: 14px 16px; }
+      .nav a { margin-left: 0; margin-right: 12px; }
+      .card { padding: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <a class="logo" href="/">TopAI <span>RE Tools</span></a>
+      <div class="business">Operated by {{ legal_entity_name }}</div>
+    </div>
+    <nav class="nav" aria-label="Marketing">
+      <a href="/">Home</a>
+      <a href="/how-it-works">How It Works</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+      <a href="/contact">Contact</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="card">
+      <h1>Real estate inquiry &amp; SMS consent</h1>
+      <p class="muted">
+        Use this public form to send a real estate inquiry to <strong>TopAI RE Tools</strong>
+        (operated by <strong>{{ legal_entity_name }}</strong>). Tell us what you are looking for —
+        property questions, scheduling, or follow-up on a listing conversation.
+      </p>
+      <div class="support">
+        <strong>SMS support number:</strong> {{ sms_support_display }}<br />
+        Conversational SMS (when you opt in) may include property information, answers to your questions,
+        appointment scheduling, reminders, and follow-up. Message frequency varies. Message and data rates may apply.
+        Reply <strong>STOP</strong> to opt out or <strong>HELP</strong> for help.
+      </div>
+
+      {% if error %}
+      <div class="error" role="alert">{{ error }}</div>
+      {% endif %}
+      {% if success %}
+      <div class="success" role="status">{{ success }}</div>
+      {% endif %}
+
+      <form method="post" action="/sms-consent" novalidate>
+        <label for="name">Name *</label>
+        <input id="name" name="name" type="text" required maxlength="120" value="{{ form_name|default('') }}" autocomplete="name" />
+
+        <label for="phone">Mobile telephone number *</label>
+        <input id="phone" name="phone" type="tel" required maxlength="32" value="{{ form_phone|default('') }}" placeholder="+1XXXXXXXXXX or (XXX) XXX-XXXX" autocomplete="tel" />
+
+        <label for="message">Real estate inquiry / message *</label>
+        <textarea id="message" name="message" required maxlength="2000" placeholder="Describe your real estate question or request…">{{ form_message|default('') }}</textarea>
+
+        <div class="consent-box">
+          <div class="consent-row">
+            <input
+              type="checkbox"
+              id="sms_consent"
+              name="sms_consent"
+              value="1"
+              {% if form_sms_consent %}checked{% endif %}
+            />
+            <label for="sms_consent">{{ sms_consent_checkbox_text }}</label>
+          </div>
+          <div class="legal-links">
+            Privacy Policy:
+            <a href="https://topairealestatetools.com/privacy">https://topairealestatetools.com/privacy</a><br />
+            Terms of Service:
+            <a href="https://topairealestatetools.com/terms">https://topairealestatetools.com/terms</a>
+          </div>
+        </div>
+
+        <button class="btn" type="submit">Submit inquiry</button>
+        <p class="note">
+          The SMS checkbox is optional and is not required to submit your inquiry.
+          Submitting this form does not send an automated SMS.
+          If you do not check the box, we will not send you SMS about this inquiry.
+        </p>
+      </form>
+    </section>
+  </main>
+
+  <footer>
+    <div><strong>TopAI RE Tools</strong> · Operated by {{ legal_entity_name }}</div>
+    <p>
+      <a href="/features">Features</a>
+      <a href="/how-it-works">How It Works</a>
+      <a href="/pricing">Pricing</a>
+      <a href="/sms-consent">SMS Consent</a>
+      <a href="/terms">Terms</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/refund-policy">Refund Policy</a>
+      <a href="/contact">Contact</a>
+    </p>
+  </footer>
+</body>
+</html>

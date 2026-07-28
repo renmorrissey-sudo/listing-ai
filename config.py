@@ -66,6 +66,7 @@ APP_URL = _env("APP_URL", "http://localhost:8080")
 # variables cannot leak into legal/pricing pages.
 BUSINESS_NAME = "TopAI RE Tools"
 PRODUCT_NAME = "TopAI Real Estate Tools"
+LEGAL_ENTITY_NAME = "Sky Blue Holdings LLC"
 CONTACT_EMAIL = "support@topairealestatetools.com"
 SUBSCRIPTION_PRICE = "$49/month"
 TRIAL_OFFER = "50% off first month with promo code TRIAL50"

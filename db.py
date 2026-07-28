@@ -1016,6 +1016,78 @@ def set_lead_consent(lead_id, user_id, consent_status="confirmed"):
         )
 
 
+def create_sms_consent_inquiry(
+    *,
+    name,
+    phone_number,
+    message,
+    sms_consent,
+    consent_at=None,
+    source_url=None,
+    disclosure_version=None,
+    ip_address=None,
+    user_agent=None,
+    created_at=None,
+):
+    """Insert a public SMS consent / inquiry row. Returns id."""
+    created = created_at or datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO sms_consent_inquiries
+                (name, phone_number, message, sms_consent, consent_at, source_url,
+                 disclosure_version, ip_address, user_agent, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name,
+                phone_number,
+                message,
+                1 if sms_consent else 0,
+                consent_at,
+                source_url,
+                disclosure_version,
+                ip_address,
+                user_agent,
+                created,
+            ),
+        )
+        return cur.lastrowid
+
+
+def get_sms_consent_inquiry(inquiry_id):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM sms_consent_inquiries WHERE id = ? LIMIT 1",
+            (inquiry_id,),
+        ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        data["sms_consent"] = bool(data.get("sms_consent"))
+        return data
+
+
+def latest_sms_consent_inquiry_for_phone(phone_number):
+    if not phone_number:
+        return None
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM sms_consent_inquiries
+            WHERE phone_number = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (phone_number,),
+        ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        data["sms_consent"] = bool(data.get("sms_consent"))
+        return data
+
+
 def update_sms_message_body(message_id, user_id, message_body, direction="outbound"):
     with get_db() as conn:
         conn.execute(

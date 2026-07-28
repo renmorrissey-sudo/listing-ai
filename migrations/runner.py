@@ -34,6 +34,7 @@ MIGRATION_MODULES = [
     "migrations.versions.007_backfill_lead_follow_through",
     "migrations.versions.008_follow_up_cancel_and_user_timezone",
     "migrations.versions.009_inbound_sms_metadata",
+    "migrations.versions.010_sms_consent_inquiries",
 ]
 
 # Required after 001_baseline. App has no separate accounts/tenants/subscriptions

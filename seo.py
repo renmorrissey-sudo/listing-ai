@@ -12,6 +12,7 @@ PUBLIC_SITEMAP_ENTRIES = (
     {"path": "/pricing", "changefreq": "monthly", "priority": "0.9"},
     {"path": "/features", "changefreq": "monthly", "priority": "0.8"},
     {"path": "/how-it-works", "changefreq": "monthly", "priority": "0.8"},
+    {"path": "/sms-consent", "changefreq": "monthly", "priority": "0.7"},
     {"path": "/terms", "changefreq": "yearly", "priority": "0.3"},
     {"path": "/privacy", "changefreq": "yearly", "priority": "0.3"},
     {"path": "/refund-policy", "changefreq": "yearly", "priority": "0.3"},

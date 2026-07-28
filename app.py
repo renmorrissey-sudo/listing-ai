@@ -84,6 +84,7 @@ def inject_business_context():
     return {
         "business_name": config.BUSINESS_NAME,
         "product_name": config.PRODUCT_NAME,
+        "legal_entity_name": config.LEGAL_ENTITY_NAME,
         "contact_email": config.CONTACT_EMAIL,
         "subscription_price": config.SUBSCRIPTION_PRICE,
         "trial_offer": config.TRIAL_OFFER,
@@ -985,6 +986,11 @@ def send_sms_suggestion(insight_id):
         return jsonify({"error": "Lead not found."}), 404
     if (lead.get("opt_out_status") or "active") == "opted_out":
         return jsonify({"error": "This lead opted out. Do not send SMS."}), 403
+    from sms_consent import outbound_sms_blocked_for_phone
+
+    blocked = outbound_sms_blocked_for_phone(lead.get("phone_number") or "")
+    if blocked:
+        return jsonify({"error": blocked}), 403
 
     message_id = insight.get("suggested_message_id")
     if message_id:
@@ -1102,6 +1108,12 @@ def send_sms_message():
     persona = db.get_voice_persona(cleaned["persona_id"], user["id"])
     if not persona:
         return jsonify({"error": "Selected persona was not found."}), 404
+
+    from sms_consent import outbound_sms_blocked_for_phone
+
+    blocked = outbound_sms_blocked_for_phone(cleaned["phone_number"])
+    if blocked and cleaned.get("send_now"):
+        return jsonify({"error": blocked}), 403
 
     from lead_service import SMS_SOURCE
 
@@ -1413,6 +1425,75 @@ def voice_webhook():
             logger.exception("Failed to apply voice webhook to CRM lead")
 
     return jsonify({"received": True}), 200
+
+
+@app.route("/sms-consent", methods=["GET", "POST"])
+@limiter.limit("20 per minute", methods=["POST"])
+def sms_consent():
+    """Public A2P SMS consent / real estate inquiry page. No auth, gate, or auto-SMS."""
+    import sms_consent as sms_consent_mod
+
+    form_defaults = {
+        "form_name": "",
+        "form_phone": "",
+        "form_message": "",
+        "form_sms_consent": False,
+    }
+    ctx = {
+        **form_defaults,
+        "error": None,
+        "success": None,
+        "sms_support_display": sms_consent_mod.SMS_SUPPORT_DISPLAY,
+        "sms_consent_checkbox_text": sms_consent_mod.SMS_CONSENT_CHECKBOX_TEXT,
+    }
+
+    if request.method == "GET":
+        return render_template("sms_consent.html", **ctx)
+
+    cleaned, error = sms_consent_mod.validate_sms_consent_form(request.form)
+    ctx.update(
+        {
+            "form_name": str(request.form.get("name") or "")[:120],
+            "form_phone": str(request.form.get("phone") or "")[:32],
+            "form_message": str(request.form.get("message") or "")[:2000],
+            # Preserve checked state only on validation error (never default checked on fresh GET).
+            "form_sms_consent": str(request.form.get("sms_consent") or "").lower()
+            in {"1", "true", "on", "yes"},
+        }
+    )
+    if error:
+        ctx["error"] = error
+        return render_template("sms_consent.html", **ctx), 400
+
+    source_url = seo.canonical_loc("/sms-consent")
+    inquiry_id = sms_consent_mod.create_sms_consent_inquiry(
+        name=cleaned["name"],
+        phone_number=cleaned["phone_number"],
+        message=cleaned["message"],
+        sms_consent=cleaned["sms_consent"],
+        source_url=source_url,
+        ip_address=(request.headers.get("X-Forwarded-For") or request.remote_addr or "")
+        .split(",")[0]
+        .strip(),
+        user_agent=request.headers.get("User-Agent"),
+    )
+    logger.info(
+        "Public SMS consent inquiry saved id=%s consent=%s",
+        inquiry_id,
+        cleaned["sms_consent"],
+    )
+    if cleaned["sms_consent"]:
+        ctx["success"] = (
+            "Thanks — your inquiry was received with SMS consent recorded. "
+            "We will not send an automated text just because you submitted this form."
+        )
+    else:
+        ctx["success"] = (
+            "Thanks — your inquiry was received. You did not opt in to SMS, "
+            "so we will not send text messages about this inquiry."
+        )
+    ctx.update(form_defaults)
+    return render_template("sms_consent.html", **ctx)
 
 
 @app.route("/terms")

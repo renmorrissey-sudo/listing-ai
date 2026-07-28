@@ -56,7 +56,7 @@ def test_sitemap_canonical_https_urls(app_client):
 def test_sitemap_includes_public_pages_only(app_client):
     res = app_client.get("/sitemap.xml")
     body = res.get_data(as_text=True)
-    for path in ("/", "/pricing", "/features", "/how-it-works", "/terms", "/privacy", "/refund-policy", "/contact"):
+    for path in ("/", "/pricing", "/features", "/how-it-works", "/sms-consent", "/terms", "/privacy", "/refund-policy", "/contact"):
         assert f"https://topairealestatetools.com{path}" in body or (
             path == "/" and "https://topairealestatetools.com/</loc>" in body
         )
