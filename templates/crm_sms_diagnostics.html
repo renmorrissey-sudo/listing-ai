@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SMS diagnostics - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+</head>
+<body>
+  {% set page_tagline = 'SMS diagnostics' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <h1>SMS diagnostics</h1>
+    <p class="muted">{{ warning }}</p>
+    <div class="card">
+      <ul>
+        <li>Active provider: <strong>{{ active_provider }}</strong></li>
+        <li>Provider configured: {{ provider_configured }}</li>
+        <li>API token configured: {{ token_configured }}</li>
+        <li>Webhook secret configured: {{ webhook_secret_configured }}</li>
+        <li>Tenant sender: {% if sender %}{{ sender.sender_number }} ({{ sender.registration_status }}){% else %}{{ sender_error }}{% endif %}</li>
+        <li>SMS terms ({{ terms_version }}): {{ 'accepted' if terms_ok else 'not accepted' }}</li>
+      </ul>
+      {% if not terms_ok %}
+      <form method="post">
+        <input type="hidden" name="action" value="accept_terms" />
+        <p class="muted">By accepting, you agree to use TopAI SMS only for contacts who authorized you or your business to text them, and that TopAI does not independently verify supporting consent records.</p>
+        <button class="btn" type="submit">Accept SMS terms</button>
+      </form>
+      {% endif %}
+    </div>
+    <div class="card">
+      <h2>Certification language (one-to-one)</h2>
+      <p>{{ one_to_one_cert_text }}</p>
+      <h2>Certification language (campaign)</h2>
+      <p>{{ campaign_cert_text }}</p>
+    </div>
+    <p><a href="/crm/sms-campaigns">Bulk campaigns</a></p>
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+</body>
+</html>

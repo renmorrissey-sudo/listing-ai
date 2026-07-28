@@ -103,11 +103,35 @@ TWILIO_AUTH_TOKEN = _env_strip("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = _env_strip("TWILIO_PHONE_NUMBER") or _env_strip("SMS_FROM_NUMBER")
 # Preferred for US A2P 10DLC: associate sends with an approved Messaging Service / campaign.
 TWILIO_MESSAGING_SERVICE_SID = _env_strip("TWILIO_MESSAGING_SERVICE_SID")
+# SimpleTexting master account (platform credentials — never expose to tenants).
+SIMPLETEXTING_API_TOKEN = _env_strip("SIMPLETEXTING_API_TOKEN")
+SIMPLETEXTING_WEBHOOK_SECRET = _env_strip("SIMPLETEXTING_WEBHOOK_SECRET")
+# Dev/pilot fallback only — never implicit sender for unconfigured tenants.
+SIMPLETEXTING_PHONE_NUMBER = _env_strip("SIMPLETEXTING_PHONE_NUMBER")
+SIMPLETEXTING_API_BASE = (
+    _env_strip("SIMPLETEXTING_API_BASE") or "https://api-app2.simpletexting.com/v2"
+)
 CONSENT_UPLOAD_DIR = _env_strip("CONSENT_UPLOAD_DIR") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "private_uploads", "consent_evidence"
 )
 CONSENT_UPLOAD_MAX_BYTES = int(_env("CONSENT_UPLOAD_MAX_BYTES", str(5 * 1024 * 1024)))
 SMS_DAILY_LIMIT = int(_env("SMS_DAILY_LIMIT", "50"))
+SMS_CAMPAIGN_MAX_RECIPIENTS = int(_env("SMS_CAMPAIGN_MAX_RECIPIENTS", "2000"))
+SMS_IMPORT_MAX_ROWS = int(_env("SMS_IMPORT_MAX_ROWS", "5000"))
+SMS_MSGS_PER_MINUTE = int(_env("SMS_MSGS_PER_MINUTE", "30"))
+SMS_MSGS_PER_HOUR = int(_env("SMS_MSGS_PER_HOUR", "500"))
+SMS_MSGS_PER_DAY = int(_env("SMS_MSGS_PER_DAY", "2000"))
+SMS_MAX_PER_CONTACT_PER_DAY = int(_env("SMS_MAX_PER_CONTACT_PER_DAY", "3"))
+SMS_MAX_RETRIES = int(_env("SMS_MAX_RETRIES", "5"))
+SMS_QUIET_HOURS_START = int(_env("SMS_QUIET_HOURS_START", "21"))
+SMS_QUIET_HOURS_END = int(_env("SMS_QUIET_HOURS_END", "8"))
+SMS_TERMS_VERSION = _env_strip("SMS_TERMS_VERSION") or "sms_terms_v1_2026_07"
+SMS_CERT_TEXT_VERSION_ONE_TO_ONE = "one_to_one_cert_v1"
+SMS_CERT_TEXT_VERSION_CAMPAIGN = "campaign_cert_v1"
+SMS_IMPORT_UPLOAD_DIR = _env_strip("SMS_IMPORT_UPLOAD_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "private_uploads", "sms_imports"
+)
+SMS_IMPORT_MAX_BYTES = int(_env("SMS_IMPORT_MAX_BYTES", str(10 * 1024 * 1024)))
 
 # Skip subscription checks locally when Stripe is not configured.
 SUBSCRIPTION_REQUIRED = _env("SUBSCRIPTION_REQUIRED", "true").lower() == "true"

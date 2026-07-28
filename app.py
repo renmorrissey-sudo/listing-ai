@@ -18,6 +18,7 @@ import sms_coach
 from crm import crm_bp
 from crm_constants import status_label
 from external_leads_routes import external_leads_bp
+from sms_campaigns import sms_campaigns_bp
 from sms_prompts import build_sms_prompt
 from sms_provider import (
     SmsProviderError,
@@ -67,6 +68,7 @@ app.config["PERMANENT_SESSION_LIFETIME"] = 86400 * 14
 db.init_db()
 app.register_blueprint(crm_bp)
 app.register_blueprint(external_leads_bp)
+app.register_blueprint(sms_campaigns_bp)
 client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 if config.STRIPE_SECRET_KEY:
@@ -956,7 +958,7 @@ def send_sms_suggestion(insight_id):
     user = auth.get_current_user()
     data = request.get_json(silent=True) or {}
     if not data.get("compliance_confirmed"):
-        return jsonify({"error": "Confirm that this lead consented to receive SMS before sending."}), 400
+        return jsonify({"error": "Certify contact SMS consent before sending."}), 400
 
     insight = db.get_insight(insight_id, user["id"])
     if not insight or insight.get("status") != "pending":
@@ -988,88 +990,36 @@ def send_sms_suggestion(insight_id):
         return jsonify({"error": "Lead not found."}), 404
     if (lead.get("opt_out_status") or "active") == "opted_out":
         return jsonify({"error": "This lead opted out. Do not send SMS."}), 403
-    from sms_authorization import attest_internal_sms_consent, can_send_sms
+    if not data.get("compliance_confirmed"):
+        return jsonify({"error": "Confirm contact SMS consent certification before sending."}), 400
 
-    if lead.get("external_source_id") or str(lead.get("source") or "").startswith("external:"):
-        allowed, block_msg = can_send_sms(user["id"], lead["id"])
-    else:
-        allowed, block_msg = attest_internal_sms_consent(user["id"], lead["id"])
-    if not allowed:
-        return jsonify({"error": block_msg}), 403
+    from sms_outbound import send_authorized_sms
 
-    message_id = insight.get("suggested_message_id")
-    if message_id:
-        db.update_sms_message_send_result(message_id, status="draft", error_message=None)
-        db.update_sms_message_body(message_id, user["id"], message_body, direction="outbound")
-        db.update_sms_compliance(
-            message_id,
-            user["id"],
-            consent_status="confirmed",
-            opt_out_status=lead.get("opt_out_status") or "active",
-        )
-    else:
-        message_id = db.create_sms_message(
-            user_id=user["id"],
-            persona_id=None,
-            provider=config.SMS_PROVIDER,
-            data={
-                "lead_name": lead.get("name"),
-                "phone_number": lead.get("phone_number"),
-                "lead_type": lead.get("lead_type"),
-                "property_interest": lead.get("property_interest"),
-                "message_body": message_body,
-            },
-            status="draft",
-            lead_id=lead["id"],
-            direction="outbound",
-            consent_status="confirmed",
-            opt_out_status=lead.get("opt_out_status") or "active",
-        )
+    suggested_id = insight.get("suggested_message_id")
+    if suggested_id:
+        db.update_sms_message_send_result(suggested_id, status="draft", error_message=None)
+        db.update_sms_message_body(suggested_id, user["id"], message_body, direction="outbound")
 
-    provider = get_sms_provider()
-    if not provider.is_configured():
-        return jsonify({"error": "Twilio SMS is not configured."}), 503
+    result, err, status = send_authorized_sms(
+        user["id"],
+        lead["id"],
+        message_body,
+        source_page="sms_suggestion",
+        compliance_confirmed=True,
+        message_id=suggested_id,
+    )
+    if err:
+        return jsonify({"error": err, **(result or {})}), status
 
-    try:
-        result = provider.send_sms(
-            lead["phone_number"],
-            message_body,
-            status_callback=sms_status_callback_url(),
-        )
-        db.update_sms_message_send_result(
-            message_id,
-            provider_message_id=result["provider_message_id"],
-            status=result.get("status") or "queued",
-        )
-        db.set_lead_consent(lead["id"], user["id"], "confirmed")
-        db.touch_lead_outbound(lead["id"], user["id"])
-        db.update_insight_status(insight_id, user["id"], "sent")
-        db.record_tool_usage(user["id"], "ai_sms", "suggestion_sent")
-        return jsonify({
-            "ok": True,
-            "id": message_id,
-            "lead_id": lead["id"],
-            "status": result.get("status") or "queued",
-            "provider_message_id": result["provider_message_id"],
-            "message_body": message_body,
-            "consent_status": "confirmed",
-            "opt_out_status": lead.get("opt_out_status") or "active",
-            "sent_at": datetime.now(timezone.utc).isoformat(),
-        }), 201
-    except SmsProviderError as exc:
-        logger.warning(
-            "Suggested SMS send failed code=%s http=%s detail=%s",
-            getattr(exc, "provider_code", None),
-            getattr(exc, "status_code", None),
-            redact_secrets(str(exc)),
-        )
-        db.update_sms_message_send_result(message_id, status="failed", error_message=str(exc))
-        return jsonify(exc.to_public_dict() | {"id": message_id, "status": "failed"}), 503
-    except Exception:
-        logger.exception("Suggested SMS send failed with unexpected error")
-        safe = "SMS could not be sent due to an internal application error."
-        db.update_sms_message_send_result(message_id, status="failed", error_message=safe)
-        return jsonify({"error": safe, "id": message_id, "status": "failed"}), 500
+    db.update_insight_status(insight_id, user["id"], "sent")
+    db.record_tool_usage(user["id"], "ai_sms", "suggestion_sent")
+    return jsonify({
+        "ok": True,
+        **result,
+        "consent_status": "confirmed",
+        "opt_out_status": lead.get("opt_out_status") or "active",
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+    }), 201
 
 
 @app.route("/sms/generate", methods=["POST"])
@@ -1115,21 +1065,7 @@ def send_sms_message():
         return jsonify({"error": "Selected persona was not found."}), 404
 
     from lead_service import SMS_SOURCE
-    from sms_authorization import attest_internal_sms_consent, can_send_sms
-
-    # Pre-check against existing lead if phone already known to this tenant.
-    existing_lead = db.get_lead_by_phone(user["id"], cleaned["phone_number"])
-    if existing_lead and cleaned.get("send_now"):
-        if existing_lead.get("external_source_id") or str(existing_lead.get("source") or "").startswith(
-            "external:"
-        ):
-            allowed, block_msg = can_send_sms(user["id"], existing_lead["id"])
-            if not allowed:
-                return jsonify({"error": block_msg}), 403
-        else:
-            allowed, block_msg = attest_internal_sms_consent(user["id"], existing_lead["id"])
-            if not allowed:
-                return jsonify({"error": block_msg}), 403
+    from sms_outbound import send_authorized_sms
 
     lead_id, _created, _lead = upsert_crm_lead(
         user["id"],
@@ -1139,37 +1075,20 @@ def send_sms_message():
         touch_sms=True,
         assigned_user_id=user["id"],
     )
-    if cleaned.get("send_now"):
-        lead_row = db.get_lead(lead_id, user["id"])
-        if lead_row and (
-            lead_row.get("external_source_id")
-            or str(lead_row.get("source") or "").startswith("external:")
-        ):
-            allowed, block_msg = can_send_sms(user["id"], lead_id)
-            if not allowed:
-                return jsonify({"error": block_msg}), 403
-        else:
-            allowed, block_msg = attest_internal_sms_consent(user["id"], lead_id)
-            if not allowed:
-                return jsonify({"error": block_msg}), 403
-    # validate_sms_send_payload already required compliance_confirmed.
-    consent_status = "confirmed"
-    db.set_lead_consent(lead_id, user["id"], "confirmed")
-    message_id = db.create_sms_message(
-        user_id=user["id"],
-        persona_id=persona["id"],
-        provider=config.SMS_PROVIDER,
-        data=cleaned,
-        status="draft",
-        lead_id=lead_id,
-        direction="outbound",
-        consent_status=consent_status,
-        opt_out_status="active",
-    )
-    db.record_tool_usage(user["id"], "ai_sms", "saved")
-
     provider = get_sms_provider()
     if not cleaned.get("send_now"):
+        message_id = db.create_sms_message(
+            user_id=user["id"],
+            persona_id=persona["id"],
+            provider=config.SMS_PROVIDER,
+            data=cleaned,
+            status="draft",
+            lead_id=lead_id,
+            direction="outbound",
+            consent_status="unknown",
+            opt_out_status="active",
+        )
+        db.record_tool_usage(user["id"], "ai_sms", "saved")
         return jsonify({
             "id": message_id,
             "lead_id": lead_id,
@@ -1178,81 +1097,59 @@ def send_sms_message():
             "send_configured": provider.is_configured(),
         }), 201
 
-    if not provider.is_configured():
-        db.update_sms_message_send_result(
-            message_id,
-            status="draft",
-            error_message="Saved as draft. Twilio SMS is not configured.",
-        )
-        return jsonify({
-            "id": message_id,
-            "lead_id": lead_id,
-            "status": "draft",
-            "message_body": cleaned["message_body"],
-            "send_configured": False,
-            "warning": "SMS saved as draft. Twilio SMS is not configured for sending yet.",
-        }), 201
-
-    try:
-        result = provider.send_sms(
-            cleaned["phone_number"],
-            cleaned["message_body"],
-            status_callback=sms_status_callback_url(),
-        )
-        db.update_sms_message_send_result(
-            message_id,
-            provider_message_id=result["provider_message_id"],
-            status=result.get("status") or "queued",
-        )
-        db.touch_lead_outbound(lead_id, user["id"])
-        db.record_tool_usage(user["id"], "ai_sms", "sent")
-        return jsonify({
-            "id": message_id,
-            "lead_id": lead_id,
-            "status": result.get("status") or "queued",
-            "provider_message_id": result["provider_message_id"],
-            "message_body": cleaned["message_body"],
-            "send_configured": True,
-        }), 201
-    except SmsProviderError as exc:
-        logger.warning(
-            "SMS send failed code=%s http=%s detail=%s",
-            getattr(exc, "provider_code", None),
-            getattr(exc, "status_code", None),
-            redact_secrets(str(exc)),
-        )
-        db.update_sms_message_send_result(message_id, status="failed", error_message=str(exc))
-        return jsonify(exc.to_public_dict() | {"id": message_id, "status": "failed"}), 503
-    except Exception:
-        logger.exception("SMS send failed with unexpected error")
-        safe = "SMS could not be sent due to an internal application error."
-        db.update_sms_message_send_result(message_id, status="failed", error_message=safe)
-        return jsonify({"error": safe, "id": message_id, "status": "failed"}), 500
+    result, err, status = send_authorized_sms(
+        user["id"],
+        lead_id,
+        cleaned["message_body"],
+        source_page="ai_sms_compose",
+        compliance_confirmed=True,
+        persona_id=persona["id"],
+    )
+    if err:
+        return jsonify({"error": err, **(result or {})}), status
+    db.record_tool_usage(user["id"], "ai_sms", "sent")
+    return jsonify({**result, "send_configured": True}), status
 
 
 @app.route("/sms/test", methods=["POST"])
 @auth.subscription_required
 @limiter.limit("5 per minute", key_func=_user_rate_limit_key)
 def sms_test_send():
-    """Secure server-side test send to a verified Twilio trial recipient."""
+    """Secure server-side test send. Lead phones still require certification + authorization."""
     user = auth.get_current_user()
     data = request.get_json(silent=True)
     cleaned, error = validate_sms_test_payload(data)
     if error:
         return jsonify({"ok": False, "error": error}), 400
 
-    # Never bypass lead consent when the destination is an existing CRM lead phone.
-    from sms_authorization import can_send_sms
+    from sms_authorization import can_send_sms, require_tenant_sender
+    from sms_outbound import send_authorized_sms
 
     existing_lead = db.get_lead_by_phone(user["id"], cleaned["to"])
     if existing_lead:
-        allowed, block_msg = can_send_sms(user["id"], existing_lead["id"])
-        if not allowed:
-            return jsonify({"ok": False, "error": block_msg}), 403
+        if not data.get("compliance_confirmed"):
+            return jsonify({
+                "ok": False,
+                "error": "Confirm contact SMS consent certification before sending to a CRM lead.",
+            }), 400
+        result, err, status = send_authorized_sms(
+            user["id"],
+            existing_lead["id"],
+            cleaned["message"],
+            source_page="sms_test",
+            compliance_confirmed=True,
+            skip_quiet_hours=True,
+        )
+        if err:
+            return jsonify({"ok": False, "error": err, **(result or {})}), status
+        return jsonify({"ok": True, **result, "to": cleaned["to"]}), status
 
+    sender, sender_err = require_tenant_sender(user["id"])
+    if sender_err:
+        return jsonify({"ok": False, "error": sender_err}), 403
     provider = get_sms_provider()
     if not provider.is_configured():
-        return jsonify({"ok": False, "error": "Twilio SMS is not configured."}), 503
+        return jsonify({"ok": False, "error": "SMS provider is not configured."}), 503
 
     message_id = db.create_sms_message(
         user_id=user["id"],
@@ -1263,16 +1160,16 @@ def sms_test_send():
             "phone_number": cleaned["to"],
             "message_body": cleaned["message"],
             "lead_type": "test",
-            "desired_outcome": "verify Twilio connectivity",
+            "desired_outcome": "verify SMS connectivity",
         },
         status="draft",
     )
-
     try:
         result = provider.send_sms(
             cleaned["to"],
             cleaned["message"],
             status_callback=sms_status_callback_url(),
+            from_number=sender.get("sender_number"),
         )
         db.update_sms_message_send_result(
             message_id,
@@ -1287,12 +1184,6 @@ def sms_test_send():
             "to": cleaned["to"],
         }), 201
     except SmsProviderError as exc:
-        logger.warning(
-            "SMS test send failed code=%s http=%s detail=%s",
-            getattr(exc, "provider_code", None),
-            getattr(exc, "status_code", None),
-            redact_secrets(str(exc)),
-        )
         db.update_sms_message_send_result(message_id, status="failed", error_message=str(exc))
         return jsonify(exc.to_public_dict() | {"ok": False}), 503
     except Exception:
@@ -1300,6 +1191,39 @@ def sms_test_send():
         safe = "SMS could not be sent due to an internal application error."
         db.update_sms_message_send_result(message_id, status="failed", error_message=safe)
         return jsonify({"ok": False, "error": safe}), 500
+
+
+@app.route("/webhooks/simpletexting/inbound", methods=["POST"])
+@app.route("/webhooks/simpletexting/delivery", methods=["POST"])
+@app.route("/webhooks/simpletexting/unsubscribe", methods=["POST"])
+@limiter.exempt
+def simpletexting_webhooks():
+    """SimpleTexting JSON webhooks. Auth via ?token=SIMPLETEXTING_WEBHOOK_SECRET."""
+    from sms_providers.simpletexting import SimpleTextingSMSProvider
+    import simpletexting_webhooks as stwh
+
+    provider = SimpleTextingSMSProvider()
+    if not provider.validate_webhook(request):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    payload = request.get_json(silent=True)
+    if payload is None:
+        # Also accept form for legacy forwarding
+        payload = {k: request.values.get(k) for k in request.values.keys()}
+    path = request.path.rstrip("/")
+    try:
+        if path.endswith("/inbound"):
+            result, status = stwh.handle_inbound(payload, app=app)
+            return jsonify(result), status
+        if path.endswith("/delivery"):
+            result, status = stwh.handle_delivery(payload)
+            return jsonify(result), status
+        if path.endswith("/unsubscribe"):
+            result, status = stwh.handle_unsubscribe(payload)
+            return jsonify(result), status
+    except Exception:
+        logger.exception("SimpleTexting webhook failed")
+        return jsonify({"ok": False}), 500
+    return jsonify({"ok": False, "error": "unknown"}), 404
 
 
 @app.route("/webhook/sms/inbound", methods=["POST"])

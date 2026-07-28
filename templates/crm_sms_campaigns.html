@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SMS Campaigns - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+</head>
+<body>
+  {% set page_tagline = 'Bulk SMS' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <h1>Bulk SMS campaigns</h1>
+    <p class="muted">TopAI queues sends per recipient. TopAI does not independently verify consent records.</p>
+    {% if sender_err %}<div class="flash err" style="display:block;">{{ sender_err }}</div>{% endif %}
+    {% if not terms_ok %}<div class="flash err" style="display:block;">Accept <a href="/crm/sms-diagnostics">SMS terms</a> before sending.</div>{% endif %}
+    <p>
+      <a class="btn" href="/crm/sms-campaigns/new">New campaign</a>
+      <a class="btn secondary" href="/crm/sms-diagnostics">SMS diagnostics</a>
+    </p>
+    <div class="card">
+      {% if campaigns %}
+      <table>
+        <thead><tr><th>Title</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+        <tbody>
+          {% for c in campaigns %}
+          <tr>
+            <td>{{ c.title }}</td>
+            <td><span class="pill">{{ c.status }}</span></td>
+            <td class="muted">{{ (c.updated_at or '')[:16] }}</td>
+            <td><a class="cta" href="/crm/sms-campaigns/{{ c.id }}">Open</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">No campaigns yet.</p>
+      {% endif %}
+    </div>
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+</body>
+</html>

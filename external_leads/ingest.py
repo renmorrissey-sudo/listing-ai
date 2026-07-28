@@ -1,4 +1,4 @@
-"""Core ingest: always unverified + SMS blocked for external leads."""
+"""Core ingest: always not_certified + SMS blocked for external leads."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def ingest_external_lead(
 ):
     """
     Create or update an externally sourced lead.
-    Always results in sms_consent_status=unverified and sms_sending_blocked=true
+    Always results in sms_consent_status=not_certified and sms_sending_blocked=true
     for *new* leads. Updates never upgrade consent or clear opt-out.
     """
     result = {
@@ -93,7 +93,7 @@ def ingest_external_lead(
     status = payload.get("status") or (source_row or {}).get("default_lead_status") or "new"
 
     if existing:
-        # Never overwrite verified consent or clear opted_out via import
+        # Never overwrite certified consent or clear opted_out via import
         result["duplicate_match"] = match
         result["lead_id"] = existing["id"]
         result["action"] = "updated"
@@ -115,12 +115,20 @@ def ingest_external_lead(
                 external_record_id=external_record_id or existing.get("external_record_id"),
                 import_batch_id=import_batch_id,
             )
-            # Ensure still blocked if somehow not — external updates never verify
-            if (existing.get("sms_consent_status") or "") not in {"verified", "opted_out", "revoked", "not_permitted"}:
+            # Ensure still blocked if somehow not — external updates never certify
+            protected = {
+                "user_certified",
+                "verified",
+                "opted_out",
+                "revoked",
+                "not_permitted",
+                "suppressed",
+            }
+            if (existing.get("sms_consent_status") or "") not in protected:
                 xdb.set_lead_sms_consent_state(
                     existing["id"],
                     user_id,
-                    sms_consent_status="unverified",
+                    sms_consent_status="not_certified",
                     sms_sending_blocked=True,
                     actor_user_id=actor_user_id or user_id,
                     source=method,
@@ -176,7 +184,7 @@ def ingest_external_lead(
             lead_id,
             actor_user_id=actor_user_id or user_id,
             action="external_lead_imported",
-            new_value="unverified",
+            new_value="not_certified",
             source=method,
             metadata={"source": source_label},
         )

@@ -167,7 +167,7 @@ def confirm_qualifying_consent(user_id, lead_id, form, *, file_storage=None):
     xdb.set_lead_sms_consent_state(
         lead_id,
         user_id,
-        sms_consent_status="verified",
+        sms_consent_status="user_certified",
         sms_sending_blocked=False,
         actor_user_id=user_id,
         source="consent_confirm",
@@ -177,22 +177,25 @@ def confirm_qualifying_consent(user_id, lead_id, form, *, file_storage=None):
         user_id,
         lead_id,
         actor_user_id=user_id,
-        action="consent_verified",
+        action="consent_user_certified",
         previous_value=lead.get("sms_consent_status"),
-        new_value="verified",
+        new_value="user_certified",
         source="consent_confirm",
         metadata={"evidence_id": evidence_id},
     )
     crm_db.add_lead_activity(
         lead_id,
         user_id,
-        "consent_verified",
-        "SMS consent verified with evidence",
+        "consent_user_certified",
+        "Subscriber certified SMS consent with supporting record (not TopAI verified)",
         {"evidence_id": evidence_id, "method": method},
     )
     try:
         crm_db.resolve_needs_attention_by_reason(
-            user_id, lead_id, "consent_review_required", resolution_reason="Consent verified"
+            user_id,
+            lead_id,
+            "consent_review_required",
+            resolution_reason="Subscriber certified consent",
         )
     except Exception:
         pass

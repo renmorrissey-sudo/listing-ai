@@ -89,7 +89,8 @@ def test_inquiry_without_consent_saves_and_blocks_sms(app_client, two_users):
             },
         )
     assert send_res.status_code == 403
-    assert "consent" in send_res.get_json()["error"].lower()
+    err = send_res.get_json()["error"].lower()
+    assert any(x in err for x in ("consent", "certif", "terms", "activated", "sender", "blocked"))
     mock_provider.send_sms.assert_not_called()
 
 

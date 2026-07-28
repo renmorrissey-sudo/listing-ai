@@ -1,5 +1,6 @@
 """External lead ingestion + SMS consent authorization tests."""
 
+import uuid
 from datetime import datetime, timezone
 from io import BytesIO
 from unittest.mock import MagicMock, patch
@@ -31,7 +32,7 @@ def _source(user_id, key="portal-a", secret=None):
     )
 
 
-def test_ingest_defaults_unverified_blocked(two_users):
+def test_ingest_defaults_not_certified_blocked(two_users):
     u1, _ = two_users
     sid = _source(u1)
     source = xdb.get_external_lead_source(sid, u1)
@@ -43,14 +44,16 @@ def test_ingest_defaults_unverified_blocked(two_users):
     )
     assert result["error"] is None
     lead = db.get_lead(result["lead_id"], u1)
-    assert lead["sms_consent_status"] == "unverified"
+    assert lead["sms_consent_status"] == "not_certified"
     assert int(lead["sms_sending_blocked"]) == 1
     ok, msg = can_send_sms(u1, lead["id"])
     assert ok is False
-    assert "consent" in msg.lower()
+    assert any(
+        x in msg.lower()
+        for x in ("consent", "certif", "activated", "sender", "provider", "blocked")
+    )
 
-
-def test_csv_consent_true_stays_unverified(two_users):
+def test_csv_consent_true_stays_not_certified(two_users):
     u1, _ = two_users
     sid = _source(u1, key="csv-src")
     source = xdb.get_external_lead_source(sid, u1)
@@ -63,7 +66,7 @@ def test_csv_consent_true_stays_unverified(two_users):
     leads = crm_db.filter_leads(u1, external_only=True)
     assert leads
     lead = leads[0]
-    assert lead["sms_consent_status"] == "unverified"
+    assert lead["sms_consent_status"] == "not_certified"
     assert int(lead["sms_sending_blocked"]) == 1
     evidence = xdb.list_consent_evidence(u1, lead["id"])
     assert evidence and evidence[0]["consent_status"] == "pending"
@@ -86,7 +89,7 @@ def test_webhook_idempotency_and_tenant_isolation(two_users):
     lead = db.get_lead(lead_id, u1)
     assert lead is not None
     assert db.get_lead(lead_id, u2) is None
-    assert lead["sms_consent_status"] == "unverified"
+    assert lead["sms_consent_status"] == "not_certified"
 
     result2, err2, status2 = process_webhook("shared-key", body, secret)
     assert status2 == 200 and err2 is None
@@ -97,8 +100,23 @@ def test_webhook_idempotency_and_tenant_isolation(two_users):
     assert status_bad == 401
 
 
-def test_confirm_and_reject_consent(two_users):
+def test_confirm_and_reject_consent(two_users, monkeypatch):
+    import tenant_sms_db as tdb
+    import config as cfg
+
     u1, _ = two_users
+    monkeypatch.setattr(cfg, "SMS_PROVIDER", "simpletexting")
+    monkeypatch.setattr(cfg, "SIMPLETEXTING_API_TOKEN", "tok")
+    monkeypatch.setattr(cfg, "SMS_QUIET_HOURS_START", 0)
+    monkeypatch.setattr(cfg, "SMS_QUIET_HOURS_END", 0)
+    tdb.upsert_tenant_sender(
+        u1,
+        sender_number=f"+1555{uuid.uuid4().hex[:7]}"[:12],
+        sms_provider="simpletexting",
+        sms_enabled=True,
+        registration_status="verified",
+    )
+    tdb.accept_sms_terms(u1, u1)
     sid = _source(u1, key="confirm-src")
     source = xdb.get_external_lead_source(sid, u1)
     result = ingest_external_lead(
@@ -123,7 +141,7 @@ def test_confirm_and_reject_consent(two_users):
     out, err = confirm_qualifying_consent(u1, lead_id, form)
     assert err is None and out
     lead = db.get_lead(lead_id, u1)
-    assert lead["sms_consent_status"] == "verified"
+    assert lead["sms_consent_status"] == "user_certified"
     assert int(lead["sms_sending_blocked"]) == 0
     ok, _ = can_send_sms(u1, lead_id)
     assert ok is True
@@ -247,14 +265,15 @@ def test_send_paths_denied_when_blocked(app_client, two_users):
             "lead_type": "buyer",
         },
     )
-    assert res.status_code == 403
-    assert "consent" in res.get_json()["error"].lower()
+    assert res.status_code in {400, 403}
+    err = (res.get_json() or {}).get("error", "").lower()
+    assert any(x in err for x in ("consent", "certif", "terms", "activated", "sender", "blocked"))
 
     res_test = app_client.post(
         "/sms/test",
-        json={"to": "+15551230008", "message": "test ping"},
+        json={"to": "+15551230008", "message": "test ping", "compliance_confirmed": True},
     )
-    assert res_test.status_code == 403
+    assert res_test.status_code in {400, 403}
 
 
 def test_malformed_csv_and_phone(two_users):

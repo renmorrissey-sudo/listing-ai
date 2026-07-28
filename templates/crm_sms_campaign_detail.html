@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ campaign.title }} - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+</head>
+<body>
+  {% set page_tagline = 'Campaign' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <p class="muted"><a href="/crm/sms-campaigns">← Campaigns</a></p>
+    <h1>{{ campaign.title }}</h1>
+    <p><span class="pill">{{ campaign.status }}</span>
+      {% if sender %}<span class="muted">Sender {{ sender.sender_number }}</span>{% endif %}
+    </p>
+    {% if error %}<div class="flash err" style="display:block;">{{ error }}</div>{% endif %}
+    {% if sender_err %}<div class="flash err" style="display:block;">{{ sender_err }}</div>{% endif %}
+
+    <div class="card">
+      <h2>1–3. Import audience</h2>
+      <p class="muted">{{ warning_import }}</p>
+      <form method="post" enctype="multipart/form-data">
+        <input type="hidden" name="action" value="import_audience" />
+        <label>CSV or Excel (.xlsx) <input type="file" name="audience_file" accept=".csv,.xlsx" required /></label>
+        <button class="btn" type="submit">Import &amp; map</button>
+      </form>
+      <p class="muted">Recipients: {{ recipient_count }} · Eligible: {{ eligible_count }}</p>
+    </div>
+
+    <div class="card">
+      <h2>4–6. Compose &amp; personalize</h2>
+      <form method="post">
+        <input type="hidden" name="action" value="save_message" />
+        <label>Purpose <input name="campaign_purpose" value="{{ campaign.campaign_purpose or 'real_estate_follow_up' }}" /></label>
+        <label>Message
+          <textarea name="message_template" rows="5" required>{{ campaign.message_template or '' }}</textarea>
+        </label>
+        <p class="muted">Merge fields: [first_name] [last_name] [agent_name] [brokerage_name] [property_interest] [appointment_link] [listing_link]</p>
+        <p class="muted">Include sender identification and “Reply STOP to opt out.” where applicable.</p>
+        <button class="btn" type="submit">Save message</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>9. Certify consent</h2>
+      <form method="post">
+        <input type="hidden" name="action" value="certify" />
+        <label style="display:flex;gap:8px;align-items:flex-start;">
+          <input type="checkbox" name="attestation_accepted" value="1" required />
+          <span>{{ campaign_cert_text }}</span>
+        </label>
+        <button class="btn" type="submit" style="margin-top:10px;">Certify audience</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>10. Launch</h2>
+      <form method="post" style="display:inline;">
+        <input type="hidden" name="action" value="launch" />
+        <label>Schedule (optional ISO) <input name="scheduled_at" placeholder="2026-07-29T15:00:00+00:00" /></label>
+        <button class="btn" type="submit">Launch / schedule</button>
+      </form>
+      <form method="post" style="display:inline;"><input type="hidden" name="action" value="pause" /><button class="btn secondary" type="submit">Pause</button></form>
+      <form method="post" style="display:inline;"><input type="hidden" name="action" value="resume" /><button class="btn secondary" type="submit">Resume</button></form>
+      <form method="post" style="display:inline;"><input type="hidden" name="action" value="cancel" /><button class="btn secondary" type="submit">Cancel remaining</button></form>
+    </div>
+
+    <div class="card">
+      <h2>11. Results</h2>
+      <pre class="muted">{{ job_stats }}</pre>
+      <p><a class="cta" href="/crm/sms-campaigns/{{ campaign.id }}/export">Export CSV</a></p>
+    </div>
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+</body>
+</html>

@@ -201,7 +201,7 @@ class TwilioSmsProvider:
             "a2p_readiness": a2p,
         }
 
-    def send_sms(self, phone_number, message_body, status_callback=None):
+    def send_sms(self, phone_number, message_body, status_callback=None, from_number=None):
         config_error = self.config_error()
         if config_error:
             raise SmsProviderError(config_error)
@@ -217,7 +217,7 @@ class TwilioSmsProvider:
         if self.messaging_service_configured():
             form["MessagingServiceSid"] = self.messaging_service_sid
         else:
-            form["From"] = self.from_number
+            form["From"] = from_number or self.from_number
         if status_callback:
             form["StatusCallback"] = status_callback
 
@@ -291,15 +291,18 @@ def _provider_error_from_response(detail, http_status):
 
 
 def get_sms_provider():
-    if config.SMS_PROVIDER != "twilio":
-        raise SmsProviderError(f"Unsupported SMS provider: {config.SMS_PROVIDER}")
-    return TwilioSmsProvider()
+    """Delegate to provider-neutral factory (Twilio retained; SimpleTexting when selected)."""
+    from sms_providers.factory import get_sms_provider as _factory
+
+    return _factory()
 
 
 def sms_status_callback_url():
     base = (config.APP_URL or "").rstrip("/")
     if not base or "localhost" in base:
         return None
+    if (config.SMS_PROVIDER or "").lower() == "simpletexting":
+        return None  # ST uses registered account webhooks, not per-message callbacks
     return f"{base}/webhook/sms/status"
 
 

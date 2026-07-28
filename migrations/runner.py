@@ -36,6 +36,7 @@ MIGRATION_MODULES = [
     "migrations.versions.009_inbound_sms_metadata",
     "migrations.versions.010_sms_consent_inquiries",
     "migrations.versions.011_external_leads_consent",
+    "migrations.versions.012_simpletexting_multi_tenant_sms",
 ]
 
 # Required after 001_baseline. App has no separate accounts/tenants/subscriptions

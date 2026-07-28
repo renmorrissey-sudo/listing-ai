@@ -210,7 +210,7 @@ def create_external_lead(
     import_batch_id=None,
     property_interest=None,
 ):
-    """Always creates with unverified + blocked SMS consent."""
+    """Always creates with not_certified + blocked SMS consent."""
     now = _now()
     meta = external_payload_meta
     if isinstance(meta, (dict, list)):
@@ -223,7 +223,7 @@ def create_external_lead(
                  notes, assigned_user_id, created_at, updated_at,
                  sms_consent_status, sms_sending_blocked, external_source_id, external_record_id,
                  external_payload_meta, pond_status, import_batch_id, consent_status, opt_out_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unverified', 1, ?, ?, ?, ?, ?, 'unknown', 'active')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not_certified', 1, ?, ?, ?, ?, ?, 'unknown', 'active')
             """,
             (
                 user_id,
@@ -312,13 +312,20 @@ def set_lead_sms_consent_state(
     legacy_consent = lead.get("consent_status")
     legacy_opt = lead.get("opt_out_status")
     if sync_legacy:
-        if sms_consent_status == "verified" and not sms_sending_blocked:
+        if sms_consent_status in {"verified", "user_certified"} and not sms_sending_blocked:
             legacy_consent = "confirmed"
             legacy_opt = "active"
         elif sms_consent_status == "opted_out":
             legacy_consent = lead.get("consent_status") or "unknown"
             legacy_opt = "opted_out"
-        elif sms_consent_status in {"revoked", "not_permitted", "unverified"}:
+        elif sms_consent_status in {
+            "revoked",
+            "not_permitted",
+            "unverified",
+            "not_certified",
+            "suppressed",
+            "invalid_number",
+        }:
             if sms_consent_status == "revoked":
                 legacy_consent = "revoked"
             legacy_opt = legacy_opt or "active"

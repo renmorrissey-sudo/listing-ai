@@ -355,9 +355,10 @@
           <textarea name="message_body" id="sms-message-body" maxlength="480" placeholder="Click Generate SMS to draft a message, then edit before sending."></textarea>
           <div class="muted" id="sms-char-count" style="font-size:12px;margin-top:6px;">0 / 480 characters</div>
         </div>
+        <p class="muted" style="font-size:12px;margin:8px 0;">Warning: TopAI does not independently verify supporting consent records. You are solely responsible for TCPA, DNC, brokerage, and carrier compliance. Bulk sends require a certified campaign.</p>
         <label class="checkbox-row">
-          <input type="checkbox" name="compliance_confirmed" value="true" required />
-          <span>I confirm this lead consented to SMS contact and I am responsible for TCPA, DNC, opt-out, and brokerage compliance.</span>
+          <input type="checkbox" name="compliance_confirmed" id="sms-compliance-confirmed" value="true" required />
+          <span>I certify that this person authorized me/my business to send SMS about real estate services, that I have a supporting consent record (web form, CRM note, signed agreement, or equivalent), and that TopAI does not independently verify that record. I am solely responsible for TCPA, DNC, brokerage, and carrier compliance.</span>
         </label>
         <div class="error-msg" id="sms-error"></div>
         <div id="sms-twilio-status" class="notice" style="margin-top:12px;font-size:12px;display:none;" aria-live="polite"></div>
@@ -788,7 +789,7 @@
           ${statusCard}${fuCard}${tasksCard}${apptCard}
           <label class="checkbox-row" style="margin-top:10px;">
             <input type="checkbox" id="suggest-consent-${item.id}" />
-            <span>I confirm consent before sending this reply.</span>
+            <span>I certify this person authorized SMS from me/my business, I have a supporting consent record, and TopAI does not independently verify that record.</span>
           </label>
           <textarea id="suggest-body-${item.id}" maxlength="480" style="width:100%;min-height:80px;margin-top:8px;padding:10px;border:1.5px solid #dde3f0;border-radius:8px;">${escapeHtml(item.suggested_reply || '')}</textarea>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
@@ -901,7 +902,7 @@
   async function sendSmsSuggestion(insightId, usePitch, requiresManual) {
     const consent = document.getElementById(`suggest-consent-${insightId}`);
     if (!consent || !consent.checked) {
-      alert('Confirm lead consent before sending.');
+      alert('Certify contact SMS consent before sending.');
       return;
     }
     if (requiresManual) {
@@ -1205,13 +1206,30 @@
     btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Generate SMS';
   });
 
+  const smsCompliance = document.getElementById('sms-compliance-confirmed');
+  const smsSendBtn = document.getElementById('sms-send-btn');
+  function syncSmsSendEnabled() {
+    if (!smsSendBtn || !smsCompliance) return;
+    smsSendBtn.disabled = !smsCompliance.checked;
+  }
+  if (smsCompliance) {
+    smsCompliance.addEventListener('change', syncSmsSendEnabled);
+    syncSmsSendEnabled();
+  }
+
   document.getElementById('sms-form').addEventListener('submit', async e => {
     e.preventDefault();
     const btn = document.getElementById('sms-send-btn');
     const spinner = document.getElementById('sms-send-spinner');
     const label = document.getElementById('sms-send-label');
     const errEl = document.getElementById('sms-error');
+    const compliance = document.getElementById('sms-compliance-confirmed');
     errEl.style.display = 'none';
+    if (!compliance || !compliance.checked) {
+      errEl.textContent = 'Certify contact SMS consent before sending.';
+      errEl.style.display = 'block';
+      return;
+    }
     btn.disabled = true; spinner.style.display = 'block'; label.textContent = 'Sending...';
     const data = Object.fromEntries(new FormData(e.target).entries());
     data.compliance_confirmed = Boolean(data.compliance_confirmed);
@@ -1238,7 +1256,8 @@
         if (status) renderTwilioStatus(status);
       } catch (_ignore) {}
     }
-    btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Send SMS';
+    spinner.style.display = 'none'; label.textContent = 'Send SMS';
+    syncSmsSendEnabled();
   });
 
   checkSession();

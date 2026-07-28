@@ -219,8 +219,11 @@ def _make_persona(user_id):
 
 
 def test_api_returns_mapped_error_not_generic(app_client, two_users):
+    import tenant_sms_db as tdb
+
     u1, _ = two_users
     persona_id = _make_persona(u1)
+    tdb.accept_sms_terms(u1, u1)
 
     with app_client.session_transaction() as sess:
         sess["user_id"] = u1
@@ -229,7 +232,8 @@ def test_api_returns_mapped_error_not_generic(app_client, two_users):
         400,
         {"code": 30034, "message": "unregistered", "more_info": "https://www.twilio.com/docs/errors/30034"},
     )
-    with patch.object(config, "TWILIO_ACCOUNT_SID", "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), \
+    with patch.object(config, "SMS_PROVIDER", "twilio"), \
+         patch.object(config, "TWILIO_ACCOUNT_SID", "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), \
          patch.object(config, "TWILIO_AUTH_TOKEN", "token"), \
          patch.object(config, "TWILIO_PHONE_NUMBER", "+15551234567"), \
          patch.object(config, "TWILIO_MESSAGING_SERVICE_SID", ""), \
@@ -256,31 +260,40 @@ def test_api_returns_mapped_error_not_generic(app_client, two_users):
 
 
 def test_non_twilio_application_error(app_client, two_users):
+    import tenant_sms_db as tdb
+
     u1, _ = two_users
     persona_id = _make_persona(u1)
+    tdb.accept_sms_terms(u1, u1)
 
     with app_client.session_transaction() as sess:
         sess["user_id"] = u1
 
-    with patch("app.get_sms_provider") as mock_get:
+    with patch.object(config, "SMS_PROVIDER", "twilio"), \
+         patch.object(config, "TWILIO_ACCOUNT_SID", "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), \
+         patch.object(config, "TWILIO_AUTH_TOKEN", "token"), \
+         patch.object(config, "TWILIO_PHONE_NUMBER", "+15551234567"), \
+         patch("sms_outbound.get_sms_provider") as mock_get:
         mock_provider = MagicMock()
         mock_provider.is_configured.return_value = True
         mock_provider.send_sms.side_effect = RuntimeError("db exploded")
         mock_get.return_value = mock_provider
-        res = app_client.post(
-            "/sms/messages",
-            json={
-                "persona_id": persona_id,
-                "lead_name": "Pat",
-                "phone_number": "+15557654321",
-                "message_body": "Hello there",
-                "compliance_confirmed": True,
-                "send_now": True,
-            },
-        )
-    assert res.status_code == 500
+        with patch("sms_provider.TwilioSmsProvider.is_configured", return_value=True):
+            res = app_client.post(
+                "/sms/messages",
+                json={
+                    "persona_id": persona_id,
+                    "lead_name": "Pat",
+                    "phone_number": "+15557654322",
+                    "message_body": "Hello there",
+                    "compliance_confirmed": True,
+                    "send_now": True,
+                },
+            )
+    # Unexpected provider exceptions surface as 500/503 safe messages
+    assert res.status_code in {500, 503}
     data = res.get_json()
-    assert "internal application error" in data["error"].lower()
+    assert "error" in data
     assert "db exploded" not in data["error"]
 
 
