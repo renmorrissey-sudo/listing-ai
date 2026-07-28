@@ -19,8 +19,14 @@ SMS_CONSENT_CHECKBOX_TEXT = (
     "of purchasing goods or services."
 )
 
-SMS_SUPPORT_DISPLAY = "(720) 903-2519"
-SMS_SUPPORT_E164 = "+17209032519"
+SMS_SUPPORT_DISPLAY = getattr(config, "SMS_SUPPORT_DISPLAY", None) or "(888) 821-0810"
+SMS_SUPPORT_E164 = getattr(config, "SMS_SUPPORT_E164", None) or "+18888210810"
+# Standard HELP keyword reply for the Telnyx toll-free messaging program.
+SMS_HELP_RESPONSE = (
+    f"TopAI RE Tools: For SMS help, contact us at {SMS_SUPPORT_DISPLAY} or reply to this number. "
+    "Message frequency varies. Message and data rates may apply. "
+    "Reply STOP to opt out."
+)
 OPERATOR_LEGAL_NAME = "Sky Blue Holdings LLC"
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")

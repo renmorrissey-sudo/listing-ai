@@ -122,6 +122,41 @@ def test_webhook_inbound_and_stop(two_users, monkeypatch):
     assert tdb.is_suppressed(u1, contact)
 
 
+def test_help_keyword_sends_support_number_reply(two_users, monkeypatch):
+    u1, _ = two_users
+    monkeypatch.setattr(config, "TELNYX_API_KEY", "KEY")
+    monkeypatch.setattr(config, "TELNYX_PHONE_NUMBER", "+18888210810")
+    tdb.upsert_tenant_sender(
+        u1,
+        sender_number="+18888210810",
+        sms_provider="telnyx",
+        sms_enabled=True,
+        registration_status="verified",
+    )
+    contact = _unique_e164("610")
+    payload = {
+        "data": {
+            "event_type": "message.received",
+            "id": f"evt-help-{uuid.uuid4().hex[:10]}",
+            "payload": {
+                "id": f"msg-help-{uuid.uuid4().hex[:10]}",
+                "text": "HELP",
+                "from": {"phone_number": contact},
+                "to": [{"phone_number": "+18888210810"}],
+            },
+        }
+    }
+    with patch.object(TelnyxSMSProvider, "send_message") as send_mock:
+        send_mock.return_value = {"provider_message_id": "help-out-1", "status": "queued"}
+        result, status = txwh.handle_messaging_webhook(payload)
+    assert status == 200
+    assert result["ok"] is True
+    assert send_mock.called
+    kwargs = send_mock.call_args.kwargs
+    assert "(888) 821-0810" in kwargs["body"]
+    assert kwargs["to_number"] == contact
+
+
 def test_webhook_delivery_updates_existing(two_users):
     u1, _ = two_users
     mid = db.create_sms_message(

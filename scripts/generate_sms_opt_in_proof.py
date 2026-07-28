@@ -70,7 +70,7 @@ def main():
 
     draw.rounded_rectangle([x, y, x + 940, y + 130], radius=10, fill="#eef5ff", outline="#cfe0ff")
     support = (
-        "SMS support number: (720) 903-2519\n"
+        "SMS support number: (888) 821-0810\n"
         "Conversational SMS (when you opt in) may include property information, answers to your\n"
         "questions, appointment scheduling, reminders, and follow-up. Message frequency varies.\n"
         "Message and data rates may apply. Reply STOP to opt out or HELP for help.\n"

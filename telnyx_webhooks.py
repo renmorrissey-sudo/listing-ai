@@ -163,6 +163,8 @@ def _handle_received(payload, *, app=None):
             lead_id=lead_id,
             metadata={"note": "START received; suppression not auto-cleared"},
         )
+    elif keyword == "help":
+        _send_help_reply(provider, user_id, lead_id, contact, account_phone)
 
     tdb.append_sms_audit(
         user_id,
@@ -231,6 +233,52 @@ def _handle_delivery(payload):
     if event.get("event_id"):
         tdb.mark_webhook_processed("telnyx", str(event["event_id"]), "processed")
     return {"ok": True, "status": mapped}, 200
+
+
+def _send_help_reply(provider, user_id, lead_id, contact_phone, from_number):
+    """Compliance HELP auto-reply for the Telnyx messaging program."""
+    import sms_consent
+
+    body = sms_consent.SMS_HELP_RESPONSE
+    try:
+        result = provider.send_message(
+            to_number=contact_phone,
+            body=body,
+            from_number=from_number or None,
+        )
+        out_id = db.create_sms_message(
+            user_id=user_id,
+            persona_id=None,
+            provider="telnyx",
+            data={
+                "lead_name": "SMS Contact",
+                "phone_number": contact_phone,
+                "message_body": body,
+            },
+            status="sent",
+            lead_id=lead_id,
+            direction="outbound",
+            consent_status="unknown",
+            opt_out_status="active",
+        )
+        pmid = (result or {}).get("provider_message_id")
+        if pmid:
+            db.update_sms_message_send_result(out_id, provider_message_id=str(pmid), status="sent")
+        tdb.append_sms_audit(
+            user_id,
+            "HELP_reply_sent",
+            lead_id=lead_id,
+            metadata={"message_id": out_id},
+        )
+        crm_db.add_lead_activity(
+            lead_id,
+            user_id,
+            "sms_help",
+            "HELP keyword auto-reply sent",
+            {"message_id": out_id},
+        )
+    except Exception:
+        logger.exception("Failed to send Telnyx HELP reply")
 
 
 def _apply_opt_out(user_id, lead_id, phone, *, source):

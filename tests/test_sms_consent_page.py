@@ -5,7 +5,13 @@ from unittest.mock import patch
 
 import db
 import sms_consent
-from sms_consent import SMS_CONSENT_CHECKBOX_TEXT, SMS_CONSENT_DISCLOSURE_VERSION
+from sms_consent import (
+    SMS_CONSENT_CHECKBOX_TEXT,
+    SMS_CONSENT_DISCLOSURE_VERSION,
+    SMS_HELP_RESPONSE,
+    SMS_SUPPORT_DISPLAY,
+    SMS_SUPPORT_E164,
+)
 
 
 def test_sms_consent_page_is_public(app_client):
@@ -16,7 +22,11 @@ def test_sms_consent_page_is_public(app_client):
     assert "Subscriber Access" not in html
     assert "TopAI RE Tools" in html
     assert "Sky Blue Holdings LLC" in html
-    assert "(720) 903-2519" in html
+    assert "(888) 821-0810" in html
+    assert SMS_SUPPORT_DISPLAY == "(888) 821-0810"
+    assert SMS_SUPPORT_E164 == "+18888210810"
+    assert "(888) 821-0810" in SMS_HELP_RESPONSE
+    assert "(720) 903-2519" not in html
     assert 'name="sms_consent"' in html
     assert 'name="first_name"' in html
     assert 'name="last_name"' in html

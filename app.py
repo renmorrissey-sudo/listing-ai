@@ -1565,10 +1565,12 @@ def sms_consent():
         cleaned["sms_consent"],
         created_new,
     )
+    support = sms_consent_mod.SMS_SUPPORT_DISPLAY
     if created_new:
         ctx["success"] = (
             "Thanks — your inquiry and SMS consent were recorded. "
             "We will not send an automated text just because you submitted this form. "
+            f"SMS support number: {support}. "
             "Message frequency varies. Message and data rates may apply. "
             "Reply STOP to opt out or HELP for help."
         )
@@ -1576,7 +1578,7 @@ def sms_consent():
         ctx["success"] = (
             "Thanks — we already have your SMS consent on file for this number. "
             "Your inquiry details were updated. We will not send an automated text "
-            "just because you submitted this form."
+            f"just because you submitted this form. SMS support number: {support}."
         )
     ctx.update(form_defaults)
     ctx["form_campaign_source"] = campaign_source

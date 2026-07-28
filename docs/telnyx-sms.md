@@ -28,7 +28,9 @@ API version on Messaging Profile: **API V2**.
 | `SMS_PROVIDER=telnyx` | Active provider |
 | `TELNYX_API_KEY` | Secret |
 | `TELNYX_MESSAGING_PROFILE_ID` | Profile for webhooks / optional send |
-| `TELNYX_PHONE_NUMBER` | Trial / pilot From (E.164) |
+| `TELNYX_PHONE_NUMBER` | Toll-free messaging / From number (E.164). Production: `+18888210810` |
+| `SMS_SUPPORT_DISPLAY` | Public SMS support display (default `(888) 821-0810`) |
+| `SMS_SUPPORT_E164` | Public SMS support E.164 (default `+18888210810`) |
 | `TELNYX_PUBLIC_KEY` | Ed25519 webhook verify |
 | `TELNYX_TRIAL_MODE=true` | Restrict destinations |
 | `TELNYX_VERIFIED_TEST_NUMBER` | Only allowed destination in trial |
@@ -40,9 +42,22 @@ API version on Messaging Profile: **API V2**.
 - **web:** `python -m migrations.runner && gunicorn app:app ...`
 - **worker:** `python -m workers.sms_campaign_worker`
 
+## SMS program support number
+
+| Format | Value |
+|--------|--------|
+| Display | `(888) 821-0810` |
+| E.164 | `+18888210810` |
+
+Used on `/sms-consent`, Privacy Policy, Terms, opt-in confirmation copy, and the Telnyx HELP auto-reply:
+
+> TopAI RE Tools: For SMS help, contact us at (888) 821-0810 or reply to this number. Message frequency varies. Message and data rates may apply. Reply STOP to opt out.
+
+Public opt-in workflow screenshot: `https://topairealestatetools.com/static/sms-opt-in-proof.png`
+
 ## Trial test sequence
 
-1. Set vars above; deploy web + worker.
+1. Set vars above; deploy web + worker. Confirm Railway `TELNYX_PHONE_NUMBER=+18888210810`.
 2. Messaging Profile → webhook URL above (API V2).
 3. Accept SMS terms at `/crm/sms-diagnostics`.
 4. AI SMS: lead phone = verified test number → certify checkbox → Send.

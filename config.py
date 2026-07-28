@@ -114,8 +114,12 @@ SIMPLETEXTING_API_BASE = (
 # Telnyx Messaging API V2 (active when SMS_PROVIDER=telnyx).
 TELNYX_API_KEY = _env_strip("TELNYX_API_KEY")
 TELNYX_MESSAGING_PROFILE_ID = _env_strip("TELNYX_MESSAGING_PROFILE_ID")
+# Production toll-free messaging / SMS program number (E.164).
 TELNYX_PHONE_NUMBER = _env_strip("TELNYX_PHONE_NUMBER")
 TELNYX_PUBLIC_KEY = _env_strip("TELNYX_PUBLIC_KEY")
+# Public SMS support display used on /sms-consent and compliance copy.
+SMS_SUPPORT_DISPLAY = _env_strip("SMS_SUPPORT_DISPLAY") or "(888) 821-0810"
+SMS_SUPPORT_E164 = _env_strip("SMS_SUPPORT_E164") or "+18888210810"
 TELNYX_TRIAL_MODE = (_env("TELNYX_TRIAL_MODE", "true") or "true").lower() in {
     "1",
     "true",
