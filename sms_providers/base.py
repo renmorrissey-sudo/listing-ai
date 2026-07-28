@@ -100,6 +100,15 @@ class BaseSMSProvider(ABC):
     def supports_scheduling(self) -> bool:
         return False
 
+    def estimate_segments(self, text: str) -> dict:
+        return {"encoding": "unknown", "character_count": len(text or ""), "segments": None}
+
+    def supports_mms(self) -> bool:
+        return False
+
+    def normalize_opt_out_event(self, payload: dict) -> dict:
+        return self.normalize_unsubscribe_webhook(payload)
+
     def supports_link_tracking(self) -> bool:
         return False
 

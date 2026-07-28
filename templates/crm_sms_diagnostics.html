@@ -14,14 +14,28 @@
   <main>
     <h1>SMS diagnostics</h1>
     <p class="muted">{{ warning }}</p>
+    {% if telnyx_trial_mode %}
+    <div class="flash err" style="display:block;">Telnyx trial mode is active. Messages can only be sent to the verified test phone number.</div>
+    {% endif %}
     <div class="card">
       <ul>
         <li>Active provider: <strong>{{ active_provider }}</strong></li>
         <li>Provider configured: {{ provider_configured }}</li>
-        <li>API token configured: {{ token_configured }}</li>
-        <li>Webhook secret configured: {{ webhook_secret_configured }}</li>
+        <li>API credentials configured: {{ token_configured }}</li>
+        <li>Webhook auth configured: {{ webhook_secret_configured }}</li>
+        {% if active_provider == 'telnyx' %}
+        <li>Telnyx trial mode: {{ 'active' if telnyx_trial_mode else 'inactive' }}</li>
+        <li>Messaging Profile configured: {{ telnyx_profile_configured }}</li>
+        <li>Platform sender number configured: {{ telnyx_phone_configured }}</li>
+        <li>Verified test destination configured: {{ telnyx_verified_test_configured }}</li>
+        <li>Public key configured: {{ telnyx_public_key_configured }}</li>
+        <li>Webhook route: {{ webhook_route }}</li>
+        {% endif %}
         <li>Tenant sender: {% if sender %}{{ sender.sender_number }} ({{ sender.registration_status }}){% else %}{{ sender_error }}{% endif %}</li>
         <li>SMS terms ({{ terms_version }}): {{ 'accepted' if terms_ok else 'not accepted' }}</li>
+        <li>Queue backlog (pending/claimed jobs): {{ queue_backlog }}</li>
+        <li>Last outbound: {% if last_outbound %}#{{ last_outbound.id }} {{ last_outbound.status }}{% else %}none{% endif %}</li>
+        <li>Last inbound: {% if last_inbound %}#{{ last_inbound.id }} {{ last_inbound.status }}{% else %}none{% endif %}</li>
       </ul>
       {% if not terms_ok %}
       <form method="post">

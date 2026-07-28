@@ -803,19 +803,31 @@ def sms_messages():
 @app.route("/sms/status")
 @auth.subscription_required
 def sms_status():
-    """Account-owner Twilio configuration / latest send error (no secrets)."""
+    """Account-owner SMS configuration / latest send error (no secrets)."""
     user = auth.get_current_user()
     provider = get_sms_provider()
     latest = db.latest_failed_sms_error(user["id"])
     latest_code = parse_provider_code_from_error_message(
         (latest or {}).get("error_message")
     )
-    return jsonify(
-        provider.configuration_status(
+    if hasattr(provider, "configuration_status"):
+        payload = provider.configuration_status(
             latest_error_code=latest_code,
             latest_error_message=(latest or {}).get("error_message"),
         )
+    else:
+        payload = provider.get_sender_information()
+        payload["latest_error_code"] = latest_code
+        payload["latest_error_message"] = (latest or {}).get("error_message")
+    payload["trial_mode"] = bool(getattr(config, "TELNYX_TRIAL_MODE", False)) and (
+        (config.SMS_PROVIDER or "").lower() == "telnyx"
     )
+    payload["trial_message"] = (
+        "Telnyx trial mode is active. Messages can only be sent to the verified test phone number."
+        if payload.get("trial_mode")
+        else None
+    )
+    return jsonify(payload)
 
 
 @app.route("/sms/leads")
@@ -1144,6 +1156,13 @@ def sms_test_send():
             return jsonify({"ok": False, "error": err, **(result or {})}), status
         return jsonify({"ok": True, **result, "to": cleaned["to"]}), status
 
+    # Also enforce trial for non-lead test destinations
+    from sms_authorization import check_telnyx_trial_destination
+
+    trial_ok, trial_err = check_telnyx_trial_destination(cleaned["to"])
+    if not trial_ok:
+        return jsonify({"ok": False, "error": trial_err, "provider": "telnyx"}), 403
+
     sender, sender_err = require_tenant_sender(user["id"])
     if sender_err:
         return jsonify({"ok": False, "error": sender_err}), 403
@@ -1191,6 +1210,26 @@ def sms_test_send():
         safe = "SMS could not be sent due to an internal application error."
         db.update_sms_message_send_result(message_id, status="failed", error_message=safe)
         return jsonify({"ok": False, "error": safe}), 500
+
+
+@app.route("/webhooks/telnyx/messaging", methods=["POST"])
+@limiter.exempt
+def telnyx_messaging_webhook():
+    """Telnyx Messaging Profile API V2 webhook. Ed25519 signature required in production."""
+    from sms_providers.telnyx import TelnyxSMSProvider
+    import telnyx_webhooks as txwh
+
+    provider = TelnyxSMSProvider()
+    if not provider.validate_webhook(request):
+        return jsonify({"ok": False, "error": "Invalid webhook signature"}), 401
+    payload = request.get_json(silent=True) or {}
+    try:
+        result, status = txwh.handle_messaging_webhook(payload, app=app)
+        return jsonify(result), status
+    except Exception:
+        logger.exception("Telnyx webhook failed")
+        # Ack to avoid infinite retries on unexpected bugs after persistence attempt
+        return jsonify({"ok": False}), 200
 
 
 @app.route("/webhooks/simpletexting/inbound", methods=["POST"])

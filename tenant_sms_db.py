@@ -725,3 +725,116 @@ def count_sends_to_contact_since(user_id, phone_number, since_iso):
             (user_id, phone_number, since_iso),
         ).fetchone()
         return int(row["count"] if row else 0)
+
+
+def get_any_telnyx_sender():
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM tenant_sms_senders
+            WHERE sms_enabled = 1 AND registration_status = 'verified'
+              AND (sms_provider = 'telnyx' OR sms_provider IS NULL)
+            ORDER BY id DESC LIMIT 1
+            """
+        ).fetchone()
+        return _row(row)
+
+
+def record_webhook_event(
+    *,
+    provider,
+    provider_event_id,
+    event_type,
+    tenant_id=None,
+    provider_message_id=None,
+    processing_status="received",
+    safe_metadata=None,
+):
+    now = _now()
+    meta = json.dumps(safe_metadata) if isinstance(safe_metadata, dict) else safe_metadata
+    with get_db() as conn:
+        try:
+            conn.execute(
+                """
+                INSERT INTO sms_webhook_events
+                    (provider, provider_event_id, event_type, tenant_id, provider_message_id,
+                     processing_status, received_at, safe_metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    provider,
+                    provider_event_id,
+                    event_type,
+                    tenant_id,
+                    provider_message_id,
+                    processing_status,
+                    now,
+                    meta,
+                ),
+            )
+        except Exception:
+            # Unique constraint / table missing during partial migrate
+            return None
+
+
+def get_webhook_event_by_provider_id(provider, provider_event_id):
+    if not provider_event_id:
+        return None
+    with get_db() as conn:
+        try:
+            row = conn.execute(
+                """
+                SELECT * FROM sms_webhook_events
+                WHERE provider = ? AND provider_event_id = ?
+                LIMIT 1
+                """,
+                (provider, provider_event_id),
+            ).fetchone()
+            return _row(row)
+        except Exception:
+            return None
+
+
+def mark_webhook_processed(provider, provider_event_id, status="processed"):
+    if not provider_event_id:
+        return
+    with get_db() as conn:
+        try:
+            conn.execute(
+                """
+                UPDATE sms_webhook_events
+                SET processing_status = ?, processed_at = ?
+                WHERE provider = ? AND provider_event_id = ?
+                """,
+                (status, _now(), provider, provider_event_id),
+            )
+        except Exception:
+            pass
+
+
+def latest_sms_event(user_id=None, *, direction=None, provider=None):
+    with get_db() as conn:
+        sql = "SELECT * FROM sms_messages WHERE 1=1"
+        params = []
+        if user_id:
+            sql += " AND user_id = ?"
+            params.append(user_id)
+        if direction:
+            sql += " AND direction = ?"
+            params.append(direction)
+        if provider:
+            sql += " AND provider = ?"
+            params.append(provider)
+        sql += " ORDER BY id DESC LIMIT 1"
+        return _row(conn.execute(sql, params).fetchone())
+
+
+def count_pending_campaign_jobs():
+    with get_db() as conn:
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) AS count FROM sms_campaign_jobs WHERE status IN ('pending', 'claimed')"
+            ).fetchone()
+            return int(row["count"] if row else 0)
+        except Exception:
+            return 0

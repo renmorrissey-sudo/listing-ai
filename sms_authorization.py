@@ -67,6 +67,29 @@ def get_tenant_from_number(account_phone):
     return tdb.get_sender_by_number(account_phone)
 
 
+TRIAL_BLOCK_MSG = (
+    "Telnyx trial messaging can only send to the verified test phone number."
+)
+
+
+def _normalize_digits(phone):
+    return "".join(c for c in str(phone or "") if c.isdigit())
+
+
+def check_telnyx_trial_destination(to_number):
+    """Return (ok, error_message). Only enforces when Telnyx trial mode is on."""
+    if (config.SMS_PROVIDER or "").lower() != "telnyx":
+        return True, None
+    if not config.TELNYX_TRIAL_MODE:
+        return True, None
+    verified = (config.TELNYX_VERIFIED_TEST_NUMBER or "").strip()
+    if not verified:
+        return False, "Telnyx trial mode requires TELNYX_VERIFIED_TEST_NUMBER to be configured."
+    if _normalize_digits(to_number) != _normalize_digits(verified):
+        return False, TRIAL_BLOCK_MSG
+    return True, None
+
+
 def require_tenant_sender(user_id):
     sender = tdb.get_active_sender(user_id)
     if sender:
@@ -84,12 +107,26 @@ def require_tenant_sender(user_id):
                 "sms_enabled": True,
                 "registration_status": "verified",
             }, None
+    # Telnyx trial / single-tenant pilot: global From allowed only in trial mode.
+    if (config.SMS_PROVIDER or "").lower() == "telnyx":
+        if config.TELNYX_TRIAL_MODE and config.TELNYX_PHONE_NUMBER:
+            return {
+                "user_id": user_id,
+                "sender_number": config.TELNYX_PHONE_NUMBER,
+                "sms_provider": "telnyx",
+                "messaging_profile_id": config.TELNYX_MESSAGING_PROFILE_ID,
+                "sms_enabled": True,
+                "registration_status": "verified",
+                "trial_mode": True,
+            }, None
     # Never use global SIMPLETEXTING_PHONE_NUMBER as implicit tenant sender.
     return None, NO_SENDER_MSG
 
 
 def _provider_credentials_ok():
     provider = (config.SMS_PROVIDER or "").lower()
+    if provider == "telnyx":
+        return bool(config.TELNYX_API_KEY)
     if provider == "simpletexting":
         return bool(config.SIMPLETEXTING_API_TOKEN)
     if provider == "twilio":
@@ -161,6 +198,10 @@ def can_send_sms(
     cleaned, err = validate_e164_phone(phone)
     if err or not cleaned:
         return False, "Lead does not have a valid mobile phone number."
+
+    trial_ok, trial_err = check_telnyx_trial_destination(cleaned)
+    if not trial_ok:
+        return False, trial_err
 
     status = _status(lead)
     if (lead.get("opt_out_status") or "active") == "opted_out" or status == OPTED_OUT:

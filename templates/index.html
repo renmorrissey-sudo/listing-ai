@@ -358,10 +358,11 @@
         <p class="muted" style="font-size:12px;margin:8px 0;">Warning: TopAI does not independently verify supporting consent records. You are solely responsible for TCPA, DNC, brokerage, and carrier compliance. Bulk sends require a certified campaign.</p>
         <label class="checkbox-row">
           <input type="checkbox" name="compliance_confirmed" id="sms-compliance-confirmed" value="true" required />
-          <span>I certify that this person authorized me/my business to send SMS about real estate services, that I have a supporting consent record (web form, CRM note, signed agreement, or equivalent), and that TopAI does not independently verify that record. I am solely responsible for TCPA, DNC, brokerage, and carrier compliance.</span>
+          <span>I confirm that this contact has consented to receive SMS messages from me or my business for this purpose. I maintain the supporting consent records and am responsible for TCPA, DNC, carrier, brokerage, privacy, opt-out, and local-law compliance.</span>
         </label>
         <div class="error-msg" id="sms-error"></div>
         <div id="sms-twilio-status" class="notice" style="margin-top:12px;font-size:12px;display:none;" aria-live="polite"></div>
+        <div id="sms-trial-banner" class="notice" style="margin-top:12px;font-size:12px;display:none;border-color:#c45c26;color:#7a3410;" aria-live="polite"></div>
         <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
           <button type="button" class="btn-generate" id="sms-generate-btn" style="flex:1;"><div class="spinner" id="sms-generate-spinner"></div><span id="sms-generate-label">Generate SMS</span></button>
           <button type="submit" class="btn-generate" id="sms-send-btn" style="flex:1;"><div class="spinner" id="sms-send-spinner"></div><span id="sms-send-label">Send SMS</span></button>
@@ -477,7 +478,30 @@
 
   function renderTwilioStatus(status) {
     const panel = document.getElementById('sms-twilio-status');
+    const trial = document.getElementById('sms-trial-banner');
+    if (trial) {
+      if (status && status.trial_mode && status.trial_message) {
+        trial.textContent = status.trial_message;
+        trial.style.display = 'block';
+      } else {
+        trial.style.display = 'none';
+      }
+    }
     if (!panel || !status) return;
+    if (status.provider === 'telnyx') {
+      const yesNo = (v) => (v ? 'yes' : 'no');
+      const rows = [
+        `Active provider: telnyx`,
+        `API key configured: ${yesNo(status.api_key_configured)}`,
+        `Messaging Profile configured: ${yesNo(status.messaging_profile_configured)}`,
+        `Sender configured: ${yesNo(status.phone_number_configured)}`,
+        `Trial mode: ${yesNo(status.trial_mode)}`,
+      ];
+      if (status.latest_error_message) rows.push(`Latest error: ${status.latest_error_message}`);
+      panel.innerHTML = `<strong>SMS provider status</strong><br/>${rows.map(escapeHtml).join('<br/>')}`;
+      panel.style.display = 'block';
+      return;
+    }
     const yesNo = (v) => (v ? 'yes' : 'no');
     const a2pLabels = {
       blocked_unregistered: 'Blocked — number not on an approved A2P campaign (Twilio 30034)',

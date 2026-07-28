@@ -111,6 +111,22 @@ SIMPLETEXTING_PHONE_NUMBER = _env_strip("SIMPLETEXTING_PHONE_NUMBER")
 SIMPLETEXTING_API_BASE = (
     _env_strip("SIMPLETEXTING_API_BASE") or "https://api-app2.simpletexting.com/v2"
 )
+# Telnyx Messaging API V2 (active when SMS_PROVIDER=telnyx).
+TELNYX_API_KEY = _env_strip("TELNYX_API_KEY")
+TELNYX_MESSAGING_PROFILE_ID = _env_strip("TELNYX_MESSAGING_PROFILE_ID")
+TELNYX_PHONE_NUMBER = _env_strip("TELNYX_PHONE_NUMBER")
+TELNYX_PUBLIC_KEY = _env_strip("TELNYX_PUBLIC_KEY")
+TELNYX_TRIAL_MODE = (_env("TELNYX_TRIAL_MODE", "true") or "true").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+TELNYX_VERIFIED_TEST_NUMBER = _env_strip("TELNYX_VERIFIED_TEST_NUMBER")
+TELNYX_API_BASE = _env_strip("TELNYX_API_BASE") or "https://api.telnyx.com/v2"
+TELNYX_WEBHOOK_TOLERANCE_SECONDS = int(_env("TELNYX_WEBHOOK_TOLERANCE_SECONDS", "300"))
+SMS_PROVIDER_MSGS_PER_SECOND = float(_env("SMS_PROVIDER_MSGS_PER_SECOND", "1"))
+
 CONSENT_UPLOAD_DIR = _env_strip("CONSENT_UPLOAD_DIR") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "private_uploads", "consent_evidence"
 )

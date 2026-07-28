@@ -37,6 +37,7 @@ MIGRATION_MODULES = [
     "migrations.versions.010_sms_consent_inquiries",
     "migrations.versions.011_external_leads_consent",
     "migrations.versions.012_simpletexting_multi_tenant_sms",
+    "migrations.versions.013_telnyx_messaging",
 ]
 
 # Required after 001_baseline. App has no separate accounts/tenants/subscriptions

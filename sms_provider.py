@@ -301,8 +301,11 @@ def sms_status_callback_url():
     base = (config.APP_URL or "").rstrip("/")
     if not base or "localhost" in base:
         return None
-    if (config.SMS_PROVIDER or "").lower() == "simpletexting":
+    provider = (config.SMS_PROVIDER or "").lower()
+    if provider == "simpletexting":
         return None  # ST uses registered account webhooks, not per-message callbacks
+    if provider == "telnyx":
+        return f"{base}/webhooks/telnyx/messaging"
     return f"{base}/webhook/sms/status"
 
 

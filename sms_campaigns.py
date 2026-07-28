@@ -162,41 +162,59 @@ def campaign_detail(campaign_id):
 
         if action == "launch":
             campaign = tdb.get_campaign(campaign_id, user["id"])
-            att = tdb.get_valid_campaign_attestation(
-                user["id"],
-                campaign_id,
-                message_body=campaign.get("message_template") or "",
-                audience_snapshot_id=campaign.get("audience_snapshot_id") or "",
-                purpose=campaign.get("campaign_purpose") or "campaign",
-            )
-            if not att:
-                error = "Certify the final audience and message before launch."
-            elif sender_err:
-                error = sender_err
-            else:
-                scheduled = (request.form.get("scheduled_at") or "").strip() or None
-                tdb.create_jobs_for_campaign(campaign_id, user["id"])
-                if scheduled:
-                    tdb.update_campaign(
-                        campaign_id, user["id"], status="scheduled", scheduled_at=scheduled
+            if config.TELNYX_TRIAL_MODE and (config.SMS_PROVIDER or "").lower() == "telnyx":
+                recipients = tdb.list_campaign_recipients(campaign_id, user["id"], eligible_only=True)
+                verified = "".join(c for c in (config.TELNYX_VERIFIED_TEST_NUMBER or "") if c.isdigit())
+                bad = [
+                    r
+                    for r in recipients
+                    if "".join(c for c in (r.get("phone_number") or "") if c.isdigit()) != verified
+                ]
+                if bad or not recipients:
+                    error = (
+                        "Telnyx trial mode: campaign audience must contain only the verified test phone number."
                     )
-                    tdb.append_sms_audit(
-                        user["id"], "campaign_scheduled", actor_user_id=user["id"], campaign_id=campaign_id
-                    )
+                    # Fall through to render with error
                 else:
-                    from datetime import datetime, timezone
+                    error = None
+            else:
+                error = None
+            if not error:
+                att = tdb.get_valid_campaign_attestation(
+                    user["id"],
+                    campaign_id,
+                    message_body=campaign.get("message_template") or "",
+                    audience_snapshot_id=campaign.get("audience_snapshot_id") or "",
+                    purpose=campaign.get("campaign_purpose") or "campaign",
+                )
+                if not att:
+                    error = "Certify the final audience and message before launch."
+                elif sender_err:
+                    error = sender_err
+                else:
+                    scheduled = (request.form.get("scheduled_at") or "").strip() or None
+                    tdb.create_jobs_for_campaign(campaign_id, user["id"])
+                    if scheduled:
+                        tdb.update_campaign(
+                            campaign_id, user["id"], status="scheduled", scheduled_at=scheduled
+                        )
+                        tdb.append_sms_audit(
+                            user["id"], "campaign_scheduled", actor_user_id=user["id"], campaign_id=campaign_id
+                        )
+                    else:
+                        from datetime import datetime, timezone
 
-                    tdb.update_campaign(
-                        campaign_id,
-                        user["id"],
-                        status="processing",
-                        started_at=datetime.now(timezone.utc).isoformat(),
-                    )
-                    tdb.append_sms_audit(
-                        user["id"], "campaign_launched", actor_user_id=user["id"], campaign_id=campaign_id
-                    )
-                flash("Campaign queued. The worker sends messages outside this request.")
-                return redirect(url_for("sms_campaigns.campaign_detail", campaign_id=campaign_id))
+                        tdb.update_campaign(
+                            campaign_id,
+                            user["id"],
+                            status="processing",
+                            started_at=datetime.now(timezone.utc).isoformat(),
+                        )
+                        tdb.append_sms_audit(
+                            user["id"], "campaign_launched", actor_user_id=user["id"], campaign_id=campaign_id
+                        )
+                    flash("Campaign queued. The worker sends messages outside this request.")
+                    return redirect(url_for("sms_campaigns.campaign_detail", campaign_id=campaign_id))
 
         if action in {"pause", "resume", "cancel"}:
             mapping = {
@@ -388,13 +406,34 @@ def sms_diagnostics():
 
     provider = get_sms_provider()
     sender, sender_err = require_tenant_sender(user["id"])
+    last_out = tdb.latest_sms_event(user["id"], direction="outbound")
+    last_in = tdb.latest_sms_event(user["id"], direction="inbound")
     info = {
         "active_provider": config.SMS_PROVIDER,
         "provider_configured": provider.is_configured(),
         "sender": sender,
         "sender_error": sender_err,
-        "token_configured": bool(config.SIMPLETEXTING_API_TOKEN),
-        "webhook_secret_configured": bool(config.SIMPLETEXTING_WEBHOOK_SECRET),
+        "token_configured": bool(
+            config.TELNYX_API_KEY
+            if (config.SMS_PROVIDER or "").lower() == "telnyx"
+            else config.SIMPLETEXTING_API_TOKEN
+        ),
+        "webhook_secret_configured": bool(
+            config.TELNYX_PUBLIC_KEY
+            if (config.SMS_PROVIDER or "").lower() == "telnyx"
+            else config.SIMPLETEXTING_WEBHOOK_SECRET
+        ),
+        "telnyx_trial_mode": bool(config.TELNYX_TRIAL_MODE)
+        if (config.SMS_PROVIDER or "").lower() == "telnyx"
+        else False,
+        "telnyx_profile_configured": bool(config.TELNYX_MESSAGING_PROFILE_ID),
+        "telnyx_phone_configured": bool(config.TELNYX_PHONE_NUMBER),
+        "telnyx_verified_test_configured": bool(config.TELNYX_VERIFIED_TEST_NUMBER),
+        "telnyx_public_key_configured": bool(config.TELNYX_PUBLIC_KEY),
+        "webhook_route": "/webhooks/telnyx/messaging",
+        "last_outbound": last_out,
+        "last_inbound": last_in,
+        "queue_backlog": tdb.count_pending_campaign_jobs(),
         "terms_ok": tdb.has_accepted_sms_terms(user["id"]),
         "terms_version": config.SMS_TERMS_VERSION,
         "one_to_one_cert_text": ONE_TO_ONE_CERT_TEXT,
