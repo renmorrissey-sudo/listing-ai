@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 import sms_coach
 from crm import crm_bp
 from crm_constants import status_label
+from external_leads_routes import external_leads_bp
 from sms_prompts import build_sms_prompt
 from sms_provider import (
     SmsProviderError,
@@ -65,6 +66,7 @@ app.config["PERMANENT_SESSION_LIFETIME"] = 86400 * 14
 
 db.init_db()
 app.register_blueprint(crm_bp)
+app.register_blueprint(external_leads_bp)
 client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 if config.STRIPE_SECRET_KEY:
@@ -986,11 +988,14 @@ def send_sms_suggestion(insight_id):
         return jsonify({"error": "Lead not found."}), 404
     if (lead.get("opt_out_status") or "active") == "opted_out":
         return jsonify({"error": "This lead opted out. Do not send SMS."}), 403
-    from sms_consent import outbound_sms_blocked_for_phone
+    from sms_authorization import attest_internal_sms_consent, can_send_sms
 
-    blocked = outbound_sms_blocked_for_phone(lead.get("phone_number") or "")
-    if blocked:
-        return jsonify({"error": blocked}), 403
+    if lead.get("external_source_id") or str(lead.get("source") or "").startswith("external:"):
+        allowed, block_msg = can_send_sms(user["id"], lead["id"])
+    else:
+        allowed, block_msg = attest_internal_sms_consent(user["id"], lead["id"])
+    if not allowed:
+        return jsonify({"error": block_msg}), 403
 
     message_id = insight.get("suggested_message_id")
     if message_id:
@@ -1109,13 +1114,22 @@ def send_sms_message():
     if not persona:
         return jsonify({"error": "Selected persona was not found."}), 404
 
-    from sms_consent import outbound_sms_blocked_for_phone
-
-    blocked = outbound_sms_blocked_for_phone(cleaned["phone_number"])
-    if blocked and cleaned.get("send_now"):
-        return jsonify({"error": blocked}), 403
-
     from lead_service import SMS_SOURCE
+    from sms_authorization import attest_internal_sms_consent, can_send_sms
+
+    # Pre-check against existing lead if phone already known to this tenant.
+    existing_lead = db.get_lead_by_phone(user["id"], cleaned["phone_number"])
+    if existing_lead and cleaned.get("send_now"):
+        if existing_lead.get("external_source_id") or str(existing_lead.get("source") or "").startswith(
+            "external:"
+        ):
+            allowed, block_msg = can_send_sms(user["id"], existing_lead["id"])
+            if not allowed:
+                return jsonify({"error": block_msg}), 403
+        else:
+            allowed, block_msg = attest_internal_sms_consent(user["id"], existing_lead["id"])
+            if not allowed:
+                return jsonify({"error": block_msg}), 403
 
     lead_id, _created, _lead = upsert_crm_lead(
         user["id"],
@@ -1125,6 +1139,19 @@ def send_sms_message():
         touch_sms=True,
         assigned_user_id=user["id"],
     )
+    if cleaned.get("send_now"):
+        lead_row = db.get_lead(lead_id, user["id"])
+        if lead_row and (
+            lead_row.get("external_source_id")
+            or str(lead_row.get("source") or "").startswith("external:")
+        ):
+            allowed, block_msg = can_send_sms(user["id"], lead_id)
+            if not allowed:
+                return jsonify({"error": block_msg}), 403
+        else:
+            allowed, block_msg = attest_internal_sms_consent(user["id"], lead_id)
+            if not allowed:
+                return jsonify({"error": block_msg}), 403
     # validate_sms_send_payload already required compliance_confirmed.
     consent_status = "confirmed"
     db.set_lead_consent(lead_id, user["id"], "confirmed")
@@ -1213,6 +1240,15 @@ def sms_test_send():
     cleaned, error = validate_sms_test_payload(data)
     if error:
         return jsonify({"ok": False, "error": error}), 400
+
+    # Never bypass lead consent when the destination is an existing CRM lead phone.
+    from sms_authorization import can_send_sms
+
+    existing_lead = db.get_lead_by_phone(user["id"], cleaned["to"])
+    if existing_lead:
+        allowed, block_msg = can_send_sms(user["id"], existing_lead["id"])
+        if not allowed:
+            return jsonify({"ok": False, "error": block_msg}), 403
 
     provider = get_sms_provider()
     if not provider.is_configured():
@@ -1425,6 +1461,36 @@ def voice_webhook():
             logger.exception("Failed to apply voice webhook to CRM lead")
 
     return jsonify({"received": True}), 200
+
+
+@app.route("/api/external-leads/webhook/<provider_key>", methods=["POST"])
+@limiter.limit("60 per minute")
+def external_leads_webhook(provider_key):
+    """Authenticated tenant webhook. No session auth — secret header required."""
+    from external_leads.webhook import process_webhook
+
+    secret = (
+        request.headers.get("X-TopAI-Webhook-Secret")
+        or request.headers.get("X-Webhook-Secret")
+        or ""
+    )
+    body = request.get_json(silent=True)
+    if body is None:
+        body = {}
+    result, error, status = process_webhook(provider_key, body, secret)
+    if error:
+        return jsonify({"ok": False, "error": error}), status
+    return jsonify(
+        {
+            "ok": True,
+            "action": result.get("action"),
+            "lead_id": result.get("lead_id"),
+            "duplicate_match": result.get("duplicate_match"),
+            "pending_evidence_id": result.get("pending_evidence_id"),
+            "sms_consent_status": "unverified",
+            "sms_sending_blocked": True,
+        }
+    ), status
 
 
 @app.route("/sms-consent", methods=["GET", "POST"])

@@ -261,11 +261,72 @@ NEEDS_ATTENTION_REASONS = {
     "appointment_outcome_missing": "Appointment outcome not recorded",
     "appointment_no_show": "Appointment no-show — follow up required",
     "opt_out": "Opt-out request received",
+    "consent_review_required": "Consent review required",
     "call_failed": "AI call failed or did not connect",
     "review_call_outcome": "Review AI call outcome",
 }
 
-PROTECTED_RESOLVE_REASONS = {"opt_out", "delivery_failed", "sensitive_topic"}
+PROTECTED_RESOLVE_REASONS = {"opt_out", "delivery_failed", "sensitive_topic", "consent_review_required"}
+
+SMS_CONSENT_STATUSES = (
+    "unverified",
+    "verified",
+    "opted_out",
+    "revoked",
+    "not_permitted",
+)
+
+CONSENT_METHODS = (
+    "direct_web_form",
+    "verbal",
+    "text_keyword",
+    "external_platform",
+    "paper_form",
+    "qr_code",
+    "other",
+)
+
+EVIDENCE_TYPES = (
+    "source_record",
+    "screenshot",
+    "document",
+    "URL",
+    "disclosure_text",
+    "verbal_attestation",
+    "platform_metadata",
+    "other",
+)
+
+EXTERNAL_SOURCE_CATEGORIES = (
+    "portal_inquiry",
+    "brokerage_lead_pond",
+    "IDX",
+    "referral_platform",
+    "CRM",
+    "predictive_prospect",
+    "prospecting_list",
+    "CSV",
+    "email_parser",
+    "webhook",
+    "API",
+    "manual",
+    "other",
+)
+
+POND_STATUSES = ("unassigned", "claimable", "claimed", "assigned")
+
+CONSENT_CONFIRMATION_STATEMENT = (
+    "I confirm that this consumer expressly agreed to receive SMS messages from the "
+    "identified real estate professional or brokerage for the stated purpose, and that "
+    "the consent evidence is accurate and retained."
+)
+
+VERBAL_CONSENT_SCRIPT = (
+    "May I send you conversational text messages regarding the real estate information we "
+    "discussed, including property information, appointment scheduling, reminders, and "
+    "follow-up? Message frequency varies. Message and data rates may apply. Reply STOP to "
+    "opt out or HELP for help. Consent is not required to work with me."
+)
 
 CONFIDENCE_THRESHOLD = 0.55
 FIRST_RESPONSE_HOURS = 24

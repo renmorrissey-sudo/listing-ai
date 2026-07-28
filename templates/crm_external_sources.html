@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>External lead sources - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+</head>
+<body>
+  {% set page_tagline = 'External sources' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <p class="muted"><a href="/crm/leads">← Leads</a> · <a href="/crm/external-leads/new">Add lead</a> · <a href="/crm/external-leads/import">CSV import</a></p>
+    <h1>External lead sources</h1>
+    <p class="muted">Configure portals and feeds. Every ingested lead stays SMS Unverified and Blocked until you confirm evidence. Consent is never inferred from the source name.</p>
+    {% if created_secret %}
+    <div class="flash" style="display:block;">Webhook secret (copy now — shown once): <code>{{ created_secret }}</code></div>
+    {% endif %}
+    {% if error %}<div class="flash err" style="display:block;">{{ error }}</div>{% endif %}
+
+    <div class="card">
+      <h2>Add source</h2>
+      <form method="post">
+        <label>Name <input name="name" required placeholder="Zillow Flex" /></label>
+        <label>Category
+          <select name="category">
+            {% for c in categories %}
+            <option value="{{ c }}">{{ c }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Provider key <input name="provider_key" placeholder="zillow-flex" /> <span class="muted">Used in webhook URL</span></label>
+        <label>Import method
+          <select name="import_method">
+            <option value="manual">manual</option>
+            <option value="csv">csv</option>
+            <option value="webhook">webhook</option>
+            <option value="api">api</option>
+          </select>
+        </label>
+        <label>Default pond status
+          <select name="default_pond_status">
+            {% for p in pond_statuses %}
+            <option value="{{ p }}" {% if p == 'claimable' %}selected{% endif %}>{{ p }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Default lead type <input name="default_lead_type" placeholder="buyer" /></label>
+        <p class="muted">Consent behavior is fixed: <strong>unverified_blocked</strong> (not configurable).</p>
+        <button class="btn" type="submit">Create source</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Your sources</h2>
+      {% if sources %}
+      <table>
+        <thead><tr><th>Name</th><th>Key</th><th>Category</th><th>Method</th><th>Webhook</th></tr></thead>
+        <tbody>
+          {% for s in sources %}
+          <tr>
+            <td>{{ s.name }}</td>
+            <td><code>{{ s.provider_key }}</code></td>
+            <td>{{ s.category }}</td>
+            <td>{{ s.import_method }}</td>
+            <td class="muted">
+              {% if s.webhook_secret_hash %}
+              POST /api/external-leads/webhook/{{ s.provider_key }}
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">No sources yet.</p>
+      {% endif %}
+    </div>
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+</body>
+</html>

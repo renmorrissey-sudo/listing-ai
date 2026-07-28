@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SMS consent - {{ lead.name or 'Lead' }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+</head>
+<body>
+  {% set page_tagline = 'Consent' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <p class="muted"><a href="/crm/leads/{{ lead.id }}">← {{ lead.name or 'Lead' }}</a></p>
+    <h1>SMS consent</h1>
+    <p class="muted">{{ lead.phone_number }} · status {{ lead.sms_consent_status or 'unverified' }} ·
+      {% if lead.sms_sending_blocked %}blocked{% else %}enabled{% endif %}</p>
+    {% if error %}<div class="flash err" style="display:block;">{{ error }}</div>{% endif %}
+
+    <div class="card">
+      <h2>Confirm qualifying consent</h2>
+      <p class="muted">Required before outbound SMS for externally sourced leads.</p>
+      <form method="post" enctype="multipart/form-data">
+        <input type="hidden" name="action" value="confirm" />
+        <label>Consent method
+          <select name="consent_method" id="consent-method" required>
+            {% for m in consent_methods %}
+            <option value="{{ m }}">{{ m }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Consent date/time <input name="consent_at" type="datetime-local" required /></label>
+        <label>Phone <input name="phone_number" value="{{ lead.phone_number }}" required /></label>
+        <label>Authorized agent <input name="authorized_agent_name" required /></label>
+        <label>Authorized brokerage <input name="authorized_brokerage_name" required /></label>
+        <label>Purpose <input name="communication_purpose" value="real_estate_follow_up" /></label>
+        <label>Evidence type
+          <select name="evidence_type" required>
+            {% for t in evidence_types %}
+            <option value="{{ t }}">{{ t }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Platform / source name <input name="source_provider" id="source-provider" /></label>
+        <label>Source URL <input name="source_url" /></label>
+        <label>Disclosure text <textarea name="disclosure_text" rows="4" placeholder="{{ verbal_script }}"></textarea></label>
+        <div id="external-platform-fields" style="display:none;">
+          <label>How disclosure authorized sender/brokerage
+            <textarea name="platform_authorization_explanation" rows="3"></textarea>
+          </label>
+        </div>
+        <div id="verbal-fields" style="display:none;">
+          <label>Verbal context/location <input name="verbal_context" /></label>
+          <label>Consumer affirmative response <input name="verbal_response" /></label>
+        </div>
+        <label>Evidence file <input type="file" name="evidence_file" /></label>
+        <label>Notes <textarea name="notes" rows="2"></textarea></label>
+        <label style="display:flex;gap:8px;align-items:flex-start;margin-top:10px;">
+          <input type="checkbox" name="attestation_accepted" value="1" required />
+          <span>{{ attestation }}</span>
+        </label>
+        <button class="btn" type="submit" style="margin-top:12px;">Confirm &amp; enable SMS</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Add pending evidence only</h2>
+      <form method="post" enctype="multipart/form-data">
+        <input type="hidden" name="action" value="evidence" />
+        <label>Method
+          <select name="consent_method">
+            {% for m in consent_methods %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>Evidence type
+          <select name="evidence_type">
+            {% for t in evidence_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>File <input type="file" name="evidence_file" /></label>
+        <label>Notes <textarea name="notes" rows="2"></textarea></label>
+        <button class="btn secondary" type="submit">Save evidence</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Restrict</h2>
+      <form method="post" style="display:inline;">
+        <input type="hidden" name="action" value="not_permitted" />
+        <button class="btn secondary" type="submit">Mark not permitted</button>
+      </form>
+      <form method="post" style="display:inline;" onsubmit="return confirm('Record opt-out?');">
+        <input type="hidden" name="action" value="opt_out" />
+        <button class="btn secondary" type="submit">Record opt-out</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Evidence history</h2>
+      {% if evidence %}
+      <ul class="activity">
+        {% for e in evidence %}
+        <li>
+          <strong>{{ e.consent_status }}</strong> · {{ e.consent_method }} · {{ e.evidence_type }}
+          <div class="muted">{{ e.recorded_at or e.created_at }}</div>
+          {% if e.upload_ref %}<a href="/crm/consent-uploads/{{ e.upload_ref }}">Download evidence</a>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="empty">No evidence yet.</p>{% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Consent audit</h2>
+      {% if audit %}
+      <ul class="activity">
+        {% for a in audit %}
+        <li><strong>{{ a.action }}</strong> · {{ a.source or '—' }}
+          <div class="muted">{{ a.created_at }}</div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="empty">No audit events.</p>{% endif %}
+    </div>
+  </main>
+  <script>
+    (function () {
+      const method = document.getElementById('consent-method');
+      const ext = document.getElementById('external-platform-fields');
+      const verbal = document.getElementById('verbal-fields');
+      function sync() {
+        const v = method.value;
+        ext.style.display = v === 'external_platform' ? 'block' : 'none';
+        verbal.style.display = v === 'verbal' ? 'block' : 'none';
+      }
+      method.addEventListener('change', sync);
+      sync();
+    })();
+  </script>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+</body>
+</html>

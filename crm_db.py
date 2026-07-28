@@ -2322,6 +2322,56 @@ def get_pipeline_metrics(user_id, since_iso=None, local_date=None, tz_offset_min
             "SELECT status, COUNT(*) AS count FROM leads WHERE user_id = ? GROUP BY status",
             (user_id,),
         ).fetchall()
+        try:
+            unverified_consent = count(
+                """
+                SELECT COUNT(*) AS count FROM leads
+                WHERE user_id = ? AND sms_consent_status = 'unverified'
+                """,
+                (user_id,),
+            )
+            sms_blocked = count(
+                """
+                SELECT COUNT(*) AS count FROM leads
+                WHERE user_id = ? AND COALESCE(sms_sending_blocked, 1) = 1
+                """,
+                (user_id,),
+            )
+            external_leads = count(
+                """
+                SELECT COUNT(*) AS count FROM leads
+                WHERE user_id = ?
+                  AND (external_source_id IS NOT NULL OR source LIKE 'external:%')
+                """,
+                (user_id,),
+            )
+            consent_review = count(
+                """
+                SELECT COUNT(*) AS count FROM needs_attention
+                WHERE user_id = ? AND status='open'
+                  AND reason_code='consent_review_required'
+                """,
+                (user_id,),
+            )
+            verified_consent = count(
+                """
+                SELECT COUNT(*) AS count FROM leads
+                WHERE user_id = ? AND sms_consent_status = 'verified'
+                  AND COALESCE(sms_sending_blocked, 1) = 0
+                """,
+                (user_id,),
+            )
+            opted_out_consent = count(
+                """
+                SELECT COUNT(*) AS count FROM leads
+                WHERE user_id = ?
+                  AND (sms_consent_status = 'opted_out' OR opt_out_status = 'opted_out')
+                """,
+                (user_id,),
+            )
+        except Exception:
+            unverified_consent = sms_blocked = external_leads = consent_review = 0
+            verified_consent = opted_out_consent = 0
 
     by_status = {normalize_lead_status(r["status"]): r["count"] for r in status_rows}
     stages = []
@@ -2358,6 +2408,12 @@ def get_pipeline_metrics(user_id, since_iso=None, local_date=None, tz_offset_min
         "leads_by_status": by_status,
         "pipeline_stages": stages,
         "average_first_response_hours": None,
+        "unverified_consent": unverified_consent,
+        "sms_blocked": sms_blocked,
+        "external_leads": external_leads,
+        "consent_review_required": consent_review,
+        "verified_consent": verified_consent,
+        "opted_out_consent": opted_out_consent,
     }
 
 
@@ -2652,7 +2708,21 @@ def pipeline_stage_statuses(stage):
     return set()
 
 
-def filter_leads(user_id, status=None, source=None, scope=None, stage=None, limit=200):
+def filter_leads(
+    user_id,
+    status=None,
+    source=None,
+    scope=None,
+    stage=None,
+    limit=200,
+    *,
+    sms_consent_status=None,
+    sms_sending_blocked=None,
+    pond_status=None,
+    external_only=None,
+    import_batch_id=None,
+    consent_review_required=None,
+):
     """List leads for this tenant. scope=active / stage=* match dashboard Pipeline cards."""
     from crm_constants import normalize_lead_status as norm
 
@@ -2679,12 +2749,43 @@ def filter_leads(user_id, status=None, source=None, scope=None, stage=None, limi
         if source:
             sql += " AND l.source = ?"
             params.append(source)
+        if sms_consent_status:
+            sql += " AND l.sms_consent_status = ?"
+            params.append(sms_consent_status)
+        if sms_sending_blocked is not None:
+            blocked = 1 if sms_sending_blocked in (True, 1, "1", "true") else 0
+            sql += " AND COALESCE(l.sms_sending_blocked, 1) = ?"
+            params.append(blocked)
+        if pond_status:
+            sql += " AND l.pond_status = ?"
+            params.append(pond_status)
+        if external_only in (True, 1, "1", "true", "yes"):
+            sql += " AND (l.external_source_id IS NOT NULL OR l.source LIKE 'external:%')"
+        if import_batch_id:
+            sql += " AND l.import_batch_id = ?"
+            params.append(import_batch_id)
+        if consent_review_required in (True, 1, "1", "true", "yes"):
+            sql += """
+                AND EXISTS (
+                    SELECT 1 FROM needs_attention na
+                    WHERE na.lead_id = l.id AND na.user_id = l.user_id
+                      AND na.reason_code = 'consent_review_required'
+                      AND na.status = 'open'
+                )
+            """
         sql += " ORDER BY l.updated_at DESC LIMIT ?"
         params.append(limit)
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
-def count_filtered_leads(user_id, status=None, source=None, scope=None, stage=None):
+def count_filtered_leads(
+    user_id,
+    status=None,
+    source=None,
+    scope=None,
+    stage=None,
+    **kwargs,
+):
     return len(
         filter_leads(
             user_id,
@@ -2693,6 +2794,7 @@ def count_filtered_leads(user_id, status=None, source=None, scope=None, stage=No
             scope=scope,
             stage=stage,
             limit=100000,
+            **kwargs,
         )
     )
 

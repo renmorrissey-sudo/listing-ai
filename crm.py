@@ -221,6 +221,13 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
             flash_error = flash_error or message
         else:
             flash_message = flash_message or message
+    import external_leads_db as xdb
+
+    evidence = xdb.list_consent_evidence(user["id"], lead_id, limit=10)
+    audit = xdb.list_consent_audit(user["id"], lead_id, limit=20)
+    external_source = None
+    if lead.get("external_source_id"):
+        external_source = xdb.get_external_lead_source(lead["external_source_id"], user["id"])
     return {
         "lead": lead,
         "activities": activities,
@@ -246,6 +253,9 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
         "flash_message": flash_message,
         "flash_error": flash_error,
         "outcome_draft": outcome_draft or {},
+        "consent_evidence": evidence,
+        "consent_audit": audit,
+        "external_source": external_source,
         **_nav_context(user, "leads"),
     }
 
@@ -259,8 +269,29 @@ def crm_leads_page():
     source = (request.args.get("source") or "").strip() or None
     scope = (request.args.get("scope") or "").strip() or None
     stage = (request.args.get("stage") or "").strip() or None
+    sms_consent = (request.args.get("sms_consent") or "").strip() or None
+    pond = (request.args.get("pond") or "").strip() or None
+    external = (request.args.get("external") or "").strip() or None
+    blocked = (request.args.get("blocked") or "").strip() or None
+    review = (request.args.get("consent_review") or "").strip() or None
+    batch = (request.args.get("batch") or "").strip() or None
+    sms_blocked = None
+    if blocked in {"1", "true", "yes"}:
+        sms_blocked = True
+    elif blocked in {"0", "false", "no"}:
+        sms_blocked = False
     leads = crm_db.filter_leads(
-        user["id"], status=status, source=source, scope=scope, stage=stage
+        user["id"],
+        status=status,
+        source=source,
+        scope=scope,
+        stage=stage,
+        sms_consent_status=sms_consent,
+        sms_sending_blocked=sms_blocked,
+        pond_status=pond,
+        external_only=external,
+        import_batch_id=int(batch) if batch and batch.isdigit() else None,
+        consent_review_required=review,
     )
     active_filter = None
     if scope == "active":
@@ -275,6 +306,22 @@ def crm_leads_page():
         active_filter = f"Status: {status_label(status)}"
     if source:
         active_filter = (active_filter + f" · Source: {source}") if active_filter else f"Source: {source}"
+    if sms_consent:
+        active_filter = (
+            (active_filter + f" · Consent: {sms_consent}") if active_filter else f"Consent: {sms_consent}"
+        )
+    if external:
+        active_filter = (active_filter + " · External") if active_filter else "External leads"
+    if blocked in {"1", "true", "yes"}:
+        active_filter = (active_filter + " · SMS blocked") if active_filter else "SMS blocked"
+    if review:
+        active_filter = (
+            (active_filter + " · Consent review required")
+            if active_filter
+            else "Consent review required"
+        )
+    if pond:
+        active_filter = (active_filter + f" · Pond: {pond}") if active_filter else f"Pond: {pond}"
     return render_template(
         "crm_leads.html",
         leads=leads,
@@ -283,6 +330,12 @@ def crm_leads_page():
         source_filter=source or "",
         scope_filter=scope or "",
         stage_filter=stage or "",
+        sms_consent_filter=sms_consent or "",
+        pond_filter=pond or "",
+        external_filter=external or "",
+        blocked_filter=blocked or "",
+        consent_review_filter=review or "",
+        batch_filter=batch or "",
         active_filter=active_filter,
         result_count=len(leads),
         status_label=status_label,

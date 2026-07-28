@@ -105,6 +105,16 @@
         {{ pipeline_metric('Appts today', pipeline.appointments_today, '/crm/calendar?event_type=appointment&range=today' ~ (date_qs|default('')), 'View ' ~ pipeline.appointments_today ~ ' appointments today') }}
       </div>
       <div class="metrics-row" style="margin-top:10px;">
+        {{ pipeline_metric('External leads', pipeline.external_leads|default(0), '/crm/leads?external=1', 'View external leads') }}
+        {{ pipeline_metric('Unverified consent', pipeline.unverified_consent|default(0), '/crm/leads?sms_consent=unverified', 'View unverified consent leads') }}
+        {{ pipeline_metric('Consent review', pipeline.consent_review_required|default(0), '/crm/leads?consent_review=1', 'View consent review required') }}
+      </div>
+      <div class="metrics-row" style="margin-top:10px;">
+        {{ pipeline_metric('SMS blocked', pipeline.sms_blocked|default(0), '/crm/leads?blocked=1', 'View SMS blocked leads') }}
+        {{ pipeline_metric('Verified SMS', pipeline.verified_consent|default(0), '/crm/leads?sms_consent=verified&blocked=0', 'View verified SMS leads') }}
+        {{ pipeline_metric('Opted out', pipeline.opted_out_consent|default(0), '/crm/leads?sms_consent=opted_out', 'View opted out leads') }}
+      </div>
+      <div class="metrics-row" style="margin-top:10px;">
         {% for stage in pipeline.pipeline_stages %}
         {{ pipeline_metric(stage.label, stage.count, '/crm/leads?stage=' ~ stage.id, 'View ' ~ stage.count ~ ' leads in ' ~ stage.label) }}
         {% endfor %}

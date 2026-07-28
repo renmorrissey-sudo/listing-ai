@@ -13,7 +13,11 @@
   {% include 'subscriber_tool_nav.html' %}
   <main>
     <h1>Leads</h1>
-    <p class="muted">Filter and open lead records. Status changes are always agent-controlled.</p>
+    <p class="muted">Filter and open lead records. Status changes are always agent-controlled.
+      <a href="/crm/external-leads/new">Add external lead</a> ·
+      <a href="/crm/external-leads/import">CSV import</a> ·
+      <a href="/crm/external-sources">Sources</a>
+    </p>
     {% if active_filter %}
     <div class="filter-banner" role="status">
       <div>
@@ -31,6 +35,34 @@
         {% endfor %}
       </select>
       <input name="source" placeholder="Source" value="{{ source_filter }}" />
+      <select name="sms_consent">
+        <option value="">All consent</option>
+        <option value="unverified" {% if sms_consent_filter == 'unverified' %}selected{% endif %}>Unverified</option>
+        <option value="verified" {% if sms_consent_filter == 'verified' %}selected{% endif %}>Verified</option>
+        <option value="opted_out" {% if sms_consent_filter == 'opted_out' %}selected{% endif %}>Opted out</option>
+        <option value="not_permitted" {% if sms_consent_filter == 'not_permitted' %}selected{% endif %}>Not permitted</option>
+      </select>
+      <select name="blocked">
+        <option value="">SMS blocked?</option>
+        <option value="1" {% if blocked_filter == '1' %}selected{% endif %}>Blocked</option>
+        <option value="0" {% if blocked_filter == '0' %}selected{% endif %}>Enabled</option>
+      </select>
+      <select name="external">
+        <option value="">All origins</option>
+        <option value="1" {% if external_filter == '1' %}selected{% endif %}>External only</option>
+      </select>
+      <select name="pond">
+        <option value="">All pond</option>
+        <option value="claimable" {% if pond_filter == 'claimable' %}selected{% endif %}>Claimable</option>
+        <option value="claimed" {% if pond_filter == 'claimed' %}selected{% endif %}>Claimed</option>
+        <option value="assigned" {% if pond_filter == 'assigned' %}selected{% endif %}>Assigned</option>
+        <option value="unassigned" {% if pond_filter == 'unassigned' %}selected{% endif %}>Unassigned</option>
+      </select>
+      <select name="consent_review">
+        <option value="">Consent review</option>
+        <option value="1" {% if consent_review_filter == '1' %}selected{% endif %}>Review required</option>
+      </select>
+      <input name="batch" placeholder="Batch id" value="{{ batch_filter }}" style="width:90px;" />
       <button class="btn" type="submit">Filter</button>
       {% if active_filter %}<a class="btn secondary" href="/crm/leads">Clear filters</a>{% endif %}
     </form>
@@ -38,16 +70,22 @@
       {% if leads %}
       <table>
         <thead>
-          <tr><th>Lead</th><th>Status</th><th>Follow-up</th><th>Next action</th><th></th></tr>
+          <tr><th>Lead</th><th>Status</th><th>Consent</th><th>Follow-up</th><th>Next action</th><th></th></tr>
         </thead>
         <tbody>
           {% for lead in leads %}
           <tr>
             <td>
               <strong>{{ lead.name or 'Lead' }}</strong>
-              <div class="muted">{{ lead.phone_number }} · {{ lead.message_count or 0 }} msgs</div>
+              <div class="muted">{{ lead.phone_number }} · {{ lead.message_count or 0 }} msgs
+                {% if lead.source %} · {{ lead.source }}{% endif %}
+              </div>
             </td>
             <td><span class="pill">{{ status_label(lead.status) }}</span></td>
+            <td>
+              <span class="pill">{{ lead.sms_consent_status or 'unverified' }}</span>
+              {% if lead.sms_sending_blocked %}<span class="pill danger">blocked</span>{% endif %}
+            </td>
             <td class="muted">
               {% if lead.next_follow_up_at or lead.follow_up_at %}
                 {{ (lead.next_follow_up_at or lead.follow_up_at)[:16] }}

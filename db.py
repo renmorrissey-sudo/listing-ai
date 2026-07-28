@@ -875,7 +875,7 @@ def mark_lead_opt_out(lead_id, user_id):
 
 
 def clear_lead_sms_opt_out(lead_id, user_id):
-    """Restore SMS eligibility after START/UNSTOP. Does not auto-send or auto-confirm consent."""
+    """Clear STOP flag after START. Does not auto-verify consent or unblock SMS."""
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
         conn.execute(
@@ -886,11 +886,13 @@ def clear_lead_sms_opt_out(lead_id, user_id):
                     WHEN consent_status IN ('revoked', 'opted_out') THEN 'unknown'
                     ELSE consent_status
                 END,
+                sms_consent_status = 'unverified',
+                sms_sending_blocked = 1,
                 status = CASE
                     WHEN status = 'do_not_contact' THEN 'contacted'
                     ELSE status
                 END,
-                next_action = 'Lead requested to resume SMS — review before sending',
+                next_action = 'Lead requested to resume SMS — review consent before sending',
                 updated_at = ?
             WHERE id = ? AND user_id = ?
             """,

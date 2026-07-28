@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Import external leads - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+</head>
+<body>
+  {% set page_tagline = 'CSV import' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <p class="muted"><a href="/crm/leads">← Leads</a> · <a href="/crm/external-sources">Sources</a></p>
+    <h1>CSV import</h1>
+    <p class="muted">Even if a consent column says true, leads stay Unverified + Blocked until you confirm evidence on the lead.</p>
+    {% if error %}<div class="flash err" style="display:block;">{{ error }}</div>{% endif %}
+    {% if result and not result.error %}
+    <div class="flash" style="display:block;">
+      Batch {{ result.batch_id }}: created {{ result.created }}, updated {{ result.updated }},
+      skipped {{ result.skipped }}, invalid {{ result.invalid }}, pending evidence {{ result.pending_evidence }}
+    </div>
+    {% endif %}
+    <div class="card">
+      <form method="post" enctype="multipart/form-data">
+        <label>Source
+          <select name="external_source_id">
+            <option value="">— optional —</option>
+            {% for s in sources %}
+            <option value="{{ s.id }}" {% if source_id == s.id|string %}selected{% endif %}>{{ s.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>CSV file <input type="file" name="csv_file" accept=".csv,text/csv" /></label>
+        <label>Or paste CSV
+          <textarea name="csv_text" rows="8" placeholder="name,phone,email,consent&#10;Jane,+15551234567,j@example.com,true">{{ csv_text }}</textarea>
+        </label>
+        <input type="hidden" name="mapping_json" value='{{ mapping_json }}' />
+        <div class="row" style="gap:8px;margin-top:10px;">
+          <button class="btn secondary" type="submit" name="action" value="preview">Preview</button>
+          <button class="btn" type="submit" name="action" value="commit">Commit import</button>
+        </div>
+      </form>
+    </div>
+    {% if preview and preview.preview %}
+    <div class="card">
+      <h2>Preview</h2>
+      <p class="muted">{{ preview.note }}</p>
+      <p class="muted">Mapping: <code>{{ preview.mapping }}</code></p>
+      <table>
+        <thead><tr><th>Row</th><th>Mapped</th><th>Phone OK</th></tr></thead>
+        <tbody>
+          {% for row in preview.preview %}
+          <tr>
+            <td>{{ row.row_number }}</td>
+            <td><code>{{ row.mapped }}</code></td>
+            <td>{% if row.valid_phone %}yes{% else %}no{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+</body>
+</html>

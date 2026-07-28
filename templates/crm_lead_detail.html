@@ -25,6 +25,29 @@
       <div class="muted">{{ lead.phone_number }} · {{ lead.lead_type or 'N/A' }} · {{ lead.source or 'sms' }}</div>
       <div class="status-hero">{{ status_label(lead.status) }}</div>
       {% if lead.opt_out_status == 'opted_out' %}<span class="pill danger">Opted out — Do Not Contact</span>{% endif %}
+      <div class="card" style="margin-top:12px;background:#f8fafc;">
+        <h2 style="margin-top:0;font-size:16px;">SMS consent</h2>
+        <div class="row" style="gap:8px;flex-wrap:wrap;">
+          <span class="pill">{% if lead.sms_consent_status == 'verified' %}Verified{% elif lead.sms_consent_status == 'opted_out' %}Opted out{% elif lead.sms_consent_status == 'not_permitted' %}Not permitted{% elif lead.sms_consent_status == 'revoked' %}Revoked{% else %}Unverified{% endif %}</span>
+          {% if lead.sms_sending_blocked %}<span class="pill danger">SMS Blocked</span>{% else %}<span class="pill">SMS Enabled</span>{% endif %}
+          {% if lead.external_source_id or (lead.source or '').startswith('external:') %}
+          <span class="pill">External source</span>
+          {% endif %}
+          {% if lead.pond_status %}<span class="pill">Pond: {{ lead.pond_status }}</span>{% endif %}
+        </div>
+        {% if lead.sms_consent_status != 'verified' or lead.sms_sending_blocked %}
+        <p class="muted" style="margin:8px 0 0;">SMS cannot be sent until consent is verified. Claiming or assigning this lead does not grant permission to text.</p>
+        {% endif %}
+        {% if external_source %}<p class="muted" style="margin:6px 0 0;">Source: {{ external_source.name }}{% if lead.external_record_id %} · record {{ lead.external_record_id }}{% endif %}</p>{% endif %}
+        <div class="quick-actions" style="margin-top:10px;">
+          <a class="btn" href="/crm/leads/{{ lead.id }}/consent">Manage consent</a>
+          {% if lead.pond_status in ['unassigned', 'claimable'] %}
+          <form method="post" action="/crm/leads/{{ lead.id }}/claim" style="display:inline;">
+            <button class="btn secondary" type="submit">Claim lead</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
       <p>{% if lead.next_action %}<strong>Next action:</strong> {{ lead.next_action }}{% endif %}</p>
       <div style="margin-top:10px;padding:12px 14px;background:#f8fafc;border-radius:10px;border:1px solid #eef2f7;">
         <div class="row" style="justify-content:space-between;">

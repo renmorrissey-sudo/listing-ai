@@ -212,7 +212,9 @@ def process_inbound_sms(payload: dict, *, defer_coach: bool = True, app=None) ->
     )
 
     if keyword == "opt_out":
-        db.mark_lead_opt_out(lead_id, owner_id)
+        import external_leads_db as xdb
+
+        xdb.apply_opt_out_consent(lead_id, owner_id, source="sms_keyword")
         crm_db.add_lead_activity(
             lead_id,
             owner_id,
