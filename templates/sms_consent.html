@@ -4,23 +4,24 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SMS Consent &amp; Real Estate Inquiry - {{ product_name }}</title>
-  <meta name="description" content="Submit a real estate inquiry to TopAI RE Tools. Optionally consent to conversational SMS about your inquiry. Message frequency varies; message and data rates may apply. Reply STOP to opt out or HELP for help." />
+  <meta name="description" content="Submit a real estate inquiry to TopAI RE Tools and consent to conversational SMS. Message frequency varies; message and data rates may apply. Reply STOP to opt out or HELP for help. Consent is not a condition of purchase." />
   <link rel="canonical" href="{{ canonical_url }}" />
   <style>
     *, *::before, *::after { box-sizing: border-box; }
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1a1a2e; line-height: 1.65; }
-    header { background: #1a1a2e; color: white; padding: 18px 32px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-    .logo { font-size: 20px; font-weight: 700; color: white; text-decoration: none; }
-    .logo span { color: #4f8ef7; }
+    body { margin: 0; font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif; background: linear-gradient(180deg, #eef3f9 0%, #f7f4ef 100%); color: #1a1a2e; line-height: 1.65; }
+    header { background: #10243f; color: white; padding: 18px 32px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    .logo { font-size: 22px; font-weight: 700; color: white; text-decoration: none; letter-spacing: 0.2px; }
+    .logo span { color: #6ea8ff; }
     .business { color: #aab; font-size: 13px; margin-top: 2px; }
     .nav a { color: #dce6ff; margin-left: 14px; text-decoration: none; font-size: 14px; font-weight: 600; }
-    main { max-width: 720px; margin: 36px auto; padding: 0 20px; }
-    .card { background: white; border-radius: 14px; padding: 32px; box-shadow: 0 1px 5px rgba(0,0,0,0.08); }
-    h1 { font-size: 28px; line-height: 1.2; margin: 0 0 12px; }
-    .muted { color: #667; }
+    main { max-width: 760px; margin: 36px auto; padding: 0 20px; }
+    .card { background: rgba(255,255,255,0.96); border-radius: 14px; padding: 32px; box-shadow: 0 8px 28px rgba(16,36,63,0.08); border: 1px solid #e4ebf4; }
+    h1 { font-size: 28px; line-height: 1.2; margin: 0 0 12px; color: #10243f; }
+    .muted { color: #556; }
     .support { background: #eef5ff; border: 1px solid #cfe0ff; border-radius: 10px; padding: 12px 14px; margin: 16px 0 22px; font-size: 14px; }
     label { display: block; font-size: 12px; font-weight: 700; color: #556; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 6px; }
-    input[type="text"], input[type="tel"], textarea {
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    input[type="text"], input[type="tel"], input[type="email"], textarea {
       width: 100%; padding: 11px 12px; border: 1.5px solid #e0e4ed; border-radius: 8px;
       font-size: 15px; margin-bottom: 14px; background: #fafbfc;
     }
@@ -34,21 +35,22 @@
       text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 14px; color: #2a2a3e; line-height: 1.5; margin: 0;
     }
     .legal-links { font-size: 13px; margin-top: 10px; color: #556; }
-    .legal-links a { color: #4f8ef7; }
+    .legal-links a { color: #2f6fed; }
     .btn {
-      width: 100%; padding: 13px; background: #4f8ef7; color: white; border: none; border-radius: 9px;
+      width: 100%; padding: 13px; background: #2f6fed; color: white; border: none; border-radius: 9px;
       font-size: 15px; font-weight: 700; cursor: pointer;
     }
-    .btn:hover { background: #3a7de0; }
+    .btn:hover { background: #2459c7; }
     .error { background: #fff5f5; border: 1.5px solid #fca5a5; color: #dc2626; border-radius: 8px; padding: 12px; margin-bottom: 14px; font-size: 14px; }
     .success { background: #ecfdf5; border: 1.5px solid #6ee7b7; color: #065f46; border-radius: 8px; padding: 12px; margin-bottom: 14px; font-size: 14px; }
     .note { font-size: 13px; color: #667; margin-top: 14px; }
-    footer { max-width: 720px; margin: 24px auto 40px; padding: 0 20px; color: #667; font-size: 14px; }
-    footer a { color: #4f8ef7; text-decoration: none; margin-right: 10px; }
+    footer { max-width: 760px; margin: 24px auto 40px; padding: 0 20px; color: #667; font-size: 14px; }
+    footer a { color: #2f6fed; text-decoration: none; margin-right: 10px; }
     @media (max-width: 640px) {
       header { padding: 14px 16px; }
       .nav a { margin-left: 0; margin-right: 12px; }
       .card { padding: 22px; }
+      .row { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -80,6 +82,7 @@
         Conversational SMS (when you opt in) may include property information, answers to your questions,
         appointment scheduling, reminders, and follow-up. Message frequency varies. Message and data rates may apply.
         Reply <strong>STOP</strong> to opt out or <strong>HELP</strong> for help.
+        Consent is not a condition of purchasing goods or services.
       </div>
 
       {% if error %}
@@ -90,11 +93,24 @@
       {% endif %}
 
       <form method="post" action="/sms-consent" novalidate>
-        <label for="name">Name *</label>
-        <input id="name" name="name" type="text" required maxlength="120" value="{{ form_name|default('') }}" autocomplete="name" />
+        <input type="hidden" name="campaign_source" value="{{ form_campaign_source|default('') }}" />
+
+        <div class="row">
+          <div>
+            <label for="first_name">First name *</label>
+            <input id="first_name" name="first_name" type="text" required maxlength="60" value="{{ form_first_name|default('') }}" autocomplete="given-name" />
+          </div>
+          <div>
+            <label for="last_name">Last name *</label>
+            <input id="last_name" name="last_name" type="text" required maxlength="60" value="{{ form_last_name|default('') }}" autocomplete="family-name" />
+          </div>
+        </div>
 
         <label for="phone">Mobile telephone number *</label>
         <input id="phone" name="phone" type="tel" required maxlength="32" value="{{ form_phone|default('') }}" placeholder="+1XXXXXXXXXX or (XXX) XXX-XXXX" autocomplete="tel" />
+
+        <label for="email">Email (optional)</label>
+        <input id="email" name="email" type="email" maxlength="200" value="{{ form_email|default('') }}" autocomplete="email" />
 
         <label for="message">Real estate inquiry / message *</label>
         <textarea id="message" name="message" required maxlength="2000" placeholder="Describe your real estate question or request…">{{ form_message|default('') }}</textarea>
@@ -106,6 +122,7 @@
               id="sms_consent"
               name="sms_consent"
               value="1"
+              required
               {% if form_sms_consent %}checked{% endif %}
             />
             <label for="sms_consent">{{ sms_consent_checkbox_text }}</label>
@@ -113,16 +130,17 @@
           <div class="legal-links">
             Privacy Policy:
             <a href="https://topairealestatetools.com/privacy">https://topairealestatetools.com/privacy</a><br />
-            Terms of Service:
+            Terms and Conditions:
             <a href="https://topairealestatetools.com/terms">https://topairealestatetools.com/terms</a>
           </div>
         </div>
 
         <button class="btn" type="submit">Submit inquiry</button>
         <p class="note">
-          The SMS checkbox is optional and is not required to submit your inquiry.
+          The SMS consent checkbox is required and is unchecked by default.
           Submitting this form does not send an automated SMS.
-          If you do not check the box, we will not send you SMS about this inquiry.
+          Message frequency varies. Message and data rates may apply.
+          Reply STOP to opt out or HELP for help. Consent is not a condition of purchase.
         </p>
       </form>
     </section>

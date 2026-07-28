@@ -1030,31 +1030,128 @@ def create_sms_consent_inquiry(
     ip_address=None,
     user_agent=None,
     created_at=None,
+    first_name=None,
+    last_name=None,
+    email=None,
+    campaign_source=None,
 ):
-    """Insert a public SMS consent / inquiry row. Returns id."""
+    """Insert a public SMS consent / inquiry row. Returns id.
+
+    sms_consent must already be engine-safe (bool for Postgres, 0/1 for SQLite).
+    """
+    import config
+
     created = created_at or datetime.now(timezone.utc).isoformat()
+    # Normalize boolean for Postgres (int 1/0 causes: expected bool, got int)
+    if isinstance(sms_consent, bool):
+        consent_val = sms_consent if config.DB_ENGINE == "postgres" else (1 if sms_consent else 0)
+    elif sms_consent in (1, 0, "1", "0"):
+        flag = bool(int(sms_consent))
+        consent_val = flag if config.DB_ENGINE == "postgres" else (1 if flag else 0)
+    else:
+        flag = bool(sms_consent)
+        consent_val = flag if config.DB_ENGINE == "postgres" else (1 if flag else 0)
+
     with get_db() as conn:
         cur = conn.execute(
             """
             INSERT INTO sms_consent_inquiries
-                (name, phone_number, message, sms_consent, consent_at, source_url,
-                 disclosure_version, ip_address, user_agent, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (name, first_name, last_name, email, phone_number, message, sms_consent,
+                 consent_at, source_url, disclosure_version, ip_address, user_agent,
+                 campaign_source, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 name,
+                first_name,
+                last_name,
+                email,
                 phone_number,
                 message,
-                1 if sms_consent else 0,
+                consent_val,
                 consent_at,
                 source_url,
                 disclosure_version,
                 ip_address,
                 user_agent,
+                campaign_source,
                 created,
             ),
         )
         return cur.lastrowid
+
+
+def find_sms_consent_inquiry_duplicate(phone_number, *, disclosure_version, require_consent=True):
+    if not phone_number:
+        return None
+    import config
+
+    with get_db() as conn:
+        sql = """
+            SELECT * FROM sms_consent_inquiries
+            WHERE phone_number = ?
+              AND disclosure_version = ?
+        """
+        params = [phone_number, disclosure_version]
+        if require_consent:
+            if config.DB_ENGINE == "postgres":
+                sql += " AND sms_consent IS TRUE"
+            else:
+                sql += " AND sms_consent = 1"
+        sql += " ORDER BY created_at DESC, id DESC LIMIT 1"
+        row = conn.execute(sql, params).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        data["sms_consent"] = bool(data.get("sms_consent"))
+        return data
+
+
+def touch_sms_consent_inquiry(
+    inquiry_id,
+    *,
+    name=None,
+    first_name=None,
+    last_name=None,
+    email=None,
+    message=None,
+    source_url=None,
+    campaign_source=None,
+    ip_address=None,
+    user_agent=None,
+):
+    """Update metadata on an existing consent row (dedupe path). Does not clear consent."""
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE sms_consent_inquiries
+            SET name = COALESCE(?, name),
+                first_name = COALESCE(?, first_name),
+                last_name = COALESCE(?, last_name),
+                email = COALESCE(?, email),
+                message = COALESCE(?, message),
+                source_url = COALESCE(?, source_url),
+                campaign_source = COALESCE(?, campaign_source),
+                ip_address = COALESCE(?, ip_address),
+                user_agent = COALESCE(?, user_agent),
+                consent_at = COALESCE(consent_at, ?)
+            WHERE id = ?
+            """,
+            (
+                name,
+                first_name,
+                last_name,
+                email,
+                message,
+                source_url,
+                campaign_source,
+                ip_address,
+                user_agent,
+                now,
+                inquiry_id,
+            ),
+        )
 
 
 def get_sms_consent_inquiry(inquiry_id):

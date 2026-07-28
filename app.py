@@ -125,6 +125,32 @@ def handle_http_exception(error):
 @app.errorhandler(Exception)
 def handle_unexpected_exception(error):
     logger.exception("Unhandled error: %s", error)
+    # Public HTML forms should not receive opaque JSON 500s.
+    if request.path == "/sms-consent" and request.method == "POST":
+        try:
+            import sms_consent as sms_consent_mod
+
+            return (
+                render_template(
+                    "sms_consent.html",
+                    error="We could not save your inquiry right now. Please try again in a moment.",
+                    success=None,
+                    form_name=str(request.form.get("name") or request.form.get("first_name") or "")[:120],
+                    form_first_name=str(request.form.get("first_name") or "")[:60],
+                    form_last_name=str(request.form.get("last_name") or "")[:60],
+                    form_email=str(request.form.get("email") or "")[:200],
+                    form_phone=str(request.form.get("phone") or "")[:32],
+                    form_message=str(request.form.get("message") or "")[:2000],
+                    form_sms_consent=str(request.form.get("sms_consent") or "").lower()
+                    in {"1", "true", "on", "yes"},
+                    form_campaign_source=str(request.form.get("campaign_source") or "")[:120],
+                    sms_support_display=sms_consent_mod.SMS_SUPPORT_DISPLAY,
+                    sms_consent_checkbox_text=sms_consent_mod.SMS_CONSENT_CHECKBOX_TEXT,
+                ),
+                500,
+            )
+        except Exception:
+            logger.exception("Failed to render SMS consent error page")
     return jsonify({"error": "Something went wrong. Please try again."}), 500
 
 
@@ -1462,11 +1488,22 @@ def sms_consent():
     """Public A2P SMS consent / real estate inquiry page. No auth, gate, or auto-SMS."""
     import sms_consent as sms_consent_mod
 
+    campaign_source = (
+        request.values.get("campaign_source")
+        or request.values.get("source")
+        or request.values.get("utm_campaign")
+        or ""
+    ).strip()[:120]
+
     form_defaults = {
         "form_name": "",
+        "form_first_name": "",
+        "form_last_name": "",
+        "form_email": "",
         "form_phone": "",
         "form_message": "",
         "form_sms_consent": False,
+        "form_campaign_source": campaign_source,
     }
     ctx = {
         **form_defaults,
@@ -1482,9 +1519,15 @@ def sms_consent():
     cleaned, error = sms_consent_mod.validate_sms_consent_form(request.form)
     ctx.update(
         {
+            "form_first_name": str(request.form.get("first_name") or "")[:60],
+            "form_last_name": str(request.form.get("last_name") or "")[:60],
             "form_name": str(request.form.get("name") or "")[:120],
+            "form_email": str(request.form.get("email") or "")[:200],
             "form_phone": str(request.form.get("phone") or "")[:32],
             "form_message": str(request.form.get("message") or "")[:2000],
+            "form_campaign_source": str(
+                request.form.get("campaign_source") or campaign_source or ""
+            )[:120],
             # Preserve checked state only on validation error (never default checked on fresh GET).
             "form_sms_consent": str(request.form.get("sms_consent") or "").lower()
             in {"1", "true", "on", "yes"},
@@ -1495,33 +1538,48 @@ def sms_consent():
         return render_template("sms_consent.html", **ctx), 400
 
     source_url = seo.canonical_loc("/sms-consent")
-    inquiry_id = sms_consent_mod.create_sms_consent_inquiry(
-        name=cleaned["name"],
-        phone_number=cleaned["phone_number"],
-        message=cleaned["message"],
-        sms_consent=cleaned["sms_consent"],
-        source_url=source_url,
-        ip_address=(request.headers.get("X-Forwarded-For") or request.remote_addr or "")
-        .split(",")[0]
-        .strip(),
-        user_agent=request.headers.get("User-Agent"),
-    )
+    try:
+        inquiry_id, created_new = sms_consent_mod.create_sms_consent_inquiry(
+            name=cleaned["name"],
+            first_name=cleaned["first_name"],
+            last_name=cleaned["last_name"],
+            email=cleaned.get("email"),
+            phone_number=cleaned["phone_number"],
+            message=cleaned["message"],
+            sms_consent=cleaned["sms_consent"],
+            source_url=source_url,
+            campaign_source=cleaned.get("campaign_source") or campaign_source or None,
+            ip_address=(request.headers.get("X-Forwarded-For") or request.remote_addr or "")
+            .split(",")[0]
+            .strip(),
+            user_agent=request.headers.get("User-Agent"),
+        )
+    except Exception:
+        logger.exception("Failed to save public SMS consent inquiry")
+        ctx["error"] = "We could not save your inquiry right now. Please try again in a moment."
+        return render_template("sms_consent.html", **ctx), 500
+
     logger.info(
-        "Public SMS consent inquiry saved id=%s consent=%s",
+        "Public SMS consent inquiry saved id=%s consent=%s created_new=%s",
         inquiry_id,
         cleaned["sms_consent"],
+        created_new,
     )
-    if cleaned["sms_consent"]:
+    if created_new:
         ctx["success"] = (
-            "Thanks — your inquiry was received with SMS consent recorded. "
-            "We will not send an automated text just because you submitted this form."
+            "Thanks — your inquiry and SMS consent were recorded. "
+            "We will not send an automated text just because you submitted this form. "
+            "Message frequency varies. Message and data rates may apply. "
+            "Reply STOP to opt out or HELP for help."
         )
     else:
         ctx["success"] = (
-            "Thanks — your inquiry was received. You did not opt in to SMS, "
-            "so we will not send text messages about this inquiry."
+            "Thanks — we already have your SMS consent on file for this number. "
+            "Your inquiry details were updated. We will not send an automated text "
+            "just because you submitted this form."
         )
     ctx.update(form_defaults)
+    ctx["form_campaign_source"] = campaign_source
     return render_template("sms_consent.html", **ctx)
 
 
