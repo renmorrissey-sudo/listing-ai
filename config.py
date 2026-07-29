@@ -107,7 +107,7 @@ VOICE_PHONE_NUMBER_ID = _env("VOICE_PHONE_NUMBER_ID")
 VOICE_CALL_FROM_NUMBER = _env("VOICE_CALL_FROM_NUMBER")
 VOICE_DAILY_CALL_LIMIT = int(_env("VOICE_DAILY_CALL_LIMIT", "20"))
 
-SMS_PROVIDER = (_env("SMS_PROVIDER", "twilio") or "twilio").lower().strip()
+SMS_PROVIDER = (_env("SMS_PROVIDER", "telnyx") or "telnyx").lower().strip()
 # TEMP diagnostic outbound auth: Account SID + Auth Token (not API keys).
 TWILIO_ACCOUNT_SID = _env_strip("TWILIO_ACCOUNT_SID") or _env_strip("SMS_TWILIO_ACCOUNT_SID")
 TWILIO_API_KEY_SID = _env_strip("TWILIO_API_KEY_SID")
