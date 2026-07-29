@@ -234,7 +234,13 @@ from stripe_billing import (
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok"}), 200
+    from email_service import email_configured
+
+    return jsonify({
+        "status": "ok",
+        "email_configured": email_configured(),
+        "password_reset": True,
+    }), 200
 
 
 @app.route("/sitemap.xml")
