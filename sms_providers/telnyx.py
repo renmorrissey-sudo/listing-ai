@@ -40,25 +40,44 @@ class TelnyxSMSProvider(BaseSMSProvider):
 
     def configuration_status(self, *, latest_error_code=None, latest_error_message=None):
         """Non-secret Telnyx diagnostics for the AI SMS Assistant UI."""
+        from sms_authorization import (
+            get_telnyx_toll_free_verification_status,
+            is_sms_sending_enabled,
+            is_telnyx_toll_free_verified,
+            telnyx_configuration_complete,
+        )
+
         support_display = getattr(config, "SMS_SUPPORT_DISPLAY", None) or "(888) 821-0810"
         toll_free_e164 = (
             getattr(config, "SMS_SUPPORT_E164", None)
             or self.phone_number
             or "+18888210810"
         )
-        verification = (
-            getattr(config, "TELNYX_TOLL_FREE_VERIFICATION_STATUS", None) or "pending"
-        ).lower()
-        if verification not in {"pending", "verified", "unknown"}:
-            verification = "unknown"
+        verification = get_telnyx_toll_free_verification_status() or "unknown"
+        if verification not in {
+            "pending",
+            "verified",
+            "unknown",
+            "rejected",
+            "failed",
+            "waiting",
+            "waiting for telnyx",
+            "waiting for vendor",
+        }:
+            # Keep raw normalized value for display; eligibility still requires exact "verified".
+            pass
         app_url = (getattr(config, "APP_URL", None) or "").rstrip("/")
         webhook_configured = bool(app_url) and "localhost" not in app_url.lower()
+        config_complete = telnyx_configuration_complete()
+        sending_enabled = is_sms_sending_enabled()
         # Prefer public program display number; never expose API keys / public key material.
         return {
             "provider": self.name,
             "sms_provider": self.name,
             "configured": self.is_configured(),
-            "send_configured": self.is_configured() and bool(self.phone_number or self.messaging_profile_id),
+            "send_configured": config_complete,
+            "sms_sending_enabled": sending_enabled,
+            "toll_free_verified": is_telnyx_toll_free_verified(),
             "api_key_configured": bool(self.api_key),
             "messaging_profile_configured": bool(self.messaging_profile_id),
             "phone_number_configured": bool(self.phone_number),
@@ -70,7 +89,7 @@ class TelnyxSMSProvider(BaseSMSProvider):
             "toll_free_number_display": support_display
             if support_display.startswith("(")
             else support_display,
-            "toll_free_verification_status": verification,
+            "toll_free_verification_status": verification or "unknown",
             "trial_mode": bool(self.trial_mode),
             "verified_test_number_configured": bool(self.verified_test_number),
             "phone_number_hint": (self.phone_number[-4:] if self.phone_number else None),

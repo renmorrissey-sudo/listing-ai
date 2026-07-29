@@ -365,8 +365,9 @@
         <div id="sms-trial-banner" class="notice" style="margin-top:12px;font-size:12px;display:none;border-color:#c45c26;color:#7a3410;" aria-live="polite"></div>
         <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
           <button type="button" class="btn-generate" id="sms-generate-btn" style="flex:1;"><div class="spinner" id="sms-generate-spinner"></div><span id="sms-generate-label">Generate SMS</span></button>
-          <button type="submit" class="btn-generate" id="sms-send-btn" style="flex:1;"><div class="spinner" id="sms-send-spinner"></div><span id="sms-send-label">Send SMS</span></button>
+          <button type="submit" class="btn-generate" id="sms-send-btn" style="flex:1;" disabled><div class="spinner" id="sms-send-spinner"></div><span id="sms-send-label">Send SMS</span></button>
         </div>
+        <p class="muted" id="sms-verification-block" style="font-size:12px;margin-top:8px;display:none;color:#7a3410;" aria-live="polite"></p>
         <p class="muted" id="sms-config-note" style="font-size:12px;margin-top:10px;"></p>
       </form>
     </div>
@@ -506,6 +507,7 @@
         `Toll-free number: +1 ${tollDisplay}`,
         `Toll-free verification status: ${status.toll_free_verification_status || 'unknown'}`,
         `Trial mode: ${status.trial_mode ? 'enabled' : 'disabled'}`,
+        `SMS sending enabled: ${yesNo(status.sms_sending_enabled)}`,
         `Latest Telnyx send status: ${status.latest_send_status || 'none'}`,
         `Latest Telnyx error code: ${status.latest_telnyx_error_code != null ? status.latest_telnyx_error_code : (status.latest_error_code != null ? status.latest_error_code : 'none')}`,
       ];
@@ -709,23 +711,46 @@
   }
 
   let smsSendConfigured = false;
+  let smsTollFreeVerified = false;
+  let smsVerificationBlockMessage = 'SMS sending is unavailable until Telnyx completes toll-free verification.';
 
   async function loadSmsMessages() {
     const history = document.getElementById('sms-history');
     const placeholder = document.getElementById('sms-placeholder');
     const note = document.getElementById('sms-config-note');
+    const verifyNote = document.getElementById('sms-verification-block');
     if (!history || !placeholder) return;
     try {
       const data = await fetchJson('/sms/messages', {cache: 'no-store'});
       if (!data) return;
-      smsSendConfigured = !!data.send_configured;
+      const statusPayload = data.provider_status || data.twilio_status || {};
+      smsTollFreeVerified = !data.toll_free_verification_blocked && (
+        statusPayload.toll_free_verified === true
+        || (data.toll_free_verification_status || statusPayload.toll_free_verification_status || '') === 'verified'
+        || (data.sms_provider || '').toLowerCase() !== 'telnyx'
+      );
+      smsSendConfigured = !!(data.sms_sending_enabled ?? statusPayload.sms_sending_enabled);
+      if (data.verification_block_message) {
+        smsVerificationBlockMessage = data.verification_block_message;
+      }
       if (typeof syncSmsSendEnabled === 'function') syncSmsSendEnabled();
+      if (verifyNote) {
+        if ((data.sms_provider || '').toLowerCase() === 'telnyx' && !smsTollFreeVerified) {
+          verifyNote.textContent = smsVerificationBlockMessage;
+          verifyNote.style.display = 'block';
+        } else {
+          verifyNote.textContent = '';
+          verifyNote.style.display = 'none';
+        }
+      }
       if (note) {
         const provider = (data.sms_provider || (data.provider_status && data.provider_status.provider) || '').toLowerCase();
         let sendNote;
-        if (data.send_configured && provider === 'telnyx') {
+        if (provider === 'telnyx' && !smsTollFreeVerified) {
+          sendNote = smsVerificationBlockMessage;
+        } else if (smsSendConfigured && provider === 'telnyx') {
           sendNote = 'SMS sending is configured through Telnyx. TopAI drafts the message using Claude. You review and approve the message before it is sent.';
-        } else if (data.send_configured) {
+        } else if (smsSendConfigured) {
           sendNote = 'SMS sending is configured for the active provider. TopAI drafts the message using Claude. You review and approve the message before it is sent.';
         } else {
           sendNote = 'SMS sending is not fully configured yet. You can still generate and save SMS drafts.';
@@ -735,8 +760,7 @@
           : ' Add ANTHROPIC_API_KEY in Railway to enable Claude inbound coaching.';
         note.textContent = sendNote + coachNote;
       }
-      const statusPayload = data.provider_status || data.twilio_status;
-      if (statusPayload) renderProviderStatus(statusPayload);
+      if (statusPayload && Object.keys(statusPayload).length) renderProviderStatus(statusPayload);
       if (!data.messages.length) {
         history.style.display = 'none';
         placeholder.style.display = 'flex';
@@ -1245,7 +1269,8 @@
   const smsSendBtn = document.getElementById('sms-send-btn');
   function syncSmsSendEnabled() {
     if (!smsSendBtn || !smsCompliance) return;
-    smsSendBtn.disabled = !smsSendConfigured || !smsCompliance.checked;
+    // Consent alone never overrides toll-free verification or missing provider config.
+    smsSendBtn.disabled = !smsSendConfigured || !smsTollFreeVerified || !smsCompliance.checked;
   }
   if (smsCompliance) {
     smsCompliance.addEventListener('change', syncSmsSendEnabled);

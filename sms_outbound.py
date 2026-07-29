@@ -9,6 +9,7 @@ import db
 import tenant_sms_db as tdb
 from sms_authorization import (
     can_send_sms,
+    check_telnyx_toll_free_send_allowed,
     record_one_to_one_attestation,
     require_tenant_sender,
 )
@@ -36,6 +37,10 @@ def send_authorized_sms(
     """
     if not compliance_confirmed:
         return None, "Confirm contact SMS consent certification before sending.", 400
+
+    toll_ok, toll_err = check_telnyx_toll_free_send_allowed()
+    if not toll_ok:
+        return None, toll_err, 403
 
     if not tdb.has_accepted_sms_terms(user_id):
         return (

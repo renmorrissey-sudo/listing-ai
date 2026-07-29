@@ -27,7 +27,7 @@ def validate_sms_generate_payload(data):
 
     cleaned["phone_number"] = _clean_phone(cleaned["phone_number"])
     if cleaned["phone_number"] and not re.fullmatch(r"\+[1-9]\d{9,14}", cleaned["phone_number"]):
-        return None, "Enter a valid phone number with area code."
+        return None, "Enter a valid US mobile number (10 digits) or E.164 number like +17202891700."
 
     persona_id = data.get("persona_id")
     try:
@@ -56,6 +56,9 @@ def validate_sms_send_payload(data):
     if not cleaned.get("phone_number"):
         return None, "Enter a valid phone number with area code."
 
+    if not re.fullmatch(r"\+[1-9]\d{9,14}", cleaned["phone_number"]):
+        return None, "Enter a valid US mobile number (10 digits) or E.164 number like +17202891700."
+
     message_body = str(data.get("message_body", "")).strip()[: SMS_FIELD_LIMITS["message_body"]]
     if not message_body:
         return None, "Generate or enter an SMS message before sending."
@@ -70,7 +73,7 @@ def validate_sms_send_payload(data):
 def validate_e164_phone(phone_number):
     cleaned = _clean_phone(phone_number)
     if not re.fullmatch(r"\+[1-9]\d{9,14}", cleaned or ""):
-        return None, "Enter a valid destination phone number in E.164 format (example: +15551234567)."
+        return None, "Enter a valid destination phone number (10-digit US or E.164, e.g. +17202891700)."
     return cleaned, None
 
 

@@ -243,6 +243,11 @@ def health():
     provider = get_sms_provider()
     telnyx = TelnyxSMSProvider()
     twilio = TwilioSmsProvider()
+    from sms_authorization import (
+        get_telnyx_toll_free_verification_status,
+        is_sms_sending_enabled,
+    )
+
     return jsonify({
         "status": "ok",
         "email_configured": email_configured(),
@@ -251,6 +256,12 @@ def health():
         "telnyx_configured": telnyx.is_configured(),
         "twilio_configured": twilio.is_configured(),
         "active_provider_configured": provider.is_configured(),
+        "toll_free_verification_status": (
+            get_telnyx_toll_free_verification_status() or "unknown"
+            if active == "telnyx"
+            else None
+        ),
+        "sms_sending_enabled": is_sms_sending_enabled(),
     }), 200
 
 
@@ -839,8 +850,31 @@ def sms_messages():
         status = provider.get_sender_information()
     status["sms_provider"] = getattr(provider, "name", config.SMS_PROVIDER)
     status["provider"] = status.get("provider") or status["sms_provider"]
+    from sms_authorization import (
+        TOLL_FREE_VERIFICATION_UI_MSG,
+        get_telnyx_toll_free_verification_status,
+        is_sms_sending_enabled,
+        is_telnyx_toll_free_verified,
+    )
+
+    sending_enabled = bool(status.get("sms_sending_enabled", is_sms_sending_enabled()))
+    status["sms_sending_enabled"] = sending_enabled
+    verification_status = status.get("toll_free_verification_status")
+    if verification_status is None and (config.SMS_PROVIDER or "").lower() == "telnyx":
+        verification_status = get_telnyx_toll_free_verification_status() or "unknown"
+        status["toll_free_verification_status"] = verification_status
+    verification_blocked = (
+        (config.SMS_PROVIDER or "").lower() == "telnyx"
+        and not is_telnyx_toll_free_verified()
+    )
     return jsonify({
         "send_configured": bool(status.get("send_configured", provider.is_configured())),
+        "sms_sending_enabled": sending_enabled,
+        "toll_free_verification_status": verification_status,
+        "toll_free_verification_blocked": verification_blocked,
+        "verification_block_message": (
+            TOLL_FREE_VERIFICATION_UI_MSG if verification_blocked else None
+        ),
         "coach_configured": sms_coach.is_configured(),
         "sms_provider": status["sms_provider"],
         "provider_status": status,
@@ -1184,13 +1218,22 @@ def send_sms_message():
             opt_out_status="active",
         )
         db.record_tool_usage(user["id"], "ai_sms", "saved")
+        from sms_authorization import is_sms_sending_enabled
+
         return jsonify({
             "id": message_id,
             "lead_id": lead_id,
             "status": "draft",
             "message_body": cleaned["message_body"],
             "send_configured": provider.is_configured(),
+            "sms_sending_enabled": is_sms_sending_enabled(),
         }), 201
+
+    from sms_authorization import check_telnyx_toll_free_send_allowed
+
+    toll_ok, toll_err = check_telnyx_toll_free_send_allowed()
+    if not toll_ok:
+        return jsonify({"error": toll_err}), 403
 
     result, err, status = send_authorized_sms(
         user["id"],
@@ -1203,7 +1246,7 @@ def send_sms_message():
     if err:
         return jsonify({"error": err, **(result or {})}), status
     db.record_tool_usage(user["id"], "ai_sms", "sent")
-    return jsonify({**result, "send_configured": True}), status
+    return jsonify({**result, "send_configured": True, "sms_sending_enabled": True}), status
 
 
 @app.route("/sms/test", methods=["POST"])
@@ -1217,8 +1260,12 @@ def sms_test_send():
     if error:
         return jsonify({"ok": False, "error": error}), 400
 
-    from sms_authorization import can_send_sms, require_tenant_sender
+    from sms_authorization import can_send_sms, check_telnyx_toll_free_send_allowed, require_tenant_sender
     from sms_outbound import send_authorized_sms
+
+    toll_ok, toll_err = check_telnyx_toll_free_send_allowed()
+    if not toll_ok:
+        return jsonify({"ok": False, "error": toll_err}), 403
 
     existing_lead = db.get_lead_by_phone(user["id"], cleaned["to"])
     if existing_lead:

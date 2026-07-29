@@ -70,10 +70,65 @@ def get_tenant_from_number(account_phone):
 TRIAL_BLOCK_MSG = (
     "Telnyx trial messaging can only send to the verified test phone number."
 )
+TOLL_FREE_VERIFICATION_BLOCK_MSG = "Toll-free messaging verification is not complete."
+TOLL_FREE_VERIFICATION_UI_MSG = (
+    "SMS sending is unavailable until Telnyx completes toll-free verification."
+)
 
 
 def _normalize_digits(phone):
     return "".join(c for c in str(phone or "") if c.isdigit())
+
+
+def get_telnyx_toll_free_verification_status():
+    """Normalized TELNYX_TOLL_FREE_VERIFICATION_STATUS (trim + lowercase)."""
+    raw = getattr(config, "TELNYX_TOLL_FREE_VERIFICATION_STATUS", None)
+    return (str(raw or "").strip().lower())
+
+
+def is_telnyx_toll_free_verified():
+    """Outbound Telnyx SMS is allowed only when status is exactly 'verified'."""
+    return get_telnyx_toll_free_verification_status() == "verified"
+
+
+def check_telnyx_toll_free_send_allowed():
+    """Return (ok, error_message). Enforced when SMS_PROVIDER=telnyx."""
+    if (config.SMS_PROVIDER or "").lower() != "telnyx":
+        return True, None
+    if not is_telnyx_toll_free_verified():
+        return False, TOLL_FREE_VERIFICATION_BLOCK_MSG
+    return True, None
+
+
+def telnyx_configuration_complete():
+    """Non-secret check: API key plus phone number or messaging profile."""
+    if not (getattr(config, "TELNYX_API_KEY", None) or "").strip():
+        return False
+    phone = (getattr(config, "TELNYX_PHONE_NUMBER", None) or "").strip()
+    profile = (getattr(config, "TELNYX_MESSAGING_PROFILE_ID", None) or "").strip()
+    return bool(phone or profile)
+
+
+def is_sms_sending_enabled():
+    """
+    Whether the AI SMS Assistant may enable outbound Send for the active provider.
+    For Telnyx: credentials complete AND toll-free verification status == verified.
+    """
+    provider = (config.SMS_PROVIDER or "").lower().strip()
+    if provider == "telnyx":
+        return telnyx_configuration_complete() and is_telnyx_toll_free_verified()
+    if provider == "twilio":
+        return bool(
+            (getattr(config, "TWILIO_ACCOUNT_SID", None) or "").strip()
+            and (getattr(config, "TWILIO_AUTH_TOKEN", None) or "").strip()
+            and (
+                (getattr(config, "TWILIO_PHONE_NUMBER", None) or "").strip()
+                or (getattr(config, "TWILIO_MESSAGING_SERVICE_SID", None) or "").strip()
+            )
+        )
+    if provider == "simpletexting":
+        return bool((getattr(config, "SIMPLETEXTING_API_TOKEN", None) or "").strip())
+    return False
 
 
 def check_telnyx_trial_destination(to_number):
@@ -189,6 +244,10 @@ def can_send_sms(
 
     if not _provider_credentials_ok():
         return False, "SMS provider is not configured."
+
+    toll_ok, toll_err = check_telnyx_toll_free_send_allowed()
+    if not toll_ok:
+        return False, toll_err
 
     lead = db.get_lead(contact_id, tenant_id)
     if not lead:
