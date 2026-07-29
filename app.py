@@ -85,6 +85,7 @@ limiter = Limiter(
 @app.context_processor
 def inject_business_context():
     path = request.path or "/"
+    user = auth.get_current_user()
     return {
         "business_name": config.BUSINESS_NAME,
         "product_name": config.PRODUCT_NAME,
@@ -94,6 +95,8 @@ def inject_business_context():
         "trial_offer": config.TRIAL_OFFER,
         "canonical_url": seo.canonical_loc(path),
         "is_public_marketing_page": seo.is_public_marketing_path(path),
+        "current_user": user,
+        "user_subscribed": bool(user and auth.user_has_active_subscription(user)),
     }
 
 
@@ -222,51 +225,12 @@ def _extract_section(text, start_marker, end_marker):
     return text[start:]
 
 
-def _stripe_status_from_subscription(subscription):
-    status = subscription.get("status", "none")
-    if status in ("active", "trialing"):
-        return "active"
-    if status in ("canceled", "unpaid", "incomplete_expired"):
-        return "canceled"
-    return status
-
-
-def _stripe_customer_for_email(email):
-    if not config.STRIPE_SECRET_KEY:
-        return None
-    customers = stripe.Customer.list(email=email, limit=1)
-    return customers.data[0] if customers.data else None
-
-
-def _stripe_has_active_subscription(email):
-    customer = _stripe_customer_for_email(email)
-    if not customer:
-        return False
-    for status in ("active", "trialing"):
-        subs = stripe.Subscription.list(customer=customer.id, status=status, limit=1)
-        if subs.data:
-            return True
-    return False
-
-
-def _sync_user_from_stripe(user, email):
-    if not config.STRIPE_SECRET_KEY:
-        return
-    customer = _stripe_customer_for_email(email)
-    if not customer:
-        return
-    db.set_stripe_customer(user["id"], customer.id)
-    for status in ("active", "trialing"):
-        subs = stripe.Subscription.list(customer=customer.id, status=status, limit=1)
-        if subs.data:
-            db.update_user_subscription(
-                user["id"],
-                _stripe_status_from_subscription(subs.data[0]),
-                subscription_id=subs.data[0].id,
-                stripe_customer_id=customer.id,
-            )
-            return
-
+from stripe_billing import (
+    stripe_customer_for_email as _stripe_customer_for_email,
+    stripe_has_active_subscription as _stripe_has_active_subscription,
+    stripe_status_from_subscription as _stripe_status_from_subscription,
+    sync_user_from_stripe as _sync_user_from_stripe,
+)
 
 @app.route("/health")
 def health():
@@ -301,10 +265,12 @@ def index():
 
 @app.route("/app")
 def subscriber_app():
-    """
-    Subscriber tools (Listing Generator, Cold Call Scripts, AI Calling, AI SMS).
-    The Subscriber Access modal opens here for visitors who intentionally open tools.
-    """
+    """Subscriber tools. Requires password sign-in (no email-only gate)."""
+    user = auth.get_current_user()
+    if not user:
+        return redirect(url_for("login", next="/app"))
+    if config.SUBSCRIPTION_REQUIRED and not auth.user_has_active_subscription(user):
+        return redirect(url_for("subscribe"))
     return render_template("index.html")
 
 
@@ -323,66 +289,98 @@ def session_status():
 @app.route("/verify", methods=["POST"])
 @limiter.limit("10 per minute")
 def verify():
-    data = request.get_json(silent=True) or {}
-    email = data.get("email", "").strip().lower()
-    if not email or "@" not in email:
-        return jsonify({"error": "Enter a valid email address."}), 400
-
-    has_free_access = auth.email_has_free_access(email)
-
-    if config.SUBSCRIPTION_REQUIRED and not has_free_access:
-        if not config.STRIPE_SECRET_KEY:
-            return jsonify({"error": "Billing is not configured yet."}), 503
-        try:
-            if not _stripe_has_active_subscription(email):
-                return jsonify({"error": "No active subscription found for this email."}), 403
-        except stripe.StripeError:
-            logger.exception("Stripe verification failed for %s", email)
-            return jsonify({"error": "Could not verify subscription. Please try again."}), 500
-
-    user = db.get_user_by_email(email)
-    if not user:
-        user_id = db.create_user(email, auth.hash_password(secrets.token_urlsafe(32)))
-        user = db.get_user_by_id(user_id)
-
-    if config.STRIPE_SECRET_KEY:
-        try:
-            _sync_user_from_stripe(user, email)
-            user = db.get_user_by_id(user["id"])
-        except stripe.StripeError:
-            logger.exception("Stripe sync failed for %s", email)
-
-    if config.SUBSCRIPTION_REQUIRED and not auth.user_has_active_subscription(user):
-        return jsonify({"error": "No active subscription found for this email."}), 403
-
-    auth.login_user(user["id"])
+    """Retired email-only access. Password sign-in is required."""
     return jsonify({
-        "email": user["email"],
-        "has_billing_portal": bool(user.get("stripe_customer_id")),
-    })
+        "error": "Email-only access is no longer available. Please sign in with your password.",
+        "login_url": "/login?next=/app",
+    }), 410
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if auth.get_current_user():
+        nxt = request.args.get("next") or "/app"
+        if isinstance(nxt, str) and nxt.startswith("/") and not nxt.startswith("//"):
+            return redirect(nxt)
         return redirect(url_for("subscriber_app"))
     error = None
+    success = request.args.get("reset") == "1"
     if request.method == "POST":
         email = request.form.get("email", "").strip()
         password = request.form.get("password", "")
         user = db.get_user_by_email(email)
         if user and auth.verify_password(user["password_hash"], password):
             auth.login_user(user["id"])
-            return redirect(request.args.get("next") or url_for("subscriber_app"))
+            nxt = request.args.get("next") or request.form.get("next") or "/app"
+            if isinstance(nxt, str) and nxt.startswith("/") and not nxt.startswith("//"):
+                return redirect(nxt)
+            return redirect(url_for("subscriber_app"))
         error = "Invalid email or password."
     return render_template(
         "auth_form.html",
-        title="Log in",
+        title="Sign in",
         submit_label="Log in",
         show_confirm=False,
-        footer_text='No account? <a href="/register">Create one</a>',
+        show_forgot=True,
+        next_url=request.args.get("next") or "/app",
+        success="Password updated. You can sign in now." if success else None,
+        footer_text='No account? <a href="/register">Create account</a>',
         error=error,
     )
+
+
+@app.route("/forgot-password", methods=["GET", "POST"])
+@limiter.limit("5 per minute")
+def forgot_password():
+    import password_reset as pr
+
+    if auth.get_current_user():
+        return redirect(url_for("subscriber_app"))
+    message = None
+    if request.method == "POST":
+        # Always show neutral message (anti-enumeration). Also rate-limit by email key.
+        email = (request.form.get("email") or "").strip().lower()
+        message = pr.request_password_reset(email)
+    return render_template(
+        "forgot_password.html",
+        message=message,
+        error=None,
+    )
+
+
+@app.route("/reset-password", methods=["GET", "POST"])
+@limiter.limit("20 per minute")
+def reset_password():
+    import password_reset as pr
+
+    if auth.get_current_user():
+        return redirect(url_for("subscriber_app"))
+    token = (request.args.get("token") or request.form.get("token") or "").strip()
+    error = None
+    if request.method == "GET":
+        if not pr.peek_reset_token(token):
+            return render_template(
+                "reset_password.html",
+                token="",
+                error="This password reset link is invalid or has expired.",
+                invalid=True,
+            )
+        return render_template("reset_password.html", token=token, error=None, invalid=False)
+
+    pwd = request.form.get("password") or ""
+    confirm = request.form.get("confirm_password") or ""
+    err = pr.validate_new_password(pwd, confirm)
+    if err:
+        return render_template("reset_password.html", token=token, error=err, invalid=False), 400
+    _user_id, consume_err = pr.consume_reset_token(token, pwd)
+    if consume_err:
+        return render_template(
+            "reset_password.html",
+            token="",
+            error=consume_err,
+            invalid=True,
+        ), 400
+    return redirect(url_for("login", reset=1, next="/app"))
 
 
 @app.route("/register", methods=["GET", "POST"])
@@ -411,14 +409,18 @@ def register():
         title="Create account",
         submit_label="Create account",
         show_confirm=True,
-        footer_text='Already have an account? <a href="/login">Log in</a><br><br>By signing up you agree to our <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.',
+        show_forgot=False,
+        next_url="/app",
+        footer_text='Already have an account? <a href="/login">Sign in</a><br><br>By signing up you agree to our <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.',
         error=error,
     )
 
 
-@app.route("/logout", methods=["POST"])
+@app.route("/logout", methods=["GET", "POST"])
 def logout():
     auth.logout_user()
+    if request.method == "GET" or "text/html" in (request.headers.get("Accept") or ""):
+        return redirect(url_for("index"))
     return jsonify({"ok": True})
 
 

@@ -71,6 +71,20 @@ CONTACT_EMAIL = "support@topairealestatetools.com"
 SUBSCRIPTION_PRICE = "$49/month"
 TRIAL_OFFER = "50% off first month with promo code TRIAL50"
 
+# Transactional email (password reset). Prefer SendGrid; SMTP is fallback.
+SENDGRID_API_KEY = _env_strip("SENDGRID_API_KEY")
+SMTP_HOST = _env_strip("SMTP_HOST")
+SMTP_PORT = int(_env("SMTP_PORT", "587") or "587")
+SMTP_USERNAME = _env_strip("SMTP_USERNAME")
+SMTP_PASSWORD = _env_strip("SMTP_PASSWORD")
+SMTP_FROM_EMAIL = _env_strip("SMTP_FROM_EMAIL") or CONTACT_EMAIL
+SMTP_USE_TLS = (_env("SMTP_USE_TLS", "true") or "true").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
 
 def _email_list(name):
     raw = _env(name, "")

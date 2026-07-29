@@ -11,41 +11,70 @@
     .card { background: white; border-radius: 12px; padding: 32px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); width: 100%; max-width: 400px; }
     h1 { font-size: 22px; margin-bottom: 8px; }
     p.sub { color: #667; font-size: 14px; margin-bottom: 24px; }
-    .form-group { margin-bottom: 14px; }
+    .form-group { margin-bottom: 14px; position: relative; }
     label { display: block; font-size: 12px; font-weight: 600; color: #556; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
     input { width: 100%; padding: 10px 12px; border: 1.5px solid #e0e4ed; border-radius: 7px; font-size: 14px; }
     input:focus { outline: none; border-color: #4f8ef7; }
+    .password-wrap { position: relative; }
+    .password-wrap input { padding-right: 72px; }
+    .toggle-pw { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); border: none; background: transparent; color: #4f8ef7; font-size: 12px; font-weight: 700; cursor: pointer; }
+    .forgot { display: block; margin-top: 8px; font-size: 13px; }
     .btn { width: 100%; padding: 12px; background: #4f8ef7; color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 8px; }
     .btn:hover { background: #3a7de0; }
     .error { background: #fff5f5; border: 1.5px solid #fca5a5; color: #dc2626; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px; }
+    .success { background: #ecfdf5; border: 1.5px solid #6ee7b7; color: #065f46; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px; }
     .footer { margin-top: 20px; font-size: 13px; color: #667; text-align: center; }
     a { color: #4f8ef7; text-decoration: none; }
     a:hover { text-decoration: underline; }
+    .brand { font-size: 13px; color: #667; margin-bottom: 10px; }
   </style>
 </head>
 <body>
   <div class="card">
+    <div class="brand">TopAI Real Estate Tools · Operated by Sky Blue Holdings LLC</div>
     <h1>{{ title }}</h1>
     <p class="sub">AI-powered content for real estate agents</p>
-    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    {% if success %}<div class="success" role="status">{{ success }}</div>{% endif %}
+    {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
     <form method="post">
+      {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}" />{% endif %}
       <div class="form-group">
         <label for="email">Email</label>
         <input id="email" name="email" type="email" autocomplete="email" required />
       </div>
       <div class="form-group">
         <label for="password">Password</label>
-        <input id="password" name="password" type="password" autocomplete="{{ 'new-password' if show_confirm else 'current-password' }}" required />
+        <div class="password-wrap">
+          <input id="password" name="password" type="password" autocomplete="{{ 'new-password' if show_confirm else 'current-password' }}" required />
+          <button class="toggle-pw" type="button" data-target="password" aria-label="Show password">Show</button>
+        </div>
+        {% if show_forgot %}
+        <a class="forgot" href="/forgot-password">Forgot your password?</a>
+        {% endif %}
       </div>
       {% if show_confirm %}
       <div class="form-group">
         <label for="confirm_password">Confirm password</label>
-        <input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" required />
+        <div class="password-wrap">
+          <input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" required />
+          <button class="toggle-pw" type="button" data-target="confirm_password" aria-label="Show password">Show</button>
+        </div>
       </div>
       {% endif %}
       <button class="btn" type="submit">{{ submit_label }}</button>
     </form>
     <p class="footer">{{ footer_text|safe }}</p>
   </div>
+  <script>
+    document.querySelectorAll('.toggle-pw').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var input = document.getElementById(btn.getAttribute('data-target'));
+        if (!input) return;
+        var show = input.type === 'password';
+        input.type = show ? 'text' : 'password';
+        btn.textContent = show ? 'Hide' : 'Show';
+      });
+    });
+  </script>
 </body>
 </html>

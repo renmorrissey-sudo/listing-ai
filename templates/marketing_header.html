@@ -1,0 +1,23 @@
+{# Shared marketing header. current_user injected via context or passed explicitly. #}
+<header>
+  <div>
+    <a class="logo" href="/">TopAI <span>Real Estate Tools</span></a>
+    <div class="business">Operated by {{ legal_entity_name }}</div>
+  </div>
+  <nav class="nav" aria-label="Marketing">
+    <a href="/features">Features</a>
+    <a href="/how-it-works">How It Works</a>
+    {% if current_user and user_subscribed %}
+    <a href="/dashboard">Dashboard</a>
+    <a href="/app">Open Tools</a>
+    <a href="/logout">Log out</a>
+    {% else %}
+    <a href="/pricing">Pricing</a>
+    <a href="/terms">Terms</a>
+    <a href="/privacy">Privacy</a>
+    <a href="/contact">Contact</a>
+    <a href="/login">Sign in</a>
+    <a href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00?prefilled_promo_code=TRIAL50" target="_blank" rel="noopener">Start trial</a>
+    {% endif %}
+  </nav>
+</header>

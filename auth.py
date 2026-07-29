@@ -20,6 +20,8 @@ def verify_password(password_hash, password):
 def login_user(user_id):
     session.clear()
     session["user_id"] = user_id
+    user = db.get_user_by_id(user_id)
+    session["session_version"] = int((user or {}).get("session_version") or 1)
     session.permanent = True
 
 
@@ -27,11 +29,27 @@ def logout_user():
     session.clear()
 
 
+def bump_session_version(user_id):
+    db.bump_user_session_version(user_id)
+
+
 def get_current_user():
     user_id = session.get("user_id")
     if not user_id:
         return None
-    return db.get_user_by_id(user_id)
+    user = db.get_user_by_id(user_id)
+    if not user:
+        logout_user()
+        return None
+    expected = int(user.get("session_version") or 1)
+    actual = session.get("session_version")
+    if actual is not None and int(actual) != expected:
+        logout_user()
+        return None
+    # Backfill session_version for older sessions created before this field.
+    if actual is None:
+        session["session_version"] = expected
+    return user
 
 
 def email_has_free_access(email):
@@ -52,9 +70,12 @@ def login_required(view):
     def wrapped(*args, **kwargs):
         user = get_current_user()
         if not user:
-            if request.path.startswith("/generate"):
+            if request.path.startswith("/generate") or request.path.startswith("/api/"):
                 return jsonify({"error": "Please log in to continue."}), 401
-            return redirect(url_for("login", next=request.path))
+            nxt = request.path
+            if request.query_string:
+                nxt = f"{request.path}?{request.query_string.decode()}"
+            return redirect(url_for("login", next=nxt))
         return view(*args, **kwargs)
 
     return wrapped

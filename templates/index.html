@@ -140,18 +140,18 @@
 </head>
 <body>
 
-<div id="gate" class="gate-overlay">
+<div id="gate" class="gate-overlay hidden">
   <div class="gate-stack">
     <div class="gate-card">
       <div class="gate-logo">TopAI <span>Real Estate Tools</span></div>
       <div class="gate-tagline">AI-powered content for real estate agents</div>
-      <h2>Subscriber Access</h2>
-      <p>Enter the email address you used to subscribe.</p>
-      <input type="email" class="gate-input" id="gate-email" placeholder="you@email.com" autocomplete="email" />
+      <h2>Sign in required</h2>
+      <p>Subscriber tools require password sign-in. Email-only access has been retired.</p>
       <div class="gate-error" id="gate-error"></div>
-      <button class="gate-btn" id="gate-submit">Access Tools</button>
+      <a class="gate-btn" id="gate-submit" href="/login?next=/app" style="display:block;text-align:center;text-decoration:none;">Sign in</a>
       <div class="gate-divider">don't have a subscription?</div>
       <a class="gate-subscribe-link" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00?prefilled_promo_code=TRIAL50" target="_blank">Start trial &mdash; 50% off &rArr;</a>
+      <input type="hidden" id="gate-email" value="" />
       <div class="gate-links">
         <div>Sold by {{ business_name }}</div>
         <a href="/">Home</a>
@@ -184,7 +184,7 @@
   <div>
     <a class="logo" href="/dashboard" aria-label="TopAI Real Estate Tools — Dashboard" id="header-logo">TopAI <span>Real Estate Tools</span></a>
     <div class="tagline">AI-powered content for real estate agents</div>
-    <div class="business-note">Operated by {{ business_name }}</div>
+    <div class="business-note">Operated by {{ legal_entity_name }}</div>
   </div>
   <div id="header-right">
     <a class="subscribe-btn" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00?prefilled_promo_code=TRIAL50" target="_blank">Start trial &mdash; 50% off</a>

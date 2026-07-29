@@ -31,10 +31,12 @@ def _cleanup_db():
 @pytest.fixture
 def app_client():
     import db
-    from app import app
+    from app import app, limiter
 
     db.init_db()
     app.config["TESTING"] = True
+    # Avoid cross-test IP rate-limit interference on auth endpoints.
+    limiter.enabled = False
     with app.test_client() as client:
         yield client
 

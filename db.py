@@ -79,13 +79,35 @@ def _ensure_default_voice_personas(conn):
         )
 
 
-def create_user(email, password_hash):
+def create_user(email, password_hash, password_set=True):
     now = datetime.now(timezone.utc).isoformat()
+    import config
+
+    email_n = email.lower().strip()
     with get_db() as conn:
-        cur = conn.execute(
-            "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
-            (email.lower().strip(), password_hash, now),
-        )
+        # Idempotent: do not create a second row for the same email.
+        existing = conn.execute(
+            "SELECT id FROM users WHERE email = ?", (email_n,)
+        ).fetchone()
+        if existing:
+            return existing["id"] if hasattr(existing, "keys") else existing[0]
+        if config.DB_ENGINE == "postgres":
+            pw_set = bool(password_set)
+            cur = conn.execute(
+                """
+                INSERT INTO users (email, password_hash, created_at, password_set, session_version)
+                VALUES (?, ?, ?, ?, 1)
+                """,
+                (email_n, password_hash, now, pw_set),
+            )
+        else:
+            cur = conn.execute(
+                """
+                INSERT INTO users (email, password_hash, created_at, password_set, session_version)
+                VALUES (?, ?, ?, ?, 1)
+                """,
+                (email_n, password_hash, now, 1 if password_set else 0),
+            )
         return cur.lastrowid
 
 
@@ -101,6 +123,90 @@ def get_user_by_id(user_id):
     with get_db() as conn:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return dict(row) if row else None
+
+
+def update_user_password(user_id, password_hash, password_set=True):
+    import config
+
+    with get_db() as conn:
+        if config.DB_ENGINE == "postgres":
+            conn.execute(
+                """
+                UPDATE users
+                SET password_hash = ?, password_set = ?
+                WHERE id = ?
+                """,
+                (password_hash, bool(password_set), user_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE users
+                SET password_hash = ?, password_set = ?
+                WHERE id = ?
+                """,
+                (password_hash, 1 if password_set else 0, user_id),
+            )
+
+
+def bump_user_session_version(user_id):
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE users
+            SET session_version = COALESCE(session_version, 1) + 1
+            WHERE id = ?
+            """,
+            (user_id,),
+        )
+
+
+def create_password_reset_token(*, email, token_hash, user_id, expires_at, created_at):
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO password_reset_tokens
+                (email, user_id, token_hash, expires_at, used_at, created_at)
+            VALUES (?, ?, ?, ?, NULL, ?)
+            """,
+            (email.lower().strip(), user_id, token_hash, expires_at, created_at),
+        )
+        return cur.lastrowid
+
+
+def get_password_reset_token_by_hash(token_hash):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM password_reset_tokens WHERE token_hash = ? LIMIT 1",
+            (token_hash,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def mark_password_reset_token_used(token_id):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE password_reset_tokens
+            SET used_at = ?
+            WHERE id = ? AND used_at IS NULL
+            """,
+            (now, token_id),
+        )
+
+
+def invalidate_password_reset_tokens_for_email(email):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE password_reset_tokens
+            SET used_at = COALESCE(used_at, ?)
+            WHERE email = ? AND used_at IS NULL
+            """,
+            (now, email.lower().strip()),
+        )
 
 
 def get_user_by_stripe_customer(customer_id):

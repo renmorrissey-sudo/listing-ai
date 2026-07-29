@@ -56,27 +56,13 @@
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <div class="logo">TopAI <span>Real Estate Tools</span></div>
-      <div class="business">Operated by {{ business_name }}</div>
-    </div>
-    <nav class="nav">
-      <a href="/">Home</a>
-      <a href="/features">Features</a>
-      <a href="/how-it-works">How It Works</a>
-      <a href="/pricing">Pricing</a>
-      <a href="/contact">Contact</a>
-      <a href="/app">Access Tools</a>
-      <a href="/login">Sign in</a>
-    </nav>
-  </header>
+  {% include "marketing_header.html" %}
 
   <main>
     <section class="hero">
       <h1>How {{ product_name }} works</h1>
-      <p class="muted">{{ product_name }} is operated by {{ business_name }}. It is a paid SaaS web app that helps real estate professionals create marketing and prospecting content with AI, and optionally place consent-based AI follow-up calls.</p>
-      <p class="muted">Customers subscribe through Stripe, open the web app, verify access with their subscriber email, enter property or lead details, and receive draft outputs they can copy, review, and use in their own real estate workflow.</p>
+      <p class="muted">{{ product_name }} is operated by {{ legal_entity_name }}. It is a paid SaaS web app that helps real estate professionals create marketing and prospecting content with AI, and optionally place consent-based AI follow-up calls.</p>
+      <p class="muted">Customers subscribe through Stripe, sign in with their email and password, enter property or lead details, and receive draft outputs they can copy, review, and use in their own real estate workflow.</p>
       <div class="video-wrap" style="margin: 22px 0 8px;">
         <video
           controls
@@ -92,7 +78,7 @@
       </div>
       <a class="cta" href="/features">Browse features</a>
       <a class="cta secondary" href="/pricing">View pricing</a>
-      <a class="cta secondary" href="/app" id="access-tools-cta">Access Tools</a>
+      <a class="cta secondary" href="/login?next=/app" id="access-tools-cta">Sign in</a>
     </section>
 
     <section class="step" id="step-1">
@@ -118,13 +104,13 @@
     <section class="step" id="step-2">
       <div class="copy">
         <div class="badge">Step 2</div>
-        <h2>Access the web app</h2>
-        <p class="muted">After payment, the customer visits the app homepage and enters the same email address used at Stripe checkout.</p>
+        <h2>Sign in to the web app</h2>
+        <p class="muted">After payment, the customer signs in with the same email used at Stripe checkout and their account password.</p>
         <ol>
-          <li>Open <a href="/app">Access Tools</a> on topairealestatetools.com</li>
-          <li>Enter the subscriber email on the access screen</li>
-          <li>The app verifies that the email belongs to an active or eligible subscription</li>
-          <li>Subscriber tools unlock for that session</li>
+          <li>Open <a href="/login">Sign in</a> on topairealestatetools.com</li>
+          <li>Enter your subscriber email and password</li>
+          <li>If you never set a password, use Forgot your password? to create one</li>
+          <li>After sign-in, Open Tools unlocks your subscriber workspace</li>
         </ol>
       </div>
       <figure>

@@ -59,15 +59,15 @@ def test_index_public_nav_for_visitors(app_client):
     assert "Features" in html
     assert "Pricing" in html
     assert "How It Works" in html
-    assert "Access Tools" in html
+    assert "Sign in" in html
+    assert "Access Tools" not in html
     assert 'id="gate"' not in html
 
 
-def test_app_tools_page_has_gate_for_visitors(app_client):
-    html = app_client.get("/app").get_data(as_text=True)
-    assert 'id="public-nav"' in html
-    assert 'id="gate"' in html
-    assert "Subscriber Access" in html
+def test_app_tools_page_requires_login_for_visitors(app_client):
+    res = app_client.get("/app", follow_redirects=False)
+    assert res.status_code in (301, 302)
+    assert "/login" in res.headers.get("Location", "")
 
 
 def test_all_application_links_in_tool_nav(app_client, two_users):

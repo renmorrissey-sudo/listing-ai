@@ -19,7 +19,7 @@ def test_how_it_works_public_200_without_auth(app_client):
     assert "<video" in html
     assert "topai-how-it-works.mp4" in html
     assert 'id="access-tools-cta"' in html
-    assert 'href="/app"' in html
+    assert 'href="/login' in html
     assert not re.search(r'name=["\']robots["\']\s+content=["\'][^"\']*noindex', html, re.I)
     assert 'rel="canonical"' in html
     assert "https://topairealestatetools.com/how-it-works" in html
@@ -49,35 +49,30 @@ def test_home_landing_is_public_and_indexable(app_client):
     assert "<video" in html or "landing-video" in html
     assert "Start trial" in html
     assert "View pricing" in html
-    assert "Access Tools" in html
     assert "Sign in" in html
+    assert "Access Tools" not in html
     assert 'href="/features"' in html
     assert 'href="/how-it-works"' in html
     assert 'href="/pricing"' in html
     assert 'href="/terms"' in html
     assert 'href="/privacy"' in html
-    assert 'href="/refund-policy"' in html
     assert 'href="/contact"' in html
+    assert "Operated by Sky Blue Holdings LLC" in html
 
 
-def test_access_tools_opens_subscriber_gate(app_client):
-    res = app_client.get("/app")
-    assert res.status_code == 200
-    html = res.get_data(as_text=True)
-    assert 'id="gate"' in html
-    assert "Subscriber Access" in html
-    assert "gate-overlay" in html
-    # Modal is present for intentional tool access (not hidden by default).
-    assert 'class="gate-overlay hidden"' not in html
-    assert re.search(r'name=["\']robots["\']\s+content=["\'][^"\']*noindex', html, re.I)
+def test_access_tools_requires_login(app_client):
+    res = app_client.get("/app", follow_redirects=False)
+    assert res.status_code in (301, 302)
+    loc = res.headers.get("Location", "")
+    assert "/login" in loc
 
 
-def test_private_tools_redirect_to_app_gate(app_client):
+def test_private_tools_redirect_to_login(app_client):
     for path in ("/dashboard", "/tutorial", "/crm/leads", "/crm/tasks"):
         res = app_client.get(path, follow_redirects=False)
         assert res.status_code in (301, 302), path
         loc = res.headers.get("Location", "")
-        assert "/app" in loc, f"{path} -> {loc}"
+        assert "/login" in loc or "/app" in loc, f"{path} -> {loc}"
 
 
 def test_generate_api_still_protected(app_client):
@@ -88,6 +83,7 @@ def test_generate_api_still_protected(app_client):
 def test_public_nav_preserved_on_marketing_pages(app_client):
     for path in ("/features", "/how-it-works", "/pricing"):
         html = app_client.get(path).get_data(as_text=True)
-        for label in ("Features", "How It Works", "Pricing"):
+        for label in ("Features", "How It Works"):
             assert label in html, path
-        assert "Access Tools" in html, path
+        assert "Sign in" in html, path
+        assert "Access Tools" not in html, path

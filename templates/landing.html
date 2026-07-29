@@ -40,23 +40,7 @@
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <a class="logo" href="/">TopAI <span>Real Estate Tools</span></a>
-      <div class="business">Operated by {{ business_name }}</div>
-    </div>
-    <nav class="nav" aria-label="Marketing">
-      <a href="/features">Features</a>
-      <a href="/how-it-works">How It Works</a>
-      <a href="/pricing">Pricing</a>
-      <a href="/terms">Terms</a>
-      <a href="/privacy">Privacy</a>
-      <a href="/refund-policy">Refund Policy</a>
-      <a href="/contact">Contact</a>
-      <a href="/app">Access Tools</a>
-      <a href="/login">Sign in</a>
-    </nav>
-  </header>
+  {% include "marketing_header.html" %}
 
   <main>
     <section class="hero">
@@ -65,8 +49,7 @@
       <div class="cta-row">
         <a class="cta" href="https://buy.stripe.com/5kQaEW8fngKkfSYf132sM00?prefilled_promo_code=TRIAL50" target="_blank" rel="noopener">Start trial</a>
         <a class="cta secondary" href="/pricing">View pricing</a>
-        <a class="cta ghost" href="/app" id="access-tools-cta">Access Tools</a>
-        <a class="cta ghost" href="/login">Sign in</a>
+        <a class="cta ghost" href="/login?next=/app" id="access-tools-cta">Sign in</a>
       </div>
       <video
         id="landing-video"

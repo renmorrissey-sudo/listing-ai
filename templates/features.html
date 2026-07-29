@@ -57,21 +57,7 @@
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <div class="logo">TopAI <span>Real Estate Tools</span></div>
-      <div class="business">Operated by {{ business_name }}</div>
-    </div>
-    <nav class="nav">
-      <a href="/">Home</a>
-      <a href="/features">Features</a>
-      <a href="/how-it-works">How It Works</a>
-      <a href="/pricing">Pricing</a>
-      <a href="/contact">Contact</a>
-      <a href="/app">Access Tools</a>
-      <a href="/login">Sign in</a>
-    </nav>
-  </header>
+  {% include "marketing_header.html" %}
 
   <main>
     <section class="hero">
@@ -93,7 +79,7 @@
       </div>
       <a class="cta" href="/pricing">View pricing</a>
       <a class="cta secondary" href="/how-it-works">See how it works</a>
-      <a class="cta secondary" href="/app" id="access-tools-cta">Access Tools</a>
+      <a class="cta secondary" href="/login?next=/app" id="access-tools-cta">Sign in</a>
     </section>
 
     <section class="feature" id="listing-generator">
