@@ -75,7 +75,25 @@ def test_subscriber_without_known_password_can_establish_one(app_client, monkeyp
         follow_redirects=False,
     )
     assert res.status_code in (301, 302)
-    assert "/login" in res.headers["Location"]
+    assert "/password-updated" in res.headers["Location"]
+    assert "token=" not in res.headers["Location"]
+
+    success = app_client.get("/password-updated")
+    assert success.status_code == 200
+    html = success.get_data(as_text=True)
+    assert "Password updated successfully. You can" in html
+    assert 'href="/login?password_updated=1"' in html
+    assert 'id="sign-in-btn"' in html
+    assert ">Sign in<" in html
+    assert "sign in now" in html
+
+    login_page = app_client.get("/login?password_updated=1")
+    assert login_page.status_code == 200
+    assert b"Your password has been updated. Sign in with your new password." in login_page.data
+
+    # Used token cannot be reused (including via refresh of old reset URL).
+    reuse = app_client.get(f"/reset-password?token={token}")
+    assert b"invalid or has expired" in reuse.data
 
     user = db.get_user_by_email(email)
     assert user["id"] == uid
@@ -88,6 +106,17 @@ def test_subscriber_without_known_password_can_establish_one(app_client, monkeyp
             "SELECT COUNT(*) AS c FROM users WHERE email = ?", (email,)
         ).fetchone()["c"]
     assert int(count) == 1
+
+
+def test_password_updated_sign_in_button_routes_to_login(app_client):
+    res = app_client.get("/password-updated")
+    assert res.status_code == 200
+    html = res.get_data(as_text=True)
+    assert 'href="/login?password_updated=1"' in html
+    assert 'id="sign-in-btn"' in html
+    login = app_client.get("/login?password_updated=1")
+    assert login.status_code == 200
+    assert b"Your password has been updated. Sign in with your new password." in login.data
 
 
 def test_reset_token_expires(app_client, two_users, monkeypatch):

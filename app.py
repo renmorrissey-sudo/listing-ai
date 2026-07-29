@@ -310,7 +310,7 @@ def login():
             return redirect(nxt)
         return redirect(url_for("subscriber_app"))
     error = None
-    success = request.args.get("reset") == "1"
+    password_updated = request.args.get("password_updated") == "1" or request.args.get("reset") == "1"
     if request.method == "POST":
         email = request.form.get("email", "").strip()
         password = request.form.get("password", "")
@@ -329,7 +329,11 @@ def login():
         show_confirm=False,
         show_forgot=True,
         next_url=request.args.get("next") or "/app",
-        success="Password updated. You can sign in now." if success else None,
+        success=(
+            "Your password has been updated. Sign in with your new password."
+            if password_updated
+            else None
+        ),
         footer_text='No account? <a href="/register">Create account</a>',
         error=error,
     )
@@ -386,7 +390,16 @@ def reset_password():
             error=consume_err,
             invalid=True,
         ), 400
-    return redirect(url_for("login", reset=1, next="/app"))
+    # Redirect strips the reset token from the browser URL.
+    return redirect(url_for("password_updated"))
+
+
+@app.route("/password-updated")
+def password_updated():
+    """Post-reset success screen (no token in URL)."""
+    if auth.get_current_user():
+        return redirect(url_for("subscriber_app"))
+    return render_template("password_updated.html")
 
 
 @app.route("/register", methods=["GET", "POST"])
