@@ -33,7 +33,7 @@
         <li>Toll-free number: +1 {{ toll_free_number_display or '(888) 821-0810' }}</li>
         <li>Toll-free verification: {{ toll_free_verification_status or 'unknown' }}</li>
         <li>Bulk sending enabled: {{ 'yes' if bulk_sending_enabled else 'no' }}</li>
-        <li>Campaign worker available: {{ 'yes' if worker_available else 'no' }}</li>
+        <li>Campaign worker available: {{ 'yes' if worker_available else 'no' }}{% if worker_health_state %} ({{ worker_health_state }}){% endif %}</li>
         <li>Telnyx trial mode: {{ 'active' if telnyx_trial_mode else 'inactive' }}</li>
         <li>Messaging Profile configured: {{ telnyx_profile_configured }}</li>
         <li>Platform sender number configured: {{ telnyx_phone_configured }}</li>

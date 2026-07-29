@@ -273,14 +273,30 @@ def main():
     )
     # Ensure schema present
     db.init_db()
+    logger.info("SMS campaign worker schema ready id=%s", worker_id)
+    ok = tdb.touch_worker_heartbeat(
+        worker_id,
+        status="running",
+        metadata={"provider": config.SMS_PROVIDER, "boot": True},
+    )
+    logger.info("SMS campaign worker initial heartbeat ok=%s id=%s", ok, worker_id)
     idle_sleep = 2
+    loops = 0
     while _RUNNING:
         try:
-            tdb.touch_worker_heartbeat(
+            ok = tdb.touch_worker_heartbeat(
                 worker_id,
                 status="running",
                 metadata={"provider": config.SMS_PROVIDER},
             )
+            loops += 1
+            if not ok or loops % 30 == 1:
+                logger.info(
+                    "SMS campaign worker heartbeat ok=%s loop=%s id=%s",
+                    ok,
+                    loops,
+                    worker_id,
+                )
             worked = process_one(worker_id)
             if worked:
                 idle_sleep = 1

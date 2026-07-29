@@ -966,8 +966,11 @@ def get_campaign_worker_health(*, stale_seconds=120):
 
 
 def touch_worker_heartbeat(worker_id, *, status="running", metadata=None):
+    import logging
+
     now = _now()
     meta = json.dumps(metadata) if isinstance(metadata, dict) else metadata
+    log = logging.getLogger(__name__)
     with get_db() as conn:
         try:
             existing = conn.execute(
@@ -994,6 +997,7 @@ def touch_worker_heartbeat(worker_id, *, status="running", metadata=None):
                 )
             return True
         except Exception:
+            log.exception("Failed to write sms_worker_heartbeat worker_id=%s", worker_id)
             return False
 
 
