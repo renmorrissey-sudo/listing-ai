@@ -149,6 +149,8 @@ TELNYX_TOLL_FREE_VERIFICATION_STATUS = (
     (_env_strip("TELNYX_TOLL_FREE_VERIFICATION_STATUS") or "").strip().lower()
 )
 SMS_PROVIDER_MSGS_PER_SECOND = float(_env("SMS_PROVIDER_MSGS_PER_SECOND", "1"))
+# Optional override for Bulk SMS worker presence (true|false). Empty = auto-detect via recent job claims.
+SMS_CAMPAIGN_WORKER_AVAILABLE = _env_strip("SMS_CAMPAIGN_WORKER_AVAILABLE") or ""
 
 CONSENT_UPLOAD_DIR = _env_strip("CONSENT_UPLOAD_DIR") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "private_uploads", "consent_evidence"

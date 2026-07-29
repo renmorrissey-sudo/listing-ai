@@ -127,7 +127,10 @@ def handle_http_exception(error):
 
 @app.errorhandler(Exception)
 def handle_unexpected_exception(error):
-    logger.exception("Unhandled error: %s", error)
+    import uuid as _uuid
+
+    correlation_id = _uuid.uuid4().hex[:12]
+    logger.exception("Unhandled error correlation_id=%s: %s", correlation_id, error)
     # Public HTML forms should not receive opaque JSON 500s.
     if request.path == "/sms-consent" and request.method == "POST":
         try:
@@ -154,7 +157,28 @@ def handle_unexpected_exception(error):
             )
         except Exception:
             logger.exception("Failed to render SMS consent error page")
-    return jsonify({"error": "Something went wrong. Please try again."}), 500
+    wants_html = (
+        request.path.startswith("/crm/")
+        or request.path.startswith("/app")
+        or request.path.startswith("/tutorial")
+        or request.path.startswith("/dashboard")
+        or "text/html" in (request.headers.get("Accept") or "")
+    )
+    if wants_html and not request.path.startswith(("/api/", "/generate", "/sms/", "/voice/", "/webhook")):
+        return (
+            render_template(
+                "error.html",
+                message=(
+                    "Something went wrong loading this page. "
+                    f"Reference: {correlation_id}. Please try again."
+                ),
+            ),
+            500,
+        )
+    return jsonify({
+        "error": "Something went wrong. Please try again.",
+        "correlation_id": correlation_id,
+    }), 500
 
 
 def build_listing_prompt(data):

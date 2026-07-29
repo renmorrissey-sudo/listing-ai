@@ -17,19 +17,47 @@ import auth
 import config
 import db
 import tenant_sms_db as tdb
-from sms_authorization import CAMPAIGN_CERT_TEXT, ONE_TO_ONE_CERT_TEXT, require_tenant_sender
+from sms_authorization import (
+    CAMPAIGN_CERT_TEXT,
+    ONE_TO_ONE_CERT_TEXT,
+    check_telnyx_toll_free_send_allowed,
+    get_telnyx_toll_free_verification_status,
+    is_sms_sending_enabled,
+    is_telnyx_toll_free_verified,
+    require_tenant_sender,
+)
 from sms_validation import validate_e164_phone
 
 logger = logging.getLogger(__name__)
 
 sms_campaigns_bp = Blueprint("sms_campaigns", __name__)
 
+BULK_VERIFICATION_BANNER = (
+    "Bulk SMS sending is unavailable until Telnyx completes toll-free verification."
+)
+WORKER_UNAVAILABLE_BANNER = "Campaign processing worker is currently unavailable."
 
-def _user_or_redirect():
+
+def _auth_gate():
+    """Return (user, response). response is set when the request should not proceed."""
     user = auth.get_current_user()
-    if not user or not auth.user_has_active_subscription(user):
-        return None
-    return user
+    if not user:
+        nxt = request.path
+        if request.query_string:
+            nxt = f"{request.path}?{request.query_string.decode()}"
+        return None, redirect(url_for("login", next=nxt))
+    if not auth.user_has_active_subscription(user):
+        return None, (
+            render_template(
+                "error.html",
+                message=(
+                    "An active TopAI subscription is required to use Bulk SMS. "
+                    "Subscribe or renew your plan, then return here."
+                ),
+            ),
+            402,
+        )
+    return user, None
 
 
 def _nav(user, active_nav="sms-campaigns"):
@@ -39,6 +67,37 @@ def _nav(user, active_nav="sms-campaigns"):
         "active_nav": active_nav,
         "product_name": "TopAI Real Estate Tools",
     }
+
+
+def _bulk_status_context():
+    """Non-secret provider / verification / worker status for Bulk SMS pages."""
+    provider = (config.SMS_PROVIDER or "telnyx").lower().strip()
+    verification = get_telnyx_toll_free_verification_status() or "unknown"
+    toll_ok, _toll_err = check_telnyx_toll_free_send_allowed()
+    worker_ok = tdb.is_campaign_worker_available()
+    sending_enabled = bool(is_sms_sending_enabled() and toll_ok and worker_ok)
+    return {
+        "sms_provider": provider,
+        "toll_free_number_display": getattr(config, "SMS_SUPPORT_DISPLAY", None)
+        or "(888) 821-0810",
+        "toll_free_verification_status": verification if provider == "telnyx" else None,
+        "bulk_sending_enabled": sending_enabled,
+        "toll_free_verified": is_telnyx_toll_free_verified() if provider == "telnyx" else True,
+        "verification_block_message": (
+            BULK_VERIFICATION_BANNER if provider == "telnyx" and not toll_ok else None
+        ),
+        "worker_available": worker_ok,
+        "worker_block_message": None if worker_ok else WORKER_UNAVAILABLE_BANNER,
+        "launch_controls_enabled": sending_enabled,
+    }
+
+
+def _safe_require_sender(user_id):
+    try:
+        return require_tenant_sender(user_id)
+    except Exception:
+        logger.exception("tenant sender lookup failed user_id=%s", user_id)
+        return None, "SMS sender status is temporarily unavailable."
 
 
 def _render_merge(template, fields, defaults=None):
@@ -55,45 +114,57 @@ def _render_merge(template, fields, defaults=None):
 
 @sms_campaigns_bp.route("/crm/sms-campaigns")
 def campaigns_list():
-    user = _user_or_redirect()
-    if not user:
-        return redirect(url_for("subscriber_app"))
-    campaigns = tdb.list_campaigns(user["id"])
-    sender, sender_err = require_tenant_sender(user["id"])
+    user, gate = _auth_gate()
+    if gate:
+        return gate
+    try:
+        campaigns = tdb.list_campaigns(user["id"]) or []
+    except Exception:
+        logger.exception("list_campaigns failed user_id=%s", user["id"])
+        campaigns = []
+        flash("Campaign list is temporarily unavailable. Please try again.")
+    sender, sender_err = _safe_require_sender(user["id"])
+    status = _bulk_status_context()
     return render_template(
         "crm_sms_campaigns.html",
         campaigns=campaigns,
         sender=sender,
         sender_err=sender_err,
         terms_ok=tdb.has_accepted_sms_terms(user["id"]),
+        **status,
         **_nav(user),
     )
 
 
 @sms_campaigns_bp.route("/crm/sms-campaigns/new", methods=["GET", "POST"])
 def campaign_new():
-    user = _user_or_redirect()
-    if not user:
-        return redirect(url_for("subscriber_app"))
+    user, gate = _auth_gate()
+    if gate:
+        return gate
     if request.method == "POST":
         title = (request.form.get("title") or "Untitled campaign").strip()[:200]
         purpose = (request.form.get("campaign_purpose") or "real_estate_follow_up").strip()
         cid = tdb.create_campaign(user["id"], title, campaign_purpose=purpose)
         tdb.append_sms_audit(user["id"], "campaign_created", actor_user_id=user["id"], campaign_id=cid)
         return redirect(url_for("sms_campaigns.campaign_detail", campaign_id=cid))
-    return render_template("crm_sms_campaign_new.html", **_nav(user))
+    return render_template(
+        "crm_sms_campaign_new.html",
+        **_bulk_status_context(),
+        **_nav(user),
+    )
 
 
 @sms_campaigns_bp.route("/crm/sms-campaigns/<int:campaign_id>", methods=["GET", "POST"])
 def campaign_detail(campaign_id):
-    user = _user_or_redirect()
-    if not user:
-        return redirect(url_for("subscriber_app"))
+    user, gate = _auth_gate()
+    if gate:
+        return gate
     campaign = tdb.get_campaign(campaign_id, user["id"])
     if not campaign:
         return redirect(url_for("sms_campaigns.campaigns_list"))
     error = None
-    sender, sender_err = require_tenant_sender(user["id"])
+    sender, sender_err = _safe_require_sender(user["id"])
+    bulk_status = _bulk_status_context()
 
     if request.method == "POST":
         action = (request.form.get("action") or "").strip()
@@ -162,7 +233,12 @@ def campaign_detail(campaign_id):
 
         if action == "launch":
             campaign = tdb.get_campaign(campaign_id, user["id"])
-            if config.TELNYX_TRIAL_MODE and (config.SMS_PROVIDER or "").lower() == "telnyx":
+            toll_ok, toll_err = check_telnyx_toll_free_send_allowed()
+            if not toll_ok:
+                error = toll_err or BULK_VERIFICATION_BANNER
+            elif not bulk_status["worker_available"]:
+                error = WORKER_UNAVAILABLE_BANNER
+            elif config.TELNYX_TRIAL_MODE and (config.SMS_PROVIDER or "").lower() == "telnyx":
                 recipients = tdb.list_campaign_recipients(campaign_id, user["id"], eligible_only=True)
                 verified = "".join(c for c in (config.TELNYX_VERIFIED_TEST_NUMBER or "") if c.isdigit())
                 bad = [
@@ -174,7 +250,6 @@ def campaign_detail(campaign_id):
                     error = (
                         "Telnyx trial mode: campaign audience must contain only the verified test phone number."
                     )
-                    # Fall through to render with error
                 else:
                     error = None
             else:
@@ -222,8 +297,8 @@ def campaign_detail(campaign_id):
                 "resume": ("processing", "campaign_resumed"),
                 "cancel": ("cancelled", "campaign_cancelled"),
             }
-            status, audit = mapping[action]
-            tdb.update_campaign(campaign_id, user["id"], status=status)
+            new_status, audit = mapping[action]
+            tdb.update_campaign(campaign_id, user["id"], status=new_status)
             if action == "cancel":
                 with db.get_db() as conn:
                     conn.execute(
@@ -260,6 +335,7 @@ def campaign_detail(campaign_id):
             "Upload only contacts who have authorized you or your business to text them. "
             "Importing or possessing a phone number does not establish consent."
         ),
+        **bulk_status,
         **_nav(user),
     )
 
@@ -389,9 +465,9 @@ def _import_audience(user_id, campaign_id, request):
 
 @sms_campaigns_bp.route("/crm/sms-diagnostics", methods=["GET", "POST"])
 def sms_diagnostics():
-    user = _user_or_redirect()
-    if not user:
-        return redirect(url_for("subscriber_app"))
+    user, gate = _auth_gate()
+    if gate:
+        return gate
     if request.method == "POST" and request.form.get("action") == "accept_terms":
         tdb.accept_sms_terms(
             user["id"],
@@ -405,9 +481,10 @@ def sms_diagnostics():
     from sms_providers import get_sms_provider
 
     provider = get_sms_provider()
-    sender, sender_err = require_tenant_sender(user["id"])
+    sender, sender_err = _safe_require_sender(user["id"])
     last_out = tdb.latest_sms_event(user["id"], direction="outbound")
     last_in = tdb.latest_sms_event(user["id"], direction="inbound")
+    bulk = _bulk_status_context()
     info = {
         "active_provider": config.SMS_PROVIDER,
         "provider_configured": provider.is_configured(),
@@ -430,6 +507,12 @@ def sms_diagnostics():
         "telnyx_phone_configured": bool(config.TELNYX_PHONE_NUMBER),
         "telnyx_verified_test_configured": bool(config.TELNYX_VERIFIED_TEST_NUMBER),
         "telnyx_public_key_configured": bool(config.TELNYX_PUBLIC_KEY),
+        "toll_free_verification_status": bulk.get("toll_free_verification_status"),
+        "bulk_sending_enabled": bulk.get("bulk_sending_enabled"),
+        "worker_available": bulk.get("worker_available"),
+        "worker_block_message": bulk.get("worker_block_message"),
+        "verification_block_message": bulk.get("verification_block_message"),
+        "toll_free_number_display": bulk.get("toll_free_number_display"),
         "webhook_route": "/webhooks/telnyx/messaging",
         "last_outbound": last_out,
         "last_inbound": last_in,
@@ -449,9 +532,9 @@ def sms_diagnostics():
 
 @sms_campaigns_bp.route("/crm/sms-campaigns/<int:campaign_id>/export")
 def campaign_export(campaign_id):
-    user = _user_or_redirect()
-    if not user:
-        return redirect(url_for("subscriber_app"))
+    user, gate = _auth_gate()
+    if gate:
+        return gate
     campaign = tdb.get_campaign(campaign_id, user["id"])
     if not campaign:
         return redirect(url_for("sms_campaigns.campaigns_list"))

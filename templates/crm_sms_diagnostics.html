@@ -14,6 +14,12 @@
   <main>
     <h1>SMS diagnostics</h1>
     <p class="muted">{{ warning }}</p>
+    {% if verification_block_message %}
+    <div class="flash err" style="display:block;">{{ verification_block_message }}</div>
+    {% endif %}
+    {% if worker_block_message %}
+    <div class="flash err" style="display:block;">{{ worker_block_message }}</div>
+    {% endif %}
     {% if telnyx_trial_mode %}
     <div class="flash err" style="display:block;">Telnyx trial mode is active. Messages can only be sent to the verified test phone number.</div>
     {% endif %}
@@ -24,6 +30,10 @@
         <li>API credentials configured: {{ token_configured }}</li>
         <li>Webhook auth configured: {{ webhook_secret_configured }}</li>
         {% if active_provider == 'telnyx' %}
+        <li>Toll-free number: +1 {{ toll_free_number_display or '(888) 821-0810' }}</li>
+        <li>Toll-free verification: {{ toll_free_verification_status or 'unknown' }}</li>
+        <li>Bulk sending enabled: {{ 'yes' if bulk_sending_enabled else 'no' }}</li>
+        <li>Campaign worker available: {{ 'yes' if worker_available else 'no' }}</li>
         <li>Telnyx trial mode: {{ 'active' if telnyx_trial_mode else 'inactive' }}</li>
         <li>Messaging Profile configured: {{ telnyx_profile_configured }}</li>
         <li>Platform sender number configured: {{ telnyx_phone_configured }}</li>

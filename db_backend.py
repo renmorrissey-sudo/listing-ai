@@ -164,3 +164,18 @@ def looks_like_test_database(url: str) -> bool:
     lowered = (url or "").lower()
     markers = ("_test", "/test", "test_", "pytest", "ci_test")
     return any(m in lowered for m in markers)
+
+
+def bind_bool(value):
+    """Return an engine-safe boolean bind value (bool for Postgres, 0/1 for SQLite)."""
+    flag = bool(value)
+    if config.DB_ENGINE == "postgres":
+        return flag
+    return 1 if flag else 0
+
+
+def sql_is_true(column: str) -> str:
+    """Portable SQL fragment that is true when a boolean/0-1 column is enabled."""
+    if config.DB_ENGINE == "postgres":
+        return f"{column} IS TRUE"
+    return f"{column} = 1"

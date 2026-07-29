@@ -17,8 +17,25 @@
     <p><span class="pill">{{ campaign.status }}</span>
       {% if sender %}<span class="muted">Sender {{ sender.sender_number }}</span>{% endif %}
     </p>
+    {% if verification_block_message %}
+    <div class="flash err" style="display:block;">{{ verification_block_message }}</div>
+    {% endif %}
+    {% if worker_block_message %}
+    <div class="flash err" style="display:block;">{{ worker_block_message }}</div>
+    {% endif %}
     {% if error %}<div class="flash err" style="display:block;">{{ error }}</div>{% endif %}
     {% if sender_err %}<div class="flash err" style="display:block;">{{ sender_err }}</div>{% endif %}
+
+    <div class="card">
+      <ul class="muted" style="margin:0;padding-left:18px;line-height:1.6;">
+        <li>Provider: {{ sms_provider|capitalize if sms_provider else 'Unknown' }}</li>
+        <li>Toll-free number: +1 {{ toll_free_number_display or '(888) 821-0810' }}</li>
+        {% if sms_provider == 'telnyx' %}
+        <li>Toll-free verification: {{ toll_free_verification_status or 'unknown' }}</li>
+        {% endif %}
+        <li>Bulk sending enabled: {{ 'yes' if bulk_sending_enabled else 'no' }}</li>
+      </ul>
+    </div>
 
     <div class="card">
       <h2>1–3. Import audience</h2>
@@ -59,13 +76,16 @@
 
     <div class="card">
       <h2>10. Launch</h2>
+      {% if not launch_controls_enabled %}
+      <p class="muted">Launch and schedule controls are disabled until toll-free verification is complete{% if not worker_available %} and the campaign worker is available{% endif %}.</p>
+      {% endif %}
       <form method="post" style="display:inline;">
         <input type="hidden" name="action" value="launch" />
-        <label>Schedule (optional ISO) <input name="scheduled_at" placeholder="2026-07-29T15:00:00+00:00" /></label>
-        <button class="btn" type="submit">Launch / schedule</button>
+        <label>Schedule (optional ISO) <input name="scheduled_at" placeholder="2026-07-29T15:00:00+00:00" {% if not launch_controls_enabled %}disabled{% endif %} /></label>
+        <button class="btn" type="submit" {% if not launch_controls_enabled %}disabled{% endif %}>Launch / schedule</button>
       </form>
       <form method="post" style="display:inline;"><input type="hidden" name="action" value="pause" /><button class="btn secondary" type="submit">Pause</button></form>
-      <form method="post" style="display:inline;"><input type="hidden" name="action" value="resume" /><button class="btn secondary" type="submit">Resume</button></form>
+      <form method="post" style="display:inline;"><input type="hidden" name="action" value="resume" /><button class="btn secondary" type="submit" {% if not launch_controls_enabled %}disabled{% endif %}>Resume</button></form>
       <form method="post" style="display:inline;"><input type="hidden" name="action" value="cancel" /><button class="btn secondary" type="submit">Cancel remaining</button></form>
     </div>
 

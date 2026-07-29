@@ -6,9 +6,10 @@ import hashlib
 import json
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from db import get_db, get_lead
+from db_backend import bind_bool, sql_is_true
 
 
 def _now():
@@ -29,9 +30,9 @@ def message_hash(text: str) -> str:
 def get_active_sender(user_id):
     with get_db() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT * FROM tenant_sms_senders
-            WHERE user_id = ? AND sms_enabled = 1
+            WHERE user_id = ? AND {sql_is_true("sms_enabled")}
               AND registration_status = 'verified'
             ORDER BY id DESC LIMIT 1
             """,
@@ -43,7 +44,9 @@ def get_active_sender(user_id):
 def get_sender_by_number(sender_number):
     digits = "".join(c for c in (sender_number or "") if c.isdigit())
     with get_db() as conn:
-        rows = conn.execute("SELECT * FROM tenant_sms_senders WHERE sms_enabled = 1").fetchall()
+        rows = conn.execute(
+            f"SELECT * FROM tenant_sms_senders WHERE {sql_is_true('sms_enabled')}"
+        ).fetchall()
     for row in rows:
         sn = "".join(c for c in (row["sender_number"] or "") if c.isdigit())
         if sn and (sn == digits or sn.endswith(digits) or digits.endswith(sn)):
@@ -64,6 +67,7 @@ def upsert_tenant_sender(
 ):
     now = _now()
     meta = json.dumps(metadata) if isinstance(metadata, dict) else metadata
+    enabled = bind_bool(sms_enabled)
     existing = None
     with get_db() as conn:
         existing = conn.execute(
@@ -77,7 +81,7 @@ def upsert_tenant_sender(
                 SET sender_number = ?, sms_provider = ?, provider_number_id = ?,
                     provider_account_reference = ?, sms_enabled = ?,
                     registration_status = ?, metadata_json = ?, updated_at = ?,
-                    activated_at = CASE WHEN ? = 1 AND activated_at IS NULL THEN ? ELSE activated_at END
+                    activated_at = CASE WHEN ? AND activated_at IS NULL THEN ? ELSE activated_at END
                 WHERE user_id = ?
                 """,
                 (
@@ -85,11 +89,11 @@ def upsert_tenant_sender(
                     sms_provider,
                     provider_number_id,
                     provider_account_reference,
-                    1 if sms_enabled else 0,
+                    enabled,
                     registration_status,
                     meta,
                     now,
-                    1 if sms_enabled else 0,
+                    enabled,
                     now,
                     user_id,
                 ),
@@ -109,7 +113,7 @@ def upsert_tenant_sender(
                 sender_number,
                 provider_number_id,
                 provider_account_reference,
-                1 if sms_enabled else 0,
+                enabled,
                 registration_status,
                 now if sms_enabled else None,
                 meta,
@@ -467,7 +471,7 @@ def update_campaign(campaign_id, user_id, **fields):
         if key.endswith("_json") and isinstance(value, (dict, list)):
             value = json.dumps(value)
         if key == "test_mode":
-            value = 1 if value else 0
+            value = bind_bool(value)
         updates.append(f"{key} = ?")
         values.append(value)
     if not updates:
@@ -506,7 +510,7 @@ def replace_campaign_recipients(campaign_id, user_id, recipients):
                     r["phone_number"],
                     json.dumps(r.get("merge_fields") or {}),
                     r.get("exclusion_reason"),
-                    1 if r.get("eligible", True) else 0,
+                    bind_bool(r.get("eligible", True)),
                     now,
                 ),
             )
@@ -522,7 +526,7 @@ def list_campaign_recipients(campaign_id, user_id, eligible_only=False):
         sql = "SELECT * FROM sms_campaign_recipients WHERE campaign_id = ? AND user_id = ?"
         params = [campaign_id, user_id]
         if eligible_only:
-            sql += " AND eligible = 1"
+            sql += f" AND {sql_is_true('eligible')}"
         rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
@@ -730,9 +734,9 @@ def count_sends_to_contact_since(user_id, phone_number, since_iso):
 def get_any_telnyx_sender():
     with get_db() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT * FROM tenant_sms_senders
-            WHERE sms_enabled = 1 AND registration_status = 'verified'
+            WHERE {sql_is_true("sms_enabled")} AND registration_status = 'verified'
               AND (sms_provider = 'telnyx' OR sms_provider IS NULL)
             ORDER BY id DESC LIMIT 1
             """
@@ -838,3 +842,36 @@ def count_pending_campaign_jobs():
             return int(row["count"] if row else 0)
         except Exception:
             return 0
+
+
+def has_recent_worker_activity(*, minutes=30):
+    """True if any campaign job was claimed within the lookback window."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=int(minutes))).isoformat()
+    with get_db() as conn:
+        try:
+            row = conn.execute(
+                """
+                SELECT 1 AS ok FROM sms_campaign_jobs
+                WHERE claimed_at IS NOT NULL AND claimed_at >= ?
+                LIMIT 1
+                """,
+                (cutoff,),
+            ).fetchone()
+            return bool(row)
+        except Exception:
+            return False
+
+
+def is_campaign_worker_available(*, minutes=30):
+    """
+    Best-effort worker presence check.
+    Explicit SMS_CAMPAIGN_WORKER_AVAILABLE overrides auto-detection.
+    """
+    import config
+
+    raw = (getattr(config, "SMS_CAMPAIGN_WORKER_AVAILABLE", None) or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return has_recent_worker_activity(minutes=minutes)
