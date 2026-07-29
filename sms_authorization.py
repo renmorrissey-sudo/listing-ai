@@ -14,8 +14,10 @@ BLOCKED_EXTERNAL_MSG = (
     "SMS cannot be sent because consent has not been verified for this externally sourced lead."
 )
 BLOCKED_GENERIC_MSG = "SMS cannot be sent for this lead due to consent or compliance restrictions."
-NO_SENDER_MSG = (
-    "SMS is not activated for this account. Assign and verify a sender number before sending."
+NO_SENDER_MSG = "No SMS sender is assigned to this account."
+TELNYX_CONFIGURED_PENDING_MSG = (
+    "Telnyx SMS is configured. Bulk sending will become available after "
+    "toll-free verification is approved."
 )
 NO_CERT_MSG = (
     "SMS cannot be sent until you certify that this contact consented to receive messages "
@@ -162,9 +164,17 @@ def require_tenant_sender(user_id):
                 "sms_enabled": True,
                 "registration_status": "verified",
             }, None
-    # Telnyx trial / single-tenant pilot: global From allowed only in trial mode.
+    # Telnyx: platform sender is available when configuration is complete.
+    # Toll-free verification is enforced separately and must not look like "not activated".
     if (config.SMS_PROVIDER or "").lower() == "telnyx":
-        if config.TELNYX_TRIAL_MODE and config.TELNYX_PHONE_NUMBER:
+        if telnyx_configuration_complete() and (config.TELNYX_PHONE_NUMBER or "").strip():
+            try:
+                tdb.ensure_telnyx_platform_sender(user_id)
+                sender = tdb.get_active_sender(user_id)
+                if sender:
+                    return sender, None
+            except Exception:
+                pass
             return {
                 "user_id": user_id,
                 "sender_number": config.TELNYX_PHONE_NUMBER,
@@ -172,7 +182,8 @@ def require_tenant_sender(user_id):
                 "messaging_profile_id": config.TELNYX_MESSAGING_PROFILE_ID,
                 "sms_enabled": True,
                 "registration_status": "verified",
-                "trial_mode": True,
+                "platform_sender": True,
+                "trial_mode": bool(config.TELNYX_TRIAL_MODE),
             }, None
     # Never use global SIMPLETEXTING_PHONE_NUMBER as implicit tenant sender.
     return None, NO_SENDER_MSG

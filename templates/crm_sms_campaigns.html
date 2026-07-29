@@ -21,14 +21,30 @@
     <div class="flash err" style="display:block;">{{ worker_block_message }}</div>
     {% endif %}
     {% if sender_err %}<div class="flash err" style="display:block;">{{ sender_err }}</div>{% endif %}
-    {% if not terms_ok %}<div class="flash err" style="display:block;">Accept <a href="/crm/sms-diagnostics">SMS terms</a> before sending.</div>{% endif %}
+    {% if not terms_ok %}
+    <div class="flash err" style="display:block;">
+      Accept <a href="/crm/sms-diagnostics">SMS terms</a> before sending.
+      <form method="post" action="/crm/sms-diagnostics" style="display:inline;margin-left:8px;">
+        <input type="hidden" name="action" value="accept_terms" />
+        <button class="btn secondary" type="submit" style="padding:4px 10px;">Accept SMS terms</button>
+      </form>
+    </div>
+    {% endif %}
     <div class="card">
       <ul class="muted" style="margin:0;padding-left:18px;line-height:1.6;">
         <li>Provider: {{ sms_provider|capitalize if sms_provider else 'Unknown' }}</li>
+        {% if sms_provider == 'telnyx' %}
+        <li>Telnyx configured: {{ 'yes' if telnyx_configured else 'no' }}</li>
+        {% endif %}
         <li>Toll-free number: +1 {{ toll_free_number_display or '(888) 821-0810' }}</li>
+        {% if sender and sender.sender_number %}
+        <li>Assigned sender: {{ sender.sender_number }}</li>
+        {% endif %}
         {% if sms_provider == 'telnyx' %}
         <li>Toll-free verification: {{ toll_free_verification_status or 'unknown' }}</li>
         {% endif %}
+        <li>Campaign worker: {{ worker_health_state or ('available' if worker_available else 'unavailable') }}</li>
+        <li>SMS terms: {{ 'accepted' if terms_ok else 'not accepted' }}</li>
         <li>Bulk sending enabled: {{ 'yes' if bulk_sending_enabled else 'no' }}</li>
       </ul>
     </div>

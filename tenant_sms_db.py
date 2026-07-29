@@ -124,6 +124,31 @@ def upsert_tenant_sender(
         return cur.lastrowid
 
 
+def ensure_telnyx_platform_sender(user_id):
+    """
+    Assign the platform Telnyx From number to this subscriber without creating duplicates.
+    Upserts the single tenant_sms_senders row for user_id.
+    """
+    import config
+
+    phone = (config.TELNYX_PHONE_NUMBER or "").strip()
+    if not phone:
+        return None
+    return upsert_tenant_sender(
+        user_id,
+        sender_number=phone,
+        sms_provider="telnyx",
+        provider_number_id=(config.TELNYX_MESSAGING_PROFILE_ID or "").strip() or None,
+        provider_account_reference="platform",
+        sms_enabled=True,
+        registration_status="verified",
+        metadata={
+            "source": "telnyx_platform",
+            "messaging_profile_id": (config.TELNYX_MESSAGING_PROFILE_ID or "").strip() or None,
+        },
+    )
+
+
 def list_tenant_senders(user_id=None):
     with get_db() as conn:
         if user_id:
@@ -844,6 +869,134 @@ def count_pending_campaign_jobs():
             return 0
 
 
+def is_campaign_worker_available(*, minutes=30):
+    """
+    Best-effort worker presence check.
+    Explicit SMS_CAMPAIGN_WORKER_AVAILABLE overrides auto-detection.
+    """
+    health = get_campaign_worker_health(stale_seconds=max(60, int(minutes) * 60))
+    return health.get("state") == "running"
+
+
+def get_campaign_worker_health(*, stale_seconds=120):
+    """
+    Return {state, last_seen_at, worker_id, message} where state is one of:
+    running | stale | stopped | unknown
+    """
+    import config
+
+    raw = (getattr(config, "SMS_CAMPAIGN_WORKER_AVAILABLE", None) or "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return {
+            "state": "stopped",
+            "last_seen_at": None,
+            "worker_id": None,
+            "message": "Campaign processing worker is currently unavailable.",
+        }
+    if raw in {"1", "true", "yes", "on"}:
+        # Explicit override still prefers a fresh heartbeat when present.
+        pass
+
+    with get_db() as conn:
+        try:
+            row = conn.execute(
+                """
+                SELECT worker_id, status, last_seen_at
+                FROM sms_worker_heartbeats
+                ORDER BY last_seen_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        except Exception:
+            row = None
+
+    if not row:
+        # Fall back to recent job claim activity for older deploys.
+        if has_recent_worker_activity(minutes=max(1, int(stale_seconds / 60))):
+            return {
+                "state": "running",
+                "last_seen_at": None,
+                "worker_id": None,
+                "message": None,
+            }
+        if raw in {"1", "true", "yes", "on"}:
+            return {
+                "state": "unknown",
+                "last_seen_at": None,
+                "worker_id": None,
+                "message": "Campaign worker is marked available but has not reported a heartbeat yet.",
+            }
+        return {
+            "state": "unknown",
+            "last_seen_at": None,
+            "worker_id": None,
+            "message": "Campaign processing worker is currently unavailable.",
+        }
+
+    last_seen = row["last_seen_at"]
+    worker_id = row["worker_id"]
+    try:
+        seen_dt = datetime.fromisoformat(str(last_seen).replace("Z", "+00:00"))
+        if seen_dt.tzinfo is None:
+            seen_dt = seen_dt.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - seen_dt).total_seconds()
+    except Exception:
+        age = None
+
+    if age is not None and age <= float(stale_seconds):
+        return {
+            "state": "running",
+            "last_seen_at": last_seen,
+            "worker_id": worker_id,
+            "message": None,
+        }
+    if age is not None:
+        return {
+            "state": "stale",
+            "last_seen_at": last_seen,
+            "worker_id": worker_id,
+            "message": "Campaign processing worker heartbeat is stale.",
+        }
+    return {
+        "state": "unknown",
+        "last_seen_at": last_seen,
+        "worker_id": worker_id,
+        "message": "Campaign processing worker status is unknown.",
+    }
+
+
+def touch_worker_heartbeat(worker_id, *, status="running", metadata=None):
+    now = _now()
+    meta = json.dumps(metadata) if isinstance(metadata, dict) else metadata
+    with get_db() as conn:
+        try:
+            existing = conn.execute(
+                "SELECT worker_id FROM sms_worker_heartbeats WHERE worker_id = ? LIMIT 1",
+                (worker_id,),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE sms_worker_heartbeats
+                    SET status = ?, last_seen_at = ?, metadata_json = ?
+                    WHERE worker_id = ?
+                    """,
+                    (status, now, meta, worker_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO sms_worker_heartbeats
+                        (worker_id, status, last_seen_at, metadata_json)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (worker_id, status, now, meta),
+                )
+            return True
+        except Exception:
+            return False
+
+
 def has_recent_worker_activity(*, minutes=30):
     """True if any campaign job was claimed within the lookback window."""
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=int(minutes))).isoformat()
@@ -860,18 +1013,3 @@ def has_recent_worker_activity(*, minutes=30):
             return bool(row)
         except Exception:
             return False
-
-
-def is_campaign_worker_available(*, minutes=30):
-    """
-    Best-effort worker presence check.
-    Explicit SMS_CAMPAIGN_WORKER_AVAILABLE overrides auto-detection.
-    """
-    import config
-
-    raw = (getattr(config, "SMS_CAMPAIGN_WORKER_AVAILABLE", None) or "").strip().lower()
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    return has_recent_worker_activity(minutes=minutes)

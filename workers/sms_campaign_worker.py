@@ -276,6 +276,11 @@ def main():
     idle_sleep = 2
     while _RUNNING:
         try:
+            tdb.touch_worker_heartbeat(
+                worker_id,
+                status="running",
+                metadata={"provider": config.SMS_PROVIDER},
+            )
             worked = process_one(worker_id)
             if worked:
                 idle_sleep = 1
@@ -285,6 +290,10 @@ def main():
         except Exception:
             logger.exception("Worker loop error")
             time.sleep(5)
+    try:
+        tdb.touch_worker_heartbeat(worker_id, status="stopped")
+    except Exception:
+        pass
     logger.info("Worker stopped cleanly")
 
 

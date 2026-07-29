@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 sms_campaigns_bp = Blueprint("sms_campaigns", __name__)
 
 BULK_VERIFICATION_BANNER = (
-    "Bulk SMS sending is unavailable until Telnyx completes toll-free verification."
+    "Telnyx SMS is configured. Bulk sending will become available after "
+    "toll-free verification is approved."
 )
 WORKER_UNAVAILABLE_BANNER = "Campaign processing worker is currently unavailable."
 
@@ -69,26 +70,42 @@ def _nav(user, active_nav="sms-campaigns"):
     }
 
 
-def _bulk_status_context():
+def _bulk_status_context(user_id=None):
     """Non-secret provider / verification / worker status for Bulk SMS pages."""
+    from sms_authorization import (
+        TELNYX_CONFIGURED_PENDING_MSG,
+        telnyx_configuration_complete,
+    )
+
     provider = (config.SMS_PROVIDER or "telnyx").lower().strip()
     verification = get_telnyx_toll_free_verification_status() or "unknown"
     toll_ok, _toll_err = check_telnyx_toll_free_send_allowed()
-    worker_ok = tdb.is_campaign_worker_available()
-    sending_enabled = bool(is_sms_sending_enabled() and toll_ok and worker_ok)
+    worker_health = tdb.get_campaign_worker_health(stale_seconds=120)
+    worker_ok = worker_health.get("state") == "running"
+    terms_ok = tdb.has_accepted_sms_terms(user_id) if user_id else True
+    telnyx_ready = provider != "telnyx" or telnyx_configuration_complete()
+    sending_enabled = bool(
+        is_sms_sending_enabled() and toll_ok and worker_ok and terms_ok and telnyx_ready
+    )
+    verification_message = None
+    if provider == "telnyx" and telnyx_configuration_complete() and not toll_ok:
+        verification_message = TELNYX_CONFIGURED_PENDING_MSG
+    elif provider == "telnyx" and not toll_ok:
+        verification_message = BULK_VERIFICATION_BANNER
     return {
         "sms_provider": provider,
+        "telnyx_configured": telnyx_configuration_complete() if provider == "telnyx" else None,
         "toll_free_number_display": getattr(config, "SMS_SUPPORT_DISPLAY", None)
         or "(888) 821-0810",
         "toll_free_verification_status": verification if provider == "telnyx" else None,
         "bulk_sending_enabled": sending_enabled,
         "toll_free_verified": is_telnyx_toll_free_verified() if provider == "telnyx" else True,
-        "verification_block_message": (
-            BULK_VERIFICATION_BANNER if provider == "telnyx" and not toll_ok else None
-        ),
+        "verification_block_message": verification_message,
         "worker_available": worker_ok,
-        "worker_block_message": None if worker_ok else WORKER_UNAVAILABLE_BANNER,
+        "worker_health_state": worker_health.get("state"),
+        "worker_block_message": worker_health.get("message") if not worker_ok else None,
         "launch_controls_enabled": sending_enabled,
+        "terms_ok": terms_ok,
     }
 
 
@@ -124,13 +141,12 @@ def campaigns_list():
         campaigns = []
         flash("Campaign list is temporarily unavailable. Please try again.")
     sender, sender_err = _safe_require_sender(user["id"])
-    status = _bulk_status_context()
+    status = _bulk_status_context(user["id"])
     return render_template(
         "crm_sms_campaigns.html",
         campaigns=campaigns,
         sender=sender,
         sender_err=sender_err,
-        terms_ok=tdb.has_accepted_sms_terms(user["id"]),
         **status,
         **_nav(user),
     )
@@ -149,7 +165,7 @@ def campaign_new():
         return redirect(url_for("sms_campaigns.campaign_detail", campaign_id=cid))
     return render_template(
         "crm_sms_campaign_new.html",
-        **_bulk_status_context(),
+        **_bulk_status_context(user["id"]),
         **_nav(user),
     )
 
@@ -164,7 +180,7 @@ def campaign_detail(campaign_id):
         return redirect(url_for("sms_campaigns.campaigns_list"))
     error = None
     sender, sender_err = _safe_require_sender(user["id"])
-    bulk_status = _bulk_status_context()
+    bulk_status = _bulk_status_context(user["id"])
 
     if request.method == "POST":
         action = (request.form.get("action") or "").strip()
@@ -484,7 +500,7 @@ def sms_diagnostics():
     sender, sender_err = _safe_require_sender(user["id"])
     last_out = tdb.latest_sms_event(user["id"], direction="outbound")
     last_in = tdb.latest_sms_event(user["id"], direction="inbound")
-    bulk = _bulk_status_context()
+    bulk = _bulk_status_context(user["id"])
     info = {
         "active_provider": config.SMS_PROVIDER,
         "provider_configured": provider.is_configured(),
@@ -510,14 +526,16 @@ def sms_diagnostics():
         "toll_free_verification_status": bulk.get("toll_free_verification_status"),
         "bulk_sending_enabled": bulk.get("bulk_sending_enabled"),
         "worker_available": bulk.get("worker_available"),
+        "worker_health_state": bulk.get("worker_health_state"),
         "worker_block_message": bulk.get("worker_block_message"),
         "verification_block_message": bulk.get("verification_block_message"),
         "toll_free_number_display": bulk.get("toll_free_number_display"),
+        "telnyx_configured": bulk.get("telnyx_configured"),
         "webhook_route": "/webhooks/telnyx/messaging",
         "last_outbound": last_out,
         "last_inbound": last_in,
         "queue_backlog": tdb.count_pending_campaign_jobs(),
-        "terms_ok": tdb.has_accepted_sms_terms(user["id"]),
+        "terms_ok": bulk.get("terms_ok"),
         "terms_version": config.SMS_TERMS_VERSION,
         "one_to_one_cert_text": ONE_TO_ONE_CERT_TEXT,
         "campaign_cert_text": CAMPAIGN_CERT_TEXT,

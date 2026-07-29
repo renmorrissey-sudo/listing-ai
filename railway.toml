@@ -1,0 +1,8 @@
+# Railway multi-service config. Web uses Dockerfile/Nixpacks start from Procfile web.
+# Create a second service named "worker" with start command from Procfile worker.
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

@@ -196,7 +196,7 @@ class TelnyxSMSProvider(BaseSMSProvider):
             payload["messaging_profile_id"] = self.messaging_profile_id
         else:
             raise SmsProviderError(
-                "SMS is not activated for this account. Assign and verify a sender number before sending.",
+                "No SMS sender is assigned to this account.",
                 provider=self.name,
             )
         if self.messaging_profile_id and "messaging_profile_id" not in payload:

@@ -40,6 +40,7 @@ MIGRATION_MODULES = [
     "migrations.versions.013_telnyx_messaging",
     "migrations.versions.014_sms_consent_inquiry_fields",
     "migrations.versions.015_password_reset_tokens",
+    "migrations.versions.016_sms_worker_heartbeats",
 ]
 
 # Required after 001_baseline. App has no separate accounts/tenants/subscriptions
