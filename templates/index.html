@@ -708,6 +708,8 @@
     count.textContent = `${body.value.length} / 480 characters`;
   }
 
+  let smsSendConfigured = false;
+
   async function loadSmsMessages() {
     const history = document.getElementById('sms-history');
     const placeholder = document.getElementById('sms-placeholder');
@@ -716,6 +718,8 @@
     try {
       const data = await fetchJson('/sms/messages', {cache: 'no-store'});
       if (!data) return;
+      smsSendConfigured = !!data.send_configured;
+      if (typeof syncSmsSendEnabled === 'function') syncSmsSendEnabled();
       if (note) {
         const provider = (data.sms_provider || (data.provider_status && data.provider_status.provider) || '').toLowerCase();
         let sendNote;
@@ -1241,7 +1245,7 @@
   const smsSendBtn = document.getElementById('sms-send-btn');
   function syncSmsSendEnabled() {
     if (!smsSendBtn || !smsCompliance) return;
-    smsSendBtn.disabled = !smsCompliance.checked;
+    smsSendBtn.disabled = !smsSendConfigured || !smsCompliance.checked;
   }
   if (smsCompliance) {
     smsCompliance.addEventListener('change', syncSmsSendEnabled);
