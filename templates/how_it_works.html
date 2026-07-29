@@ -76,9 +76,18 @@
         </video>
         <p class="caption">Watch this short cartoon overview of how TopAI Real Estate Tools helps agents source more leads and market their services with AI.</p>
       </div>
+      {% if current_user and user_subscribed %}
+      <a class="cta" href="/app" id="access-tools-cta">Open Tools</a>
+      <a class="cta secondary" href="/features">Browse features</a>
+      {% elif current_user %}
       <a class="cta" href="/features">Browse features</a>
       <a class="cta secondary" href="/pricing">View pricing</a>
-      <a class="cta secondary" href="/login?next=/app" id="access-tools-cta">Sign in</a>
+      <a class="cta secondary" href="/app" id="access-tools-cta">Open Tools</a>
+      {% else %}
+      <a class="cta" href="/features">Browse features</a>
+      <a class="cta secondary" href="/pricing">View pricing</a>
+      <a class="cta secondary" href="/login" id="access-tools-cta">Sign in</a>
+      {% endif %}
     </section>
 
     <section class="step" id="step-1">
@@ -185,7 +194,11 @@
         <li><strong>Support:</strong> <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></li>
         <li><strong>Legal:</strong> <a href="/terms">Terms</a>, <a href="/privacy">Privacy</a>, <a href="/refund-policy">Refund Policy</a>, <a href="/sms-consent">SMS Consent</a></li>
       </ul>
+      {% if not (current_user and user_subscribed) %}
       <a class="cta" href="/subscribe">Start trial - 50% off</a>
+      {% else %}
+      <a class="cta" href="/app">Open Tools</a>
+      {% endif %}
       <a class="cta secondary" href="/sms-consent">SMS consent &amp; inquiry form</a>
     </section>
   </main>

@@ -49,7 +49,11 @@
         <h2>Monthly subscription</h2>
         <div class="price">$49 <span>/ month</span></div>
         <div class="promo">{{ trial_offer }}</div>
+        {% if current_user and user_subscribed %}
+        <a class="btn" href="/app">Open Tools</a>
+        {% else %}
         <a class="btn" href="/subscribe">Start trial - 50% off</a>
+        {% endif %}
         <p class="fine">Billed monthly through Stripe. Cancel anytime through the billing portal or by emailing <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.</p>
       </aside>
     </section>

@@ -77,9 +77,18 @@
         </video>
         <p class="caption">Product overview video: how agents use TopAI Real Estate Tools to create listing content, social posts, scripts, and AI calling workflows.</p>
       </div>
+      {% if current_user and user_subscribed %}
+      <a class="cta" href="/app" id="access-tools-cta">Open Tools</a>
+      <a class="cta secondary" href="/dashboard">Dashboard</a>
+      {% elif current_user %}
       <a class="cta" href="/pricing">View pricing</a>
       <a class="cta secondary" href="/how-it-works">See how it works</a>
-      <a class="cta secondary" href="/login?next=/app" id="access-tools-cta">Sign in</a>
+      <a class="cta secondary" href="/app" id="access-tools-cta">Open Tools</a>
+      {% else %}
+      <a class="cta" href="/pricing">View pricing</a>
+      <a class="cta secondary" href="/how-it-works">See how it works</a>
+      <a class="cta secondary" href="/login" id="access-tools-cta">Sign in</a>
+      {% endif %}
     </section>
 
     <section class="feature" id="listing-generator">
@@ -204,7 +213,11 @@
         <li><strong>Support:</strong> <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></li>
       </ul>
       <p class="muted">Generated content is a draft for convenience. Customers should review all AI output before publishing, sending, or using it with prospects.</p>
+      {% if not (current_user and user_subscribed) %}
       <a class="cta" href="/subscribe">Start trial - 50% off</a>
+      {% else %}
+      <a class="cta" href="/app">Open Tools</a>
+      {% endif %}
     </section>
   </main>
 

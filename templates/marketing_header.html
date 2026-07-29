@@ -1,23 +1,100 @@
-{# Shared marketing header. current_user injected via context or passed explicitly. #}
+{# Shared marketing header. current_user / user_subscribed from context_processor. #}
+<style>
+  .mkt-nav-toggle {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid rgba(220, 230, 255, 0.35);
+    color: #dce6ff;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .mkt-nav-toggle:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 2px; }
+  .mkt-nav-toggle-icon {
+    position: relative;
+    width: 16px;
+    height: 2px;
+    background: #dce6ff;
+    display: inline-block;
+  }
+  .mkt-nav-toggle-icon::before,
+  .mkt-nav-toggle-icon::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    width: 16px;
+    height: 2px;
+    background: #dce6ff;
+  }
+  .mkt-nav-toggle-icon::before { top: -5px; }
+  .mkt-nav-toggle-icon::after { top: 5px; }
+  @media (max-width: 820px) {
+    .mkt-nav-toggle { display: inline-flex; }
+    header .nav {
+      display: none;
+      width: 100%;
+      flex-basis: 100%;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 10px;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(220, 230, 255, 0.2);
+    }
+    header .nav.is-open { display: flex; }
+    header .nav a { margin-left: 0; margin-right: 0; }
+  }
+</style>
 <header>
   <div>
     <a class="logo" href="/">TopAI <span>Real Estate Tools</span></a>
     <div class="business">Operated by {{ legal_entity_name }}</div>
   </div>
-  <nav class="nav" aria-label="Marketing">
+  <button
+    type="button"
+    class="mkt-nav-toggle"
+    id="mkt-nav-toggle"
+    aria-expanded="false"
+    aria-controls="mkt-nav"
+  >
+    <span class="mkt-nav-toggle-icon" aria-hidden="true"></span>
+    <span>Menu</span>
+  </button>
+  <nav class="nav" id="mkt-nav" aria-label="Marketing">
     <a href="/features">Features</a>
     <a href="/how-it-works">How It Works</a>
     {% if current_user and user_subscribed %}
     <a href="/dashboard">Dashboard</a>
     <a href="/app">Open Tools</a>
     <a href="/logout">Log out</a>
+    {% elif current_user %}
+    <a href="/pricing">Pricing</a>
+    <a href="/app">Open Tools</a>
+    <a href="/subscribe">Start trial</a>
+    <a href="/logout">Log out</a>
     {% else %}
     <a href="/pricing">Pricing</a>
     <a href="/terms">Terms</a>
     <a href="/privacy">Privacy</a>
     <a href="/contact">Contact</a>
-    <a href="/login">Sign in</a>
-    <a href="/subscribe">Start trial</a>
+    <a href="/login" id="mkt-sign-in">Sign in</a>
+    <a href="/subscribe" id="mkt-start-trial">Start trial</a>
     {% endif %}
   </nav>
 </header>
+<script>
+  (function () {
+    var toggle = document.getElementById("mkt-nav-toggle");
+    var nav = document.getElementById("mkt-nav");
+    if (!toggle || !nav) return;
+    toggle.addEventListener("click", function () {
+      var open = nav.classList.toggle("is-open");
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+  })();
+</script>

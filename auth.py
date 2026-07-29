@@ -1,4 +1,5 @@
 from functools import wraps
+from urllib.parse import urlparse
 
 from flask import jsonify, redirect, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -7,6 +8,23 @@ import config
 import db
 
 MIN_PASSWORD_LENGTH = 8
+
+
+def safe_next_url(candidate, default="/app"):
+    """Allow only same-origin relative paths (block open redirects)."""
+    if not isinstance(candidate, str):
+        return default
+    nxt = candidate.strip()
+    if not nxt or not nxt.startswith("/") or nxt.startswith("//"):
+        return default
+    if any(ch in nxt for ch in ("\\", "\n", "\r", "\0")):
+        return default
+    parsed = urlparse(nxt)
+    if parsed.scheme or parsed.netloc:
+        return default
+    if not parsed.path.startswith("/"):
+        return default
+    return nxt
 
 
 def hash_password(password):
@@ -75,7 +93,7 @@ def login_required(view):
             nxt = request.path
             if request.query_string:
                 nxt = f"{request.path}?{request.query_string.decode()}"
-            return redirect(url_for("login", next=nxt))
+            return redirect(url_for("login", next=safe_next_url(nxt)))
         return view(*args, **kwargs)
 
     return wrapped

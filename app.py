@@ -355,10 +355,7 @@ def verify():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if auth.get_current_user():
-        nxt = request.args.get("next") or "/app"
-        if isinstance(nxt, str) and nxt.startswith("/") and not nxt.startswith("//"):
-            return redirect(nxt)
-        return redirect(url_for("subscriber_app"))
+        return redirect(auth.safe_next_url(request.args.get("next") or "/app"))
     error = None
     password_updated = request.args.get("password_updated") == "1" or request.args.get("reset") == "1"
     if request.method == "POST":
@@ -367,10 +364,11 @@ def login():
         user = db.get_user_by_email(email)
         if user and auth.verify_password(user["password_hash"], password):
             auth.login_user(user["id"])
-            nxt = request.args.get("next") or request.form.get("next") or "/app"
-            if isinstance(nxt, str) and nxt.startswith("/") and not nxt.startswith("//"):
-                return redirect(nxt)
-            return redirect(url_for("subscriber_app"))
+            return redirect(
+                auth.safe_next_url(
+                    request.args.get("next") or request.form.get("next") or "/app"
+                )
+            )
         error = "Invalid email or password."
     return render_template(
         "auth_form.html",
@@ -378,7 +376,7 @@ def login():
         submit_label="Log in",
         show_confirm=False,
         show_forgot=True,
-        next_url=request.args.get("next") or "/app",
+        next_url=auth.safe_next_url(request.args.get("next") or "/app"),
         success=(
             "Your password has been updated. Sign in with your new password."
             if password_updated
