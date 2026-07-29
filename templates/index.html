@@ -335,7 +335,7 @@
     <div class="card">
       <h2>AI SMS Assistant</h2>
       <div class="notice">
-        Use consent-based one-to-one SMS only. You are responsible for TCPA, DNC, carrier rules, brokerage policy, and local regulations. Include opt-out language when required. When a lead replies, TopAI drafts a suggested response for your review — nothing is sent until you click Send.
+        Use consent-based one-to-one SMS only. You are responsible for TCPA, DNC, carrier rules, brokerage policy, and local regulations. Include opt-out language where required. Nothing is sent until you review the draft and click Send.
       </div>
       <form id="sms-form">
         <div class="form-group"><label>Persona</label><select name="persona_id" id="sms-persona" required><option value="">Loading personas...</option></select></div>
@@ -361,7 +361,7 @@
           <span>I confirm that this contact has consented to receive SMS messages from me or my business for this purpose. I maintain the supporting consent records and am responsible for TCPA, DNC, carrier, brokerage, privacy, opt-out, and local-law compliance.</span>
         </label>
         <div class="error-msg" id="sms-error"></div>
-        <div id="sms-twilio-status" class="notice" style="margin-top:12px;font-size:12px;display:none;" aria-live="polite"></div>
+        <div id="sms-provider-status" class="notice" style="margin-top:12px;font-size:12px;display:none;" aria-live="polite"></div>
         <div id="sms-trial-banner" class="notice" style="margin-top:12px;font-size:12px;display:none;border-color:#c45c26;color:#7a3410;" aria-live="polite"></div>
         <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
           <button type="button" class="btn-generate" id="sms-generate-btn" style="flex:1;"><div class="spinner" id="sms-generate-spinner"></div><span id="sms-generate-label">Generate SMS</span></button>
@@ -476,52 +476,54 @@
     return data;
   }
 
-  function renderTwilioStatus(status) {
-    const panel = document.getElementById('sms-twilio-status');
+  function renderProviderStatus(status) {
+    const panel = document.getElementById('sms-provider-status') || document.getElementById('sms-twilio-status');
     const trial = document.getElementById('sms-trial-banner');
     if (trial) {
       if (status && status.trial_mode && status.trial_message) {
         trial.textContent = status.trial_message;
+        trial.style.display = 'block';
+      } else if (status && status.trial_mode) {
+        trial.textContent = 'Telnyx trial mode is enabled. Outbound SMS is limited to the verified test number.';
         trial.style.display = 'block';
       } else {
         trial.style.display = 'none';
       }
     }
     if (!panel || !status) return;
-    if (status.provider === 'telnyx') {
-      const yesNo = (v) => (v ? 'yes' : 'no');
+    const yesNo = (v) => (v ? 'yes' : 'no');
+    const provider = (status.provider || status.sms_provider || '').toLowerCase();
+    if (provider === 'telnyx') {
+      const tollDisplay = status.toll_free_number_display || '(888) 821-0810';
       const rows = [
-        `Active provider: telnyx`,
-        `API key configured: ${yesNo(status.api_key_configured)}`,
-        `Messaging Profile configured: ${yesNo(status.messaging_profile_configured)}`,
-        `Sender configured: ${yesNo(status.phone_number_configured)}`,
-        `Trial mode: ${yesNo(status.trial_mode)}`,
+        `SMS provider: Telnyx`,
+        `Telnyx API key configured: ${yesNo(status.api_key_configured)}`,
+        `Telnyx messaging profile configured: ${yesNo(status.messaging_profile_configured)}`,
+        `Telnyx phone number configured: ${yesNo(status.phone_number_configured)}`,
+        `Telnyx public key configured: ${yesNo(status.public_key_configured)}`,
+        `Webhook endpoint configured: ${yesNo(status.webhook_endpoint_configured)}`,
+        `Webhook API version: ${status.webhook_api_version || 'V2'}`,
+        `Toll-free number: +1 ${tollDisplay}`,
+        `Toll-free verification status: ${status.toll_free_verification_status || 'unknown'}`,
+        `Trial mode: ${status.trial_mode ? 'enabled' : 'disabled'}`,
+        `Latest Telnyx send status: ${status.latest_send_status || 'none'}`,
+        `Latest Telnyx error code: ${status.latest_telnyx_error_code != null ? status.latest_telnyx_error_code : (status.latest_error_code != null ? status.latest_error_code : 'none')}`,
       ];
-      if (status.latest_error_message) rows.push(`Latest error: ${status.latest_error_message}`);
-      panel.innerHTML = `<strong>SMS provider status</strong><br/>${rows.map(escapeHtml).join('<br/>')}`;
+      const errMsg = status.latest_telnyx_error_message || status.latest_error_message;
+      if (errMsg) rows.push(`Latest Telnyx error: ${errMsg}`);
+      panel.innerHTML = `<strong>Telnyx status</strong><br/>${rows.map(escapeHtml).join('<br/>')}`;
       panel.style.display = 'block';
       return;
     }
-    const yesNo = (v) => (v ? 'yes' : 'no');
-    const a2pLabels = {
-      blocked_unregistered: 'Blocked — number not on an approved A2P campaign (Twilio 30034)',
-      pending_approval: 'Compliance / campaign approval still pending',
-      messaging_service_configured_verify_in_twilio: 'Messaging Service configured — confirm A2P campaign is approved in Twilio Console',
-      from_number_configured_verify_a2p_in_twilio: 'Sending number configured — confirm A2P 10DLC registration in Twilio Console',
-      incomplete_configuration: 'Incomplete Twilio configuration',
-      unknown: 'Unknown — verify A2P readiness in Twilio Console',
-    };
+    // Non-Telnyx rollback providers (Twilio / SimpleTexting) — only shown when active.
     const rows = [
-      `Twilio credentials configured: ${yesNo(status.credentials_configured)}`,
-      `Sending phone number configured: ${yesNo(status.sending_phone_configured)}`,
-      `Messaging Service SID configured: ${yesNo(status.messaging_service_configured)}`,
-      `Latest Twilio send error code: ${status.latest_twilio_error_code != null ? status.latest_twilio_error_code : 'none'}`,
-      `A2P readiness: ${a2pLabels[status.a2p_readiness] || status.a2p_readiness || 'unknown'}`,
+      `SMS provider: ${provider || 'unknown'}`,
+      `Provider configured: ${yesNo(status.send_configured || status.configured || status.credentials_configured)}`,
     ];
-    if (status.latest_twilio_error_message) {
-      rows.push(`Latest error: ${status.latest_twilio_error_message}`);
+    if (status.latest_error_message || status.latest_twilio_error_message) {
+      rows.push(`Latest error: ${status.latest_error_message || status.latest_twilio_error_message}`);
     }
-    panel.innerHTML = `<strong>Twilio status</strong><br/>${rows.map(escapeHtml).join('<br/>')}`;
+    panel.innerHTML = `<strong>SMS provider status</strong><br/>${rows.map(escapeHtml).join('<br/>')}`;
     panel.style.display = 'block';
   }
 
@@ -715,17 +717,22 @@
       const data = await fetchJson('/sms/messages', {cache: 'no-store'});
       if (!data) return;
       if (note) {
-        const sendNote = data.send_configured
-          ? (data.twilio_status && data.twilio_status.uses_messaging_service
-              ? 'Twilio SMS sending is configured via Messaging Service.'
-              : 'Twilio SMS sending is configured.')
-          : 'Twilio is not configured yet. You can still generate and save SMS drafts.';
+        const provider = (data.sms_provider || (data.provider_status && data.provider_status.provider) || '').toLowerCase();
+        let sendNote;
+        if (data.send_configured && provider === 'telnyx') {
+          sendNote = 'SMS sending is configured through Telnyx. TopAI drafts the message using Claude. You review and approve the message before it is sent.';
+        } else if (data.send_configured) {
+          sendNote = 'SMS sending is configured for the active provider. TopAI drafts the message using Claude. You review and approve the message before it is sent.';
+        } else {
+          sendNote = 'SMS sending is not fully configured yet. You can still generate and save SMS drafts.';
+        }
         const coachNote = data.coach_configured
-          ? ' Claude inbound coaching is enabled via ANTHROPIC_API_KEY.'
+          ? ' Claude inbound coaching is enabled.'
           : ' Add ANTHROPIC_API_KEY in Railway to enable Claude inbound coaching.';
         note.textContent = sendNote + coachNote;
       }
-      if (data.twilio_status) renderTwilioStatus(data.twilio_status);
+      const statusPayload = data.provider_status || data.twilio_status;
+      if (statusPayload) renderProviderStatus(statusPayload);
       if (!data.messages.length) {
         history.style.display = 'none';
         placeholder.style.display = 'flex';
@@ -1277,7 +1284,7 @@
       errEl.style.display = 'block';
       try {
         const status = await fetchJson('/sms/status', {cache: 'no-store'});
-        if (status) renderTwilioStatus(status);
+        if (status) renderProviderStatus(status);
       } catch (_ignore) {}
     }
     spinner.style.display = 'none'; label.textContent = 'Send SMS';

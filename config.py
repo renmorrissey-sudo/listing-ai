@@ -143,6 +143,10 @@ TELNYX_TRIAL_MODE = (_env("TELNYX_TRIAL_MODE", "true") or "true").lower() in {
 TELNYX_VERIFIED_TEST_NUMBER = _env_strip("TELNYX_VERIFIED_TEST_NUMBER")
 TELNYX_API_BASE = _env_strip("TELNYX_API_BASE") or "https://api.telnyx.com/v2"
 TELNYX_WEBHOOK_TOLERANCE_SECONDS = int(_env("TELNYX_WEBHOOK_TOLERANCE_SECONDS", "300"))
+# Customer-facing toll-free verification badge for diagnostics (pending|verified|unknown).
+TELNYX_TOLL_FREE_VERIFICATION_STATUS = (
+    _env_strip("TELNYX_TOLL_FREE_VERIFICATION_STATUS") or "pending"
+).lower()
 SMS_PROVIDER_MSGS_PER_SECOND = float(_env("SMS_PROVIDER_MSGS_PER_SECOND", "1"))
 
 CONSENT_UPLOAD_DIR = _env_strip("CONSENT_UPLOAD_DIR") or os.path.join(

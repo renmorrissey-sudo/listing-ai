@@ -235,11 +235,22 @@ from stripe_billing import (
 @app.route("/health")
 def health():
     from email_service import email_configured
+    from sms_providers.factory import get_sms_provider
+    from sms_providers.telnyx import TelnyxSMSProvider
+    from sms_provider import TwilioSmsProvider
 
+    active = (config.SMS_PROVIDER or "").lower().strip()
+    provider = get_sms_provider()
+    telnyx = TelnyxSMSProvider()
+    twilio = TwilioSmsProvider()
     return jsonify({
         "status": "ok",
         "email_configured": email_configured(),
         "password_reset": True,
+        "sms_provider": active,
+        "telnyx_configured": telnyx.is_configured(),
+        "twilio_configured": twilio.is_configured(),
+        "active_provider_configured": provider.is_configured(),
     }), 200
 
 
@@ -819,14 +830,22 @@ def sms_messages():
     latest_code = parse_provider_code_from_error_message(
         (latest or {}).get("error_message")
     )
-    status = provider.configuration_status(
-        latest_error_code=latest_code,
-        latest_error_message=(latest or {}).get("error_message"),
-    )
+    if hasattr(provider, "configuration_status"):
+        status = provider.configuration_status(
+            latest_error_code=latest_code,
+            latest_error_message=(latest or {}).get("error_message"),
+        )
+    else:
+        status = provider.get_sender_information()
+    status["sms_provider"] = getattr(provider, "name", config.SMS_PROVIDER)
+    status["provider"] = status.get("provider") or status["sms_provider"]
     return jsonify({
-        "send_configured": provider.is_configured(),
+        "send_configured": bool(status.get("send_configured", provider.is_configured())),
         "coach_configured": sms_coach.is_configured(),
-        "twilio_status": status,
+        "sms_provider": status["sms_provider"],
+        "provider_status": status,
+        # Legacy key retained for older clients; UI prefers provider_status.
+        "twilio_status": status if status.get("provider") == "twilio" else None,
         "messages": [
             {
                 "id": m["id"],
@@ -866,6 +885,8 @@ def sms_status():
         payload = provider.get_sender_information()
         payload["latest_error_code"] = latest_code
         payload["latest_error_message"] = (latest or {}).get("error_message")
+    payload["provider"] = getattr(provider, "name", config.SMS_PROVIDER)
+    payload["sms_provider"] = payload["provider"]
     payload["trial_mode"] = bool(getattr(config, "TELNYX_TRIAL_MODE", False)) and (
         (config.SMS_PROVIDER or "").lower() == "telnyx"
     )
@@ -874,6 +895,21 @@ def sms_status():
         if payload.get("trial_mode")
         else None
     )
+    latest_outbound = None
+    for m in db.list_sms_messages(user["id"], limit=20) or []:
+        if (m.get("direction") or "outbound") == "outbound":
+            latest_outbound = m
+            break
+    payload["latest_send_status"] = (latest_outbound or {}).get("status") or "none"
+    # Never echo secrets even if misconfigured upstream.
+    for secret_key in (
+        "api_key",
+        "public_key",
+        "auth_token",
+        "account_sid",
+        "messaging_service_sid",
+    ):
+        payload.pop(secret_key, None)
     return jsonify(payload)
 
 

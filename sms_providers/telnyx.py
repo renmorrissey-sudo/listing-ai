@@ -36,19 +36,54 @@ class TelnyxSMSProvider(BaseSMSProvider):
         return None
 
     def get_sender_information(self) -> dict:
+        return self.configuration_status()
+
+    def configuration_status(self, *, latest_error_code=None, latest_error_message=None):
+        """Non-secret Telnyx diagnostics for the AI SMS Assistant UI."""
+        support_display = getattr(config, "SMS_SUPPORT_DISPLAY", None) or "(888) 821-0810"
+        toll_free_e164 = (
+            getattr(config, "SMS_SUPPORT_E164", None)
+            or self.phone_number
+            or "+18888210810"
+        )
+        verification = (
+            getattr(config, "TELNYX_TOLL_FREE_VERIFICATION_STATUS", None) or "pending"
+        ).lower()
+        if verification not in {"pending", "verified", "unknown"}:
+            verification = "unknown"
+        app_url = (getattr(config, "APP_URL", None) or "").rstrip("/")
+        webhook_configured = bool(app_url) and "localhost" not in app_url.lower()
+        # Prefer public program display number; never expose API keys / public key material.
         return {
             "provider": self.name,
+            "sms_provider": self.name,
             "configured": self.is_configured(),
+            "send_configured": self.is_configured() and bool(self.phone_number or self.messaging_profile_id),
             "api_key_configured": bool(self.api_key),
             "messaging_profile_configured": bool(self.messaging_profile_id),
             "phone_number_configured": bool(self.phone_number),
             "public_key_configured": bool(self.public_key),
-            "trial_mode": self.trial_mode,
+            "webhook_endpoint_configured": webhook_configured,
+            "webhook_api_version": "V2",
+            "webhook_path": "/webhooks/telnyx/messaging",
+            "toll_free_number": toll_free_e164,
+            "toll_free_number_display": support_display
+            if support_display.startswith("(")
+            else support_display,
+            "toll_free_verification_status": verification,
+            "trial_mode": bool(self.trial_mode),
             "verified_test_number_configured": bool(self.verified_test_number),
-            # Never expose secrets or full numbers beyond last-4 for diagnostics
             "phone_number_hint": (self.phone_number[-4:] if self.phone_number else None),
             "verified_test_hint": (
                 self.verified_test_number[-4:] if self.verified_test_number else None
+            ),
+            "latest_telnyx_error_code": latest_error_code,
+            "latest_telnyx_error_message": (
+                (latest_error_message or "")[:240] if latest_error_message else None
+            ),
+            "latest_error_code": latest_error_code,
+            "latest_error_message": (
+                (latest_error_message or "")[:240] if latest_error_message else None
             ),
         }
 
@@ -305,6 +340,8 @@ class TelnyxSMSProvider(BaseSMSProvider):
         account = from_obj.get("phone_number") if isinstance(from_obj, dict) else body.get("from")
         if event_type == "message.sent" and status in {"unknown", ""}:
             status = "sent"
+        if event_type == "message.delivery_failed":
+            status = "delivery_failed"
         return {
             "event_id": data.get("id"),
             "provider_message_id": body.get("id"),

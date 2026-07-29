@@ -125,10 +125,11 @@ def test_webhook_inbound_and_stop(two_users, monkeypatch):
 def test_help_keyword_sends_support_number_reply(two_users, monkeypatch):
     u1, _ = two_users
     monkeypatch.setattr(config, "TELNYX_API_KEY", "KEY")
-    monkeypatch.setattr(config, "TELNYX_PHONE_NUMBER", "+18888210810")
+    help_number = _unique_e164("188")
+    monkeypatch.setattr(config, "TELNYX_PHONE_NUMBER", help_number)
     tdb.upsert_tenant_sender(
         u1,
-        sender_number="+18888210810",
+        sender_number=help_number,
         sms_provider="telnyx",
         sms_enabled=True,
         registration_status="verified",
@@ -142,7 +143,7 @@ def test_help_keyword_sends_support_number_reply(two_users, monkeypatch):
                 "id": f"msg-help-{uuid.uuid4().hex[:10]}",
                 "text": "HELP",
                 "from": {"phone_number": contact},
-                "to": [{"phone_number": "+18888210810"}],
+                "to": [{"phone_number": help_number}],
             },
         }
     }

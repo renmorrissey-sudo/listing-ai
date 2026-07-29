@@ -301,7 +301,8 @@ def test_sms_status_endpoint(app_client, two_users):
     u1, _ = two_users
     with app_client.session_transaction() as sess:
         sess["user_id"] = u1
-    with patch.object(config, "TWILIO_ACCOUNT_SID", "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), \
+    with patch.object(config, "SMS_PROVIDER", "twilio"), \
+         patch.object(config, "TWILIO_ACCOUNT_SID", "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), \
          patch.object(config, "TWILIO_AUTH_TOKEN", "token"), \
          patch.object(config, "TWILIO_PHONE_NUMBER", "+15551234567"), \
          patch.object(config, "TWILIO_MESSAGING_SERVICE_SID", "MG11111111111111111111111111111111"):

@@ -56,7 +56,11 @@ def handle_messaging_webhook(payload: dict, *, app=None):
 
     if event_type == "message.received":
         return _handle_received(payload, app=app)
-    if event_type in {"message.sent", "message.finalized"}:
+    if event_type in {
+        "message.sent",
+        "message.finalized",
+        "message.delivery_failed",
+    }:
         return _handle_delivery(payload)
     # Unknown — ack so Telnyx does not retry forever
     logger.info("Telnyx webhook ignored event_type=%s", event_type or "none")
