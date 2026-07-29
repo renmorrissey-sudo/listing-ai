@@ -93,6 +93,7 @@ def inject_business_context():
         "contact_email": config.CONTACT_EMAIL,
         "subscription_price": config.SUBSCRIPTION_PRICE,
         "trial_offer": config.TRIAL_OFFER,
+        "billing_frequency": config.BILLING_FREQUENCY,
         "canonical_url": seo.canonical_loc(path),
         "is_public_marketing_page": seo.is_public_marketing_path(path),
         "current_user": user,
@@ -250,6 +251,9 @@ def _extract_section(text, start_marker, end_marker):
 
 
 from stripe_billing import (
+    billing_config_error as _billing_config_error,
+    billing_is_configured as _billing_is_configured,
+    create_subscription_checkout_session as _create_subscription_checkout_session,
     stripe_customer_for_email as _stripe_customer_for_email,
     stripe_has_active_subscription as _stripe_has_active_subscription,
     stripe_status_from_subscription as _stripe_status_from_subscription,
@@ -380,7 +384,7 @@ def login():
             if password_updated
             else None
         ),
-        footer_text='No account? <a href="/register">Create account</a>',
+        footer_text='No account? <a href="/subscribe">Create one</a>',
         error=error,
     )
 
@@ -450,35 +454,114 @@ def password_updated():
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
-    if auth.get_current_user():
-        return redirect(url_for("subscriber_app"))
-    error = None
-    if request.method == "POST":
-        email = request.form.get("email", "").strip()
-        password = request.form.get("password", "")
-        confirm = request.form.get("confirm_password", "")
-        if not email or "@" not in email:
-            error = "Enter a valid email address."
-        elif len(password) < auth.MIN_PASSWORD_LENGTH:
-            error = f"Password must be at least {auth.MIN_PASSWORD_LENGTH} characters."
-        elif password != confirm:
-            error = "Passwords do not match."
-        elif db.get_user_by_email(email):
-            error = "An account with this email already exists."
-        else:
-            user_id = db.create_user(email, auth.hash_password(password))
-            auth.login_user(user_id)
-            return redirect(url_for("subscriber_app"))
-    return render_template(
-        "auth_form.html",
-        title="Create account",
-        submit_label="Create account",
-        show_confirm=True,
-        show_forgot=False,
-        next_url="/app",
-        footer_text='Already have an account? <a href="/login">Sign in</a><br><br>By signing up you agree to our <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.',
-        error=error,
+    """Legacy signup URL — account creation is on /subscribe."""
+    return redirect(url_for("subscribe"), code=302)
+
+
+def _subscribe_page(*, error=None, notice=None, form_email="", status=200):
+    user = auth.get_current_user()
+    need_password = not user
+    return (
+        render_template(
+            "subscribe.html",
+            billing_ready=_billing_is_configured(),
+            billing_error=_billing_config_error(),
+            need_password=need_password,
+            form_email=form_email or ((user or {}).get("email") or ""),
+            error=error,
+            notice=notice,
+            billing_frequency=config.BILLING_FREQUENCY,
+        ),
+        status,
     )
+
+
+@app.route("/subscribe", methods=["GET", "POST"])
+@limiter.limit("20 per minute")
+def subscribe():
+    """Public plan + signup page. Checkout Session is created only on valid POST."""
+    user = auth.get_current_user()
+    if user and auth.user_has_active_subscription(user):
+        return redirect(url_for("subscriber_app"))
+
+    cancelled = request.args.get("cancelled") == "1"
+    notice = "Checkout was cancelled. You can try again whenever you are ready." if cancelled else None
+
+    if request.method == "GET":
+        # Never create a Checkout Session on GET.
+        status = 200 if _billing_is_configured() else 503
+        return _subscribe_page(notice=notice, status=status)
+
+    if not _billing_is_configured():
+        logger.error(
+            "Subscribe POST blocked: billing_config_error=%s",
+            _billing_config_error(),
+        )
+        return _subscribe_page(
+            error="Billing is temporarily unavailable. Please try again later.",
+            form_email=(request.form.get("email") or "").strip(),
+            status=503,
+        )
+
+    email = (request.form.get("email") or "").strip().lower()
+    password = request.form.get("password") or ""
+    confirm = request.form.get("confirm_password") or ""
+
+    if user:
+        # Authenticated unpaid user: reuse account, skip password fields.
+        email = (user.get("email") or "").strip().lower()
+    else:
+        if not email or "@" not in email:
+            return _subscribe_page(error="Enter a valid email address.", form_email=email, status=400)
+        existing = db.get_user_by_email(email)
+        if existing:
+            # Never create a duplicate user/customer for an existing email.
+            return _subscribe_page(
+                error=(
+                    "An account with this email already exists. "
+                    "Please sign in or use Forgot password to recover access."
+                ),
+                form_email=email,
+                status=400,
+            )
+        if len(password) < auth.MIN_PASSWORD_LENGTH:
+            return _subscribe_page(
+                error=f"Password must be at least {auth.MIN_PASSWORD_LENGTH} characters.",
+                form_email=email,
+                status=400,
+            )
+        if password != confirm:
+            return _subscribe_page(
+                error="Passwords do not match.",
+                form_email=email,
+                status=400,
+            )
+        user_id = db.create_user(email, auth.hash_password(password))
+        auth.login_user(user_id)
+        user = auth.get_current_user()
+
+    try:
+        checkout = _create_subscription_checkout_session(
+            user,
+            success_url=f"{config.APP_URL}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{config.APP_URL}/subscribe?cancelled=1",
+        )
+    except stripe.StripeError:
+        logger.exception("Stripe checkout session creation failed for user_id=%s", user.get("id"))
+        return _subscribe_page(
+            error="We could not start checkout right now. Please try again in a moment.",
+            form_email=email,
+            status=502,
+        )
+    except Exception:
+        logger.exception("Unexpected checkout failure for user_id=%s", user.get("id"))
+        return _subscribe_page(
+            error="We could not start checkout right now. Please try again in a moment.",
+            form_email=email,
+            status=502,
+        )
+
+    return redirect(checkout.url, code=303)
 
 
 @app.route("/logout", methods=["GET", "POST"])
@@ -489,55 +572,20 @@ def logout():
     return jsonify({"ok": True})
 
 
-@app.route("/subscribe")
-@auth.login_required
-def subscribe():
-    user = auth.get_current_user()
-    if auth.user_has_active_subscription(user):
-        return redirect(url_for("subscriber_app"))
-
-    if not config.STRIPE_SECRET_KEY or not config.STRIPE_PRICE_ID:
-        return render_template("error.html", message="Billing is not configured yet."), 503
-
-    customer_id = user.get("stripe_customer_id")
-    if not customer_id:
-        customer = stripe.Customer.create(email=user["email"], metadata={"user_id": str(user["id"])})
-        customer_id = customer.id
-        db.set_stripe_customer(user["id"], customer_id)
-
-    checkout = stripe.checkout.Session.create(
-        mode="subscription",
-        customer=customer_id,
-        line_items=[{"price": config.STRIPE_PRICE_ID, "quantity": 1}],
-        success_url=f"{config.APP_URL}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"{config.APP_URL}/",
-        client_reference_id=str(user["id"]),
-        metadata={"user_id": str(user["id"])},
-    )
-    return redirect(checkout.url, code=303)
-
-
 @app.route("/billing/success")
-@auth.login_required
 def billing_success():
+    """Checkout return URL. Access is granted only by the verified Stripe webhook."""
     session_id = request.args.get("session_id")
     if session_id and config.STRIPE_SECRET_KEY:
         try:
             checkout = stripe.checkout.Session.retrieve(session_id)
             user = auth.get_current_user()
-            if checkout.customer:
+            # Persist customer linkage only — do not activate subscription here.
+            if user and checkout.customer:
                 db.set_stripe_customer(user["id"], checkout.customer)
-            if checkout.subscription:
-                sub = stripe.Subscription.retrieve(checkout.subscription)
-                db.update_user_subscription(
-                    user["id"],
-                    _stripe_status_from_subscription(sub),
-                    subscription_id=sub.id,
-                    stripe_customer_id=checkout.customer,
-                )
         except stripe.StripeError:
-            logger.exception("Failed to sync checkout session")
-    return redirect(url_for("subscriber_app"))
+            logger.exception("Failed to retrieve checkout session after success redirect")
+    return render_template("billing_success.html")
 
 
 @app.route("/billing/portal")
@@ -569,17 +617,22 @@ def stripe_webhook():
     except stripe.SignatureVerificationError:
         return jsonify({"error": "Invalid signature."}), 400
 
+    event_id = event.get("id") or ""
     event_type = event["type"]
+    if event_id and not db.claim_stripe_webhook_event(event_id, event_type):
+        return jsonify({"received": True, "duplicate": True}), 200
+
     data = event["data"]["object"]
 
     if event_type == "checkout.session.completed":
         user_id = data.get("client_reference_id") or (data.get("metadata") or {}).get("user_id")
         if user_id and data.get("subscription"):
             sub = stripe.Subscription.retrieve(data["subscription"])
+            sub_id = sub["id"] if isinstance(sub, dict) else sub.id
             db.update_user_subscription(
                 int(user_id),
                 _stripe_status_from_subscription(sub),
-                subscription_id=sub.id,
+                subscription_id=sub_id,
                 stripe_customer_id=data.get("customer"),
             )
 
@@ -587,7 +640,11 @@ def stripe_webhook():
         customer_id = data.get("customer")
         user = db.get_user_by_stripe_customer(customer_id) if customer_id else None
         if user:
-            status = "canceled" if event_type == "customer.subscription.deleted" else _stripe_status_from_subscription(data)
+            status = (
+                "canceled"
+                if event_type == "customer.subscription.deleted"
+                else _stripe_status_from_subscription(data)
+            )
             db.update_user_subscription(user["id"], status, subscription_id=data.get("id"))
 
     return jsonify({"received": True}), 200

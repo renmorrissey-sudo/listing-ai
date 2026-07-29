@@ -58,8 +58,11 @@ else:
     DB_ENGINE = "sqlite"
 
 STRIPE_SECRET_KEY = _env("STRIPE_SECRET_KEY")
+STRIPE_PUBLISHABLE_KEY = _env_strip("STRIPE_PUBLISHABLE_KEY") or _env_strip(
+    "STRIPE_PUBLIC_KEY"
+)
 STRIPE_WEBHOOK_SECRET = _env("STRIPE_WEBHOOK_SECRET")
-STRIPE_PRICE_ID = _env("STRIPE_PRICE_ID")
+STRIPE_PRICE_ID = _env_strip("STRIPE_PRICE_ID")
 APP_URL = _env("APP_URL", "http://localhost:8080")
 
 # Public website copy. Keep these as constants so malformed host environment
@@ -68,8 +71,14 @@ BUSINESS_NAME = "TopAI RE Tools"
 PRODUCT_NAME = "TopAI Real Estate Tools"
 LEGAL_ENTITY_NAME = "Sky Blue Holdings LLC"
 CONTACT_EMAIL = "support@topairealestatetools.com"
-SUBSCRIPTION_PRICE = "$49/month"
+# Prefer a well-formed env override; fall back to the known plan copy.
+_raw_subscription_price = _env_strip("SUBSCRIPTION_PRICE") or ""
+if _raw_subscription_price.startswith("$") and "/month" in _raw_subscription_price.lower():
+    SUBSCRIPTION_PRICE = _raw_subscription_price
+else:
+    SUBSCRIPTION_PRICE = "$49/month"
 TRIAL_OFFER = "50% off first month with promo code TRIAL50"
+BILLING_FREQUENCY = "Billed monthly"
 
 # Transactional email (password reset). Prefer SendGrid; SMTP is fallback.
 SENDGRID_API_KEY = _env_strip("SENDGRID_API_KEY")
@@ -285,6 +294,23 @@ def validate_config():
     if missing:
         print(f"FATAL: Missing required environment variables: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
+
+    # Soft production guard: refuse obvious Stripe price placeholders without crashing tests.
+    if IS_PRODUCTION and SUBSCRIPTION_REQUIRED and STRIPE_PRICE_ID:
+        from stripe_billing import is_valid_stripe_price_id, stripe_mode_mismatch
+
+        if not is_valid_stripe_price_id(STRIPE_PRICE_ID):
+            print(
+                "FATAL: STRIPE_PRICE_ID looks invalid (use a real price_… id from Stripe).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if stripe_mode_mismatch():
+            print(
+                "FATAL: Stripe secret/publishable key mode mismatch (test vs live).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     validate_database_config()
 

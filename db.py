@@ -239,6 +239,34 @@ def set_stripe_customer(user_id, stripe_customer_id):
         )
 
 
+def claim_stripe_webhook_event(event_id, event_type):
+    """Record a Stripe event for idempotent processing.
+
+    Returns True if this is the first time seeing the event (caller should process),
+    False if it was already processed.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT event_id FROM stripe_webhook_events WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+        if existing:
+            return False
+        try:
+            conn.execute(
+                """
+                INSERT INTO stripe_webhook_events (event_id, event_type, processed_at)
+                VALUES (?, ?, ?)
+                """,
+                (event_id, event_type, now),
+            )
+        except Exception:
+            # Concurrent insert race — treat as already processed.
+            return False
+        return True
+
+
 def get_business_profile(user_id):
     with get_db() as conn:
         try:

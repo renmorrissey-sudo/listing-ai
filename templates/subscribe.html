@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Start trial — {{ product_name }}</title>
+  <meta name="robots" content="noindex, nofollow" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      color: #1a1a2e;
+      min-height: 100vh;
+      background:
+        radial-gradient(ellipse at 12% 8%, rgba(79, 142, 247, 0.18), transparent 48%),
+        radial-gradient(ellipse at 88% 0%, rgba(26, 26, 46, 0.08), transparent 42%),
+        linear-gradient(180deg, #eef3fb 0%, #f7f8fb 55%, #f4f6f9 100%);
+      padding: 28px 16px 48px;
+    }
+    .wrap { max-width: 920px; margin: 0 auto; }
+    .brand {
+      font-size: 28px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 6px;
+    }
+    .brand span { color: #4f8ef7; }
+    .business { color: #667; font-size: 13px; margin-bottom: 22px; }
+    .layout {
+      display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 22px; align-items: start;
+    }
+    @media (max-width: 820px) { .layout { grid-template-columns: 1fr; } }
+    .panel {
+      background: rgba(255,255,255,0.92);
+      border: 1px solid #dde4f0;
+      border-radius: 14px;
+      padding: 28px;
+      box-shadow: 0 10px 30px rgba(26, 26, 46, 0.06);
+    }
+    h1 { font-size: 26px; line-height: 1.2; margin-bottom: 10px; }
+    .muted { color: #667; font-size: 14px; line-height: 1.55; }
+    .price { font-size: 42px; font-weight: 800; margin: 16px 0 4px; }
+    .price span { font-size: 15px; font-weight: 500; color: #667; }
+    .promo {
+      background: #eef5ff; color: #1d4ed8; border: 1px solid #cfe0ff;
+      border-radius: 10px; padding: 10px 12px; font-size: 14px; margin: 14px 0;
+    }
+    .meta { font-size: 13px; color: #556; margin-top: 8px; }
+    .links { margin-top: 18px; font-size: 13px; }
+    .links a { color: #4f8ef7; text-decoration: none; margin-right: 12px; }
+    .links a:hover { text-decoration: underline; }
+    label {
+      display: block; font-size: 12px; font-weight: 600; color: #556;
+      text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px;
+    }
+    .form-group { margin-bottom: 14px; }
+    input {
+      width: 100%; padding: 10px 12px; border: 1.5px solid #e0e4ed;
+      border-radius: 7px; font-size: 14px; background: #fff;
+    }
+    input:focus { outline: none; border-color: #4f8ef7; }
+    .password-wrap { position: relative; }
+    .password-wrap input { padding-right: 72px; }
+    .toggle-pw {
+      position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+      border: none; background: transparent; color: #4f8ef7; font-size: 12px;
+      font-weight: 700; cursor: pointer;
+    }
+    .btn {
+      width: 100%; padding: 12px; background: #4f8ef7; color: white; border: none;
+      border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 8px;
+    }
+    .btn:hover { background: #3a7de0; }
+    .btn:disabled { opacity: 0.65; cursor: not-allowed; }
+    .error {
+      background: #fff5f5; border: 1.5px solid #fca5a5; color: #dc2626;
+      border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px;
+    }
+    .notice {
+      background: #ecfdf5; border: 1.5px solid #6ee7b7; color: #065f46;
+      border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px;
+    }
+    .footer { margin-top: 16px; font-size: 13px; color: #667; text-align: center; }
+    a { color: #4f8ef7; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand">TopAI <span>Real Estate Tools</span></div>
+    <div class="business">Operated by {{ legal_entity_name }}</div>
+
+    <div class="layout">
+      <section class="panel" aria-label="Plan details">
+        <h1>Start your subscription</h1>
+        <p class="muted">Create your account, then continue to secure Stripe checkout. Tool access unlocks after payment is confirmed.</p>
+        <div class="price">{{ subscription_price }} <span>{{ billing_frequency }}</span></div>
+        <div class="promo">{{ trial_offer }}</div>
+        <p class="meta">Cancel anytime from the billing portal after checkout.</p>
+        <div class="links">
+          <a href="/terms">Terms</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/refund-policy">Refund Policy</a>
+          <a href="/pricing">View pricing</a>
+        </div>
+      </section>
+
+      <section class="panel" aria-label="Create account">
+        {% if notice %}<div class="notice" role="status">{{ notice }}</div>{% endif %}
+        {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
+
+        {% if billing_ready %}
+        <form method="post" action="/subscribe">
+          <div class="form-group">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" autocomplete="email" required value="{{ form_email or '' }}" />
+          </div>
+          {% if need_password %}
+          <div class="form-group">
+            <label for="password">Password</label>
+            <div class="password-wrap">
+              <input id="password" name="password" type="password" autocomplete="new-password" required minlength="8" />
+              <button class="toggle-pw" type="button" data-target="password" aria-label="Show password">Show</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="confirm_password">Confirm password</label>
+            <div class="password-wrap">
+              <input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" required minlength="8" />
+              <button class="toggle-pw" type="button" data-target="confirm_password" aria-label="Show password">Show</button>
+            </div>
+          </div>
+          {% endif %}
+          <button class="btn" type="submit">Continue to checkout</button>
+        </form>
+        <p class="footer">
+          Already have an account? <a href="/login">Sign in</a><br />
+          By continuing you agree to our <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.
+        </p>
+        {% else %}
+        <p class="muted">Billing is temporarily unavailable. Please try again later or email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.</p>
+        <p class="footer"><a href="/login">Sign in</a> · <a href="/pricing">View pricing</a></p>
+        {% endif %}
+      </section>
+    </div>
+  </div>
+  <script>
+    document.querySelectorAll('.toggle-pw').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var input = document.getElementById(btn.getAttribute('data-target'));
+        if (!input) return;
+        var show = input.type === 'password';
+        input.type = show ? 'text' : 'password';
+        btn.textContent = show ? 'Hide' : 'Show';
+      });
+    });
+  </script>
+</body>
+</html>

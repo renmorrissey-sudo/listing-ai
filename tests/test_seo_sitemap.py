@@ -119,6 +119,10 @@ def test_private_pages_have_noindex(app_client, two_users):
 
 
 def test_login_register_have_noindex(app_client):
-    for path in ("/login", "/register"):
+    for path in ("/login", "/subscribe"):
         html = app_client.get(path).get_data(as_text=True)
         assert "noindex" in html.lower()
+    # Legacy /register redirects into the subscribe signup flow.
+    res = app_client.get("/register", follow_redirects=False)
+    assert res.status_code in (301, 302)
+    assert "/subscribe" in res.headers.get("Location", "")
