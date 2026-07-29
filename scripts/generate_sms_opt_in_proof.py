@@ -136,7 +136,7 @@ def main():
     )
     draw.text(
         (x + 16, links_y + 64),
-        "SMS consent checkbox is unchecked by default and must be checked to submit.",
+        "SMS consent checkbox is optional and unchecked by default.",
         font=f_small,
         fill="#667788",
     )
@@ -149,10 +149,10 @@ def main():
     draw.text((x + (940 - bw) // 2, y + 14), btn, font=f_btn, fill="white")
     y += 70
     note = (
-        "The SMS consent checkbox is required and is unchecked by default.\n"
-        "Submitting this form does not send an automated SMS.\n"
-        "Message frequency varies. Message and data rates may apply.\n"
-        "Reply STOP to opt out or HELP for help. Consent is not a condition of purchase."
+        "The SMS consent checkbox is optional and unchecked by default. Submitting this form\n"
+        "does not send an automated SMS unless you separately opt in. Message frequency varies.\n"
+        "Message and data rates may apply. Reply STOP to opt out or HELP for help.\n"
+        "Consent is not a condition of purchase."
     )
     draw.multiline_text((x, y), note, font=f_small, fill="#667788", spacing=3)
 

@@ -122,7 +122,6 @@
               id="sms_consent"
               name="sms_consent"
               value="1"
-              required
               {% if form_sms_consent %}checked{% endif %}
             />
             <label for="sms_consent">{{ sms_consent_checkbox_text }}</label>
@@ -137,10 +136,7 @@
 
         <button class="btn" type="submit">Submit inquiry</button>
         <p class="note">
-          The SMS consent checkbox is required and is unchecked by default.
-          Submitting this form does not send an automated SMS.
-          Message frequency varies. Message and data rates may apply.
-          Reply STOP to opt out or HELP for help. Consent is not a condition of purchase.
+          The SMS consent checkbox is optional and unchecked by default. Submitting this form does not send an automated SMS unless you separately opt in. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Consent is not a condition of purchase.
         </p>
       </form>
     </section>

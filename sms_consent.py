@@ -70,8 +70,6 @@ def validate_sms_consent_form(form) -> tuple[dict | None, str | None]:
         return None, "Enter a valid email address, or leave the email field blank."
     if not message:
         return None, "Enter your real estate inquiry or message."
-    if not sms_consent:
-        return None, "Check the SMS consent box to confirm you agree to receive texts."
 
     return {
         "first_name": first_name,
@@ -80,7 +78,7 @@ def validate_sms_consent_form(form) -> tuple[dict | None, str | None]:
         "phone_number": phone,
         "email": email,
         "message": message,
-        "sms_consent": True,
+        "sms_consent": sms_consent,
         "campaign_source": campaign_source,
     }, None
 

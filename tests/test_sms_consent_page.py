@@ -1,4 +1,4 @@
-"""Public /sms-consent page: required SMS opt-in for A2P / Telnyx verification."""
+"""Public /sms-consent page: optional SMS opt-in for A2P / Telnyx verification."""
 
 import re
 from unittest.mock import patch
@@ -11,6 +11,13 @@ from sms_consent import (
     SMS_HELP_RESPONSE,
     SMS_SUPPORT_DISPLAY,
     SMS_SUPPORT_E164,
+)
+
+OPTIONAL_NOTE = (
+    "The SMS consent checkbox is optional and unchecked by default. "
+    "Submitting this form does not send an automated SMS unless you separately opt in. "
+    "Message frequency varies. Message and data rates may apply. "
+    "Reply STOP to opt out or HELP for help. Consent is not a condition of purchase."
 )
 
 
@@ -32,6 +39,7 @@ def test_sms_consent_page_is_public(app_client):
     assert 'name="last_name"' in html
     assert 'name="phone"' in html
     assert SMS_CONSENT_CHECKBOX_TEXT in html
+    assert OPTIONAL_NOTE in " ".join(html.split())
     assert "Message frequency varies" in html
     assert "Message and data rates may apply" in html
     assert "STOP" in html and "HELP" in html
@@ -39,6 +47,7 @@ def test_sms_consent_page_is_public(app_client):
     assert "https://topairealestatetools.com/privacy" in html
     assert "https://topairealestatetools.com/terms" in html
     assert "checked" not in html.split('id="sms_consent"')[1].split(">")[0]
+    assert "required" not in html.split('id="sms_consent"')[1].split(">")[0]
 
 
 def test_sms_consent_checkbox_defaults_unchecked_on_get(app_client):
@@ -46,9 +55,10 @@ def test_sms_consent_checkbox_defaults_unchecked_on_get(app_client):
     match = re.search(r'<input[^>]*id="sms_consent"[^>]*>', html)
     assert match
     assert "checked" not in match.group(0)
+    assert "required" not in match.group(0)
 
 
-def test_missing_checkbox_rejected(app_client):
+def test_optional_checkbox_allows_submission_without_opt_in(app_client):
     phone = "+15557654321"
     res = app_client.post(
         "/sms-consent",
@@ -59,9 +69,15 @@ def test_missing_checkbox_rejected(app_client):
             "message": "Looking for a 3-bed near downtown.",
         },
     )
-    assert res.status_code == 400
-    assert b"SMS consent" in res.data or b"consent box" in res.data.lower()
-    assert db.latest_sms_consent_inquiry_for_phone(phone) is None
+    assert res.status_code == 200
+    assert b"Thanks" in res.data
+    assert b"did not check the SMS consent box" in res.data
+    row = db.latest_sms_consent_inquiry_for_phone(phone)
+    assert row is not None
+    assert row["sms_consent"] is False
+    assert row.get("consent_at") in (None, "")
+    assert sms_consent.phone_has_affirmative_sms_consent(phone) is False
+    assert sms_consent.outbound_sms_blocked_for_phone(phone)
 
 
 def test_invalid_phone_rejected(app_client):
