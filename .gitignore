@@ -10,5 +10,4 @@ audit-results/test-artifacts/
 audit-results/playwright-raw.json
 audit-results/.audit-state.json
 dist-audit/
-package-lock.json
 
