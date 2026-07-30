@@ -3,3 +3,12 @@ __pycache__/
 *.pyc
 *.db
 build/
+node_modules/
+playwright-report/
+test-results/
+audit-results/test-artifacts/
+audit-results/playwright-raw.json
+audit-results/.audit-state.json
+dist-audit/
+package-lock.json
+
