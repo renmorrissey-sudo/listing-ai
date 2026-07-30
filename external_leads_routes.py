@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import os
@@ -9,6 +10,7 @@ import re
 
 from flask import (
     Blueprint,
+    Response,
     flash,
     jsonify,
     redirect,
@@ -36,7 +38,15 @@ from external_leads.consent_workflow import (
     resolve_upload_path,
     save_evidence_upload,
 )
-from external_leads.csv_import import commit_csv, preview_csv, suggest_mapping
+from external_leads.csv_import import (
+    CSV_MAX_BYTES,
+    commit_csv,
+    decode_csv_bytes,
+    preview_csv,
+    sample_csv_text,
+    suggest_mapping,
+    validate_csv_filename,
+)
 from external_leads.ingest import ingest_external_lead
 from external_leads.webhook import generate_webhook_secret, hash_webhook_secret
 
@@ -50,6 +60,17 @@ def _user_or_redirect():
     if not user or not auth.user_has_active_subscription(user):
         return None
     return user
+
+
+def _unauth_redirect():
+    """Send anonymous users to login with next=; unpaid users to subscribe/app."""
+    user = auth.get_current_user()
+    if not user:
+        nxt = request.path
+        if request.query_string:
+            nxt = f"{request.path}?{request.query_string.decode()}"
+        return redirect(url_for("login", next=auth.safe_next_url(nxt)))
+    return redirect(url_for("subscriber_app"))
 
 
 def _nav(user, active="leads"):
@@ -78,7 +99,7 @@ def _wants_json():
 def external_sources_page():
     user = _user_or_redirect()
     if not user:
-        return redirect(url_for("subscriber_app"))
+        return _unauth_redirect()
     error = None
     created_secret = None
     if request.method == "POST":
@@ -128,7 +149,7 @@ def external_sources_page():
 def external_lead_new():
     user = _user_or_redirect()
     if not user:
-        return redirect(url_for("subscriber_app"))
+        return _unauth_redirect()
     sources = xdb.list_external_lead_sources(user["id"], active_only=True)
     error = None
     if request.method == "POST":
@@ -180,36 +201,80 @@ def external_lead_new():
     )
 
 
-@external_leads_bp.route("/crm/external-leads/import", methods=["GET", "POST"])
-def external_lead_import():
+@external_leads_bp.route("/crm/external-leads/import/sample.csv")
+def external_lead_import_sample():
     user = _user_or_redirect()
     if not user:
-        return redirect(url_for("subscriber_app"))
+        return _unauth_redirect()
+    return Response(
+        sample_csv_text(),
+        mimetype="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="external-leads-sample.csv"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@external_leads_bp.route("/crm/external-leads/import", methods=["GET", "POST"])
+def external_lead_import():
+    # Page view / import does not require Telnyx verification or SMS campaign workers.
+    user = _user_or_redirect()
+    if not user:
+        return _unauth_redirect()
     sources = xdb.list_external_lead_sources(user["id"], active_only=True)
+    batches = []
+    try:
+        with db.get_db() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, filename, created_count, updated_count, skipped_count,
+                       invalid_count, pending_evidence_count, created_at
+                FROM external_lead_import_batches
+                WHERE user_id = ?
+                ORDER BY id DESC
+                LIMIT 10
+                """,
+                (user["id"],),
+            ).fetchall()
+            batches = [dict(r) for r in rows]
+    except Exception:
+        logger.exception("import history unavailable user=%s", user["id"])
+        batches = []
+
     preview = None
     error = None
     result = None
     csv_text = ""
     mapping = {}
     source_id = request.form.get("external_source_id") or request.args.get("external_source_id")
+    duplicate_mode = (request.form.get("duplicate_mode") or "skip").strip().lower()
+    if duplicate_mode not in {"skip", "update"}:
+        duplicate_mode = "skip"
 
     if request.method == "POST":
         action = (request.form.get("action") or "preview").strip()
         upload = request.files.get("csv_file")
         csv_text = request.form.get("csv_text") or ""
         if upload and upload.filename:
-            try:
-                csv_text = upload.read().decode("utf-8-sig")
-            except UnicodeDecodeError:
-                error = "CSV must be UTF-8 encoded."
+            fname_err = validate_csv_filename(upload.filename)
+            if fname_err:
+                error = fname_err
+            else:
+                raw = upload.read(CSV_MAX_BYTES + 1)
+                decoded, decode_err = decode_csv_bytes(raw)
+                if decode_err:
+                    error = decode_err
+                else:
+                    csv_text = decoded or ""
         mapping_raw = request.form.get("mapping_json") or "{}"
         try:
             mapping = json.loads(mapping_raw) if mapping_raw else {}
         except json.JSONDecodeError:
             mapping = {}
         if not mapping and csv_text:
-            headers = (csv_text.splitlines() or [""])[0]
-            mapping = suggest_mapping([h.strip() for h in headers.split(",")])
+            headers = next(csv.reader([csv_text.splitlines()[0]])) if csv_text.splitlines() else []
+            mapping = suggest_mapping([h.strip() for h in headers])
 
         source_row = None
         if source_id:
@@ -226,8 +291,9 @@ def external_lead_import():
                 csv_text,
                 mapping,
                 source_row=source_row,
-                filename=(upload.filename if upload else None),
+                filename=(upload.filename if upload and upload.filename else None),
                 actor_user_id=user["id"],
+                duplicate_mode=duplicate_mode,
             )
             if result.get("error"):
                 error = result["error"]
@@ -235,11 +301,17 @@ def external_lead_import():
                 flash(
                     f"Import finished: {result.get('created', 0)} created, "
                     f"{result.get('updated', 0)} updated, "
+                    f"{result.get('skipped', 0)} skipped, "
                     f"{result.get('invalid', 0)} invalid. "
-                    "All external leads remain Unverified + Blocked."
+                    "All external leads remain Unverified + Blocked. No SMS was sent."
                 )
         elif not error:
-            preview = preview_csv(csv_text, mapping=mapping)
+            preview = preview_csv(
+                csv_text,
+                mapping=mapping,
+                user_id=user["id"],
+                duplicate_mode=duplicate_mode,
+            )
             if preview.get("error"):
                 error = preview["error"]
             mapping = preview.get("mapping") or mapping
@@ -247,6 +319,7 @@ def external_lead_import():
     return render_template(
         "crm_external_import.html",
         sources=sources,
+        batches=batches,
         preview=preview,
         error=error,
         result=result,
@@ -254,6 +327,8 @@ def external_lead_import():
         mapping=mapping,
         mapping_json=json.dumps(mapping),
         source_id=source_id or "",
+        duplicate_mode=duplicate_mode,
+        max_upload_mb=CSV_MAX_BYTES // (1024 * 1024),
         **_nav(user, "leads"),
     )
 
@@ -262,7 +337,7 @@ def external_lead_import():
 def lead_consent_page(lead_id):
     user = _user_or_redirect()
     if not user:
-        return redirect(url_for("subscriber_app"))
+        return _unauth_redirect()
     lead = db.get_lead(lead_id, user["id"])
     if not lead:
         return redirect(url_for("crm.crm_leads_page"))
@@ -347,7 +422,7 @@ def lead_consent_page(lead_id):
 def lead_consent_confirm(lead_id):
     user = _user_or_redirect()
     if not user:
-        return redirect(url_for("subscriber_app"))
+        return _unauth_redirect()
     _result, err = confirm_qualifying_consent(
         user["id"], lead_id, request.form, file_storage=request.files.get("evidence_file")
     )
@@ -421,7 +496,7 @@ def lead_consent_opt_out(lead_id):
 def lead_claim(lead_id):
     user = _user_or_redirect()
     if not user:
-        return redirect(url_for("subscriber_app"))
+        return _unauth_redirect()
     lead, err = xdb.claim_lead(lead_id, user["id"])
     if err:
         if _wants_json():
@@ -439,7 +514,7 @@ def lead_claim(lead_id):
 def consent_upload_download(upload_ref):
     user = _user_or_redirect()
     if not user:
-        return redirect(url_for("subscriber_app"))
+        return _unauth_redirect()
     path = resolve_upload_path(user["id"], upload_ref)
     if not path:
         return "Not found", 404

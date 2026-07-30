@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timezone
 
 from db import get_db, get_lead, mark_lead_opt_out
+from db_backend import bind_bool, sql_is_true
 
 
 def _now():
@@ -62,9 +63,9 @@ def list_external_lead_sources(user_id, active_only=False):
     with get_db() as conn:
         if active_only:
             rows = conn.execute(
-                """
+                f"""
                 SELECT * FROM external_lead_sources
-                WHERE user_id = ? AND active = 1
+                WHERE user_id = ? AND {sql_is_true("active")}
                 ORDER BY name ASC
                 """,
                 (user_id,),
@@ -93,9 +94,9 @@ def get_external_lead_source(source_id, user_id):
 def get_external_lead_source_by_key(user_id, provider_key):
     with get_db() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT * FROM external_lead_sources
-            WHERE user_id = ? AND provider_key = ? AND active = 1
+            WHERE user_id = ? AND provider_key = ? AND {sql_is_true("active")}
             LIMIT 1
             """,
             (user_id, provider_key),
@@ -107,9 +108,9 @@ def find_source_by_webhook_provider_key(provider_key):
     """Locate active source by provider_key (tenant resolved via secret)."""
     with get_db() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT * FROM external_lead_sources
-            WHERE provider_key = ? AND active = 1
+            WHERE provider_key = ? AND {sql_is_true("active")}
             """,
             (provider_key,),
         ).fetchall()
@@ -223,7 +224,7 @@ def create_external_lead(
                  notes, assigned_user_id, created_at, updated_at,
                  sms_consent_status, sms_sending_blocked, external_source_id, external_record_id,
                  external_payload_meta, pond_status, import_batch_id, consent_status, opt_out_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not_certified', 1, ?, ?, ?, ?, ?, 'unknown', 'active')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not_certified', ?, ?, ?, ?, ?, ?, 'unknown', 'active')
             """,
             (
                 user_id,
@@ -238,6 +239,7 @@ def create_external_lead(
                 user_id,
                 now,
                 now,
+                bind_bool(True),
                 external_source_id,
                 external_record_id,
                 meta,
@@ -308,7 +310,7 @@ def set_lead_sms_consent_state(
         "sms_consent_status": lead.get("sms_consent_status"),
         "sms_sending_blocked": bool(lead.get("sms_sending_blocked")),
     }
-    blocked_int = 1 if sms_sending_blocked else 0
+    blocked_val = bind_bool(sms_sending_blocked)
     legacy_consent = lead.get("consent_status")
     legacy_opt = lead.get("opt_out_status")
     if sync_legacy:
@@ -342,7 +344,7 @@ def set_lead_sms_consent_state(
             """,
             (
                 sms_consent_status,
-                blocked_int,
+                blocked_val,
                 legacy_consent,
                 legacy_opt,
                 _now(),
@@ -454,7 +456,7 @@ def create_consent_evidence(user_id, lead_id, data):
                 data.get("confirmed_by_user_id"),
                 data.get("confirmed_at"),
                 data.get("revoked_at"),
-                1 if data.get("attestation_accepted") else 0,
+                bind_bool(bool(data.get("attestation_accepted"))),
                 json.dumps(data.get("audit_json")) if isinstance(data.get("audit_json"), dict) else data.get("audit_json"),
                 now,
             ),
@@ -493,10 +495,10 @@ def mark_evidence_confirmed(evidence_id, user_id, confirmer_id):
             SET consent_status = 'confirmed',
                 confirmed_by_user_id = ?,
                 confirmed_at = ?,
-                attestation_accepted = 1
+                attestation_accepted = ?
             WHERE id = ? AND user_id = ?
             """,
-            (confirmer_id, _now(), evidence_id, user_id),
+            (confirmer_id, _now(), bind_bool(True), evidence_id, user_id),
         )
 
 

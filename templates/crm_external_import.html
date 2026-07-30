@@ -6,6 +6,28 @@
   <title>Import external leads - {{ product_name }}</title>
   <meta name="robots" content="noindex" />
   {% include 'crm_base_styles.html' %}
+  <style>
+    .dropzone {
+      border: 1.5px dashed #9db0c9;
+      border-radius: 10px;
+      padding: 22px 16px;
+      text-align: center;
+      background: linear-gradient(180deg, #f7fafc 0%, #eef3f8 100%);
+      transition: border-color .15s ease, background .15s ease;
+      margin: 8px 0 12px;
+    }
+    .dropzone.is-dragover {
+      border-color: #1f6feb;
+      background: #e8f1ff;
+    }
+    .dropzone p { margin: 0 0 8px; color: #4a5d73; }
+    .guidance { margin: 10px 0 0; padding: 0; list-style: disc; padding-left: 1.2rem; color: #4a5d73; font-size: .95rem; }
+    .guidance li { margin: 4px 0; }
+    .import-history { margin-top: 18px; }
+    .import-history table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+    .import-history th, .import-history td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e5ebf5; }
+    #csv-file-input { margin-top: 8px; }
+  </style>
 </head>
 <body>
   {% set page_tagline = 'CSV import' %}
@@ -14,28 +36,82 @@
   <main>
     <p class="muted"><a href="/crm/leads">← Leads</a> · <a href="/crm/external-sources">Sources</a></p>
     <h1>CSV import</h1>
-    <p class="muted">Even if a consent column says true, leads stay Unverified + Blocked until you confirm evidence on the lead.</p>
+    <p class="muted">
+      Preview first, then commit. Leads stay Unverified + SMS Blocked until you confirm consent evidence.
+      No SMS is sent automatically. Toll-free / campaign verification is not required to use this page.
+    </p>
     {% if error %}<div class="flash err" style="display:block;">{{ error }}</div>{% endif %}
     {% if result and not result.error %}
     <div class="flash" style="display:block;">
       Batch {{ result.batch_id }}: created {{ result.created }}, updated {{ result.updated }},
-      skipped {{ result.skipped }}, invalid {{ result.invalid }}, pending evidence {{ result.pending_evidence }}
+      skipped {{ result.skipped }}, invalid {{ result.invalid }}, pending evidence {{ result.pending_evidence }}.
+      SMS sent: {{ result.sms_sent or 0 }}.
+      {% if result.error_csv %}
+      <form method="post" style="display:inline;margin-left:8px;">
+        <input type="hidden" name="action" value="download_errors" />
+        <textarea name="error_csv" hidden>{{ result.error_csv }}</textarea>
+      </form>
+      <a class="btn secondary" id="error-csv-download" href="#">Download error CSV</a>
+      <script>
+        (function () {
+          var link = document.getElementById('error-csv-download');
+          if (!link) return;
+          var csv = {{ result.error_csv|tojson }};
+          link.addEventListener('click', function (e) {
+            e.preventDefault();
+            var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = 'import-errors.csv';
+            a.click();
+            URL.revokeObjectURL(url);
+          });
+        })();
+      </script>
+      {% endif %}
     </div>
     {% endif %}
     <div class="card">
-      <form method="post" enctype="multipart/form-data">
-        <label>Source
+      <p class="muted">
+        <a href="/crm/external-leads/import/sample.csv">Download sample CSV</a>
+        (headers + one fictional row). Max upload {{ max_upload_mb }} MB · .csv only · UTF-8 (BOM ok).
+      </p>
+      <form method="post" enctype="multipart/form-data" id="csv-import-form">
+        <label>Source / provider
           <select name="external_source_id">
             <option value="">— optional —</option>
             {% for s in sources %}
-            <option value="{{ s.id }}" {% if source_id == s.id|string %}selected{% endif %}>{{ s.name }}</option>
+            <option value="{{ s.id }}" {% if source_id == s.id|string %}selected{% endif %}>{{ s.name }} ({{ s.provider_key }})</option>
             {% endfor %}
           </select>
         </label>
-        <label>CSV file <input type="file" name="csv_file" accept=".csv,text/csv" /></label>
-        <label>Or paste CSV
-          <textarea name="csv_text" rows="8" placeholder="name,phone,email,consent&#10;Jane,+15551234567,j@example.com,true">{{ csv_text }}</textarea>
+        <label>Duplicate handling
+          <select name="duplicate_mode">
+            <option value="skip" {% if duplicate_mode != 'update' %}selected{% endif %}>Skip duplicates (default)</option>
+            <option value="update" {% if duplicate_mode == 'update' %}selected{% endif %}>Update matched leads (never upgrades SMS consent)</option>
+          </select>
         </label>
+        <div class="dropzone" id="csv-dropzone" tabindex="0" role="button" aria-label="CSV drop zone">
+          <p><strong>Choose a CSV</strong> or drag and drop it here</p>
+          <p class="muted">Only .csv files. Tenant is always your account — CSV cannot override it.</p>
+          <input id="csv-file-input" type="file" name="csv_file" accept=".csv,text/csv" />
+        </div>
+        <label>Or paste CSV
+          <textarea name="csv_text" id="csv-text" rows="8" placeholder="first_name,last_name,phone,email,consent&#10;Alex,Example,7202891700,alex.example@example.com,true">{{ csv_text }}</textarea>
+        </label>
+        <fieldset style="margin-top:12px;border:1px solid #e5ebf5;padding:12px;border-radius:8px;">
+          <legend>Consent columns (optional — never enable SMS)</legend>
+          <p class="muted" style="margin:0 0 8px;">
+            Map or include <code>consent</code> / <code>original_consent_status</code>,
+            <code>consent_date</code>, and <code>consent_text</code>. Claims become pending evidence only.
+          </p>
+          <ul class="guidance">
+            <li>Phones normalize to E.164 (e.g. 7202891700 → +17202891700); invalid rows are flagged.</li>
+            <li>Defaults: SMS consent unverified / not certified + sending blocked.</li>
+            <li>Preview before commit. Download an error CSV for failed rows after import.</li>
+          </ul>
+        </fieldset>
         <input type="hidden" name="mapping_json" value='{{ mapping_json }}' />
         <div class="row" style="gap:8px;margin-top:10px;">
           <button class="btn secondary" type="submit" name="action" value="preview">Preview</button>
@@ -47,23 +123,109 @@
     <div class="card">
       <h2>Preview</h2>
       <p class="muted">{{ preview.note }}</p>
+      <p class="muted">
+        Rows: {{ preview.total_rows }} · Invalid phones in preview: {{ preview.invalid_in_preview }} ·
+        Duplicates in preview: {{ preview.duplicates_in_preview }} · Mode: {{ preview.duplicate_mode }}
+      </p>
       <p class="muted">Mapping: <code>{{ preview.mapping }}</code></p>
       <table>
-        <thead><tr><th>Row</th><th>Mapped</th><th>Phone OK</th></tr></thead>
+        <thead>
+          <tr>
+            <th>Row</th>
+            <th>Mapped</th>
+            <th>Phone (E.164)</th>
+            <th>Phone OK</th>
+            <th>Duplicate</th>
+          </tr>
+        </thead>
         <tbody>
           {% for row in preview.preview %}
           <tr>
             <td>{{ row.row_number }}</td>
             <td><code>{{ row.mapped }}</code></td>
+            <td><code>{{ row.phone_normalized }}</code></td>
             <td>{% if row.valid_phone %}yes{% else %}no{% endif %}</td>
+            <td>
+              {% if row.duplicate_match %}
+                {{ row.duplicate_match }} → {{ row.duplicate_action }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
     {% endif %}
+    <div class="card import-history">
+      <h2>Recent imports</h2>
+      {% if batches %}
+      <table>
+        <thead>
+          <tr>
+            <th>Batch</th>
+            <th>File</th>
+            <th>Created</th>
+            <th>Updated</th>
+            <th>Skipped</th>
+            <th>Invalid</th>
+            <th>When</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in batches %}
+          <tr>
+            <td>{{ b.id }}</td>
+            <td>{{ b.filename or '—' }}</td>
+            <td>{{ b.created_count }}</td>
+            <td>{{ b.updated_count }}</td>
+            <td>{{ b.skipped_count }}</td>
+            <td>{{ b.invalid_count }}</td>
+            <td>{{ b.created_at }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted">No import history yet. Preview a CSV to get started.</p>
+      {% endif %}
+    </div>
   </main>
   {% include 'subscriber_footer.html' %}
   {% include 'subscriber_nav_script.html' %}
+  <script>
+    (function () {
+      var zone = document.getElementById('csv-dropzone');
+      var input = document.getElementById('csv-file-input');
+      if (!zone || !input) return;
+      ['dragenter', 'dragover'].forEach(function (evt) {
+        zone.addEventListener(evt, function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          zone.classList.add('is-dragover');
+        });
+      });
+      ['dragleave', 'drop'].forEach(function (evt) {
+        zone.addEventListener(evt, function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          zone.classList.remove('is-dragover');
+        });
+      });
+      zone.addEventListener('drop', function (e) {
+        var files = e.dataTransfer && e.dataTransfer.files;
+        if (!files || !files.length) return;
+        var file = files[0];
+        if (!/\.csv$/i.test(file.name || '')) {
+          alert('Only .csv files are accepted.');
+          return;
+        }
+        var dt = new DataTransfer();
+        dt.items.add(file);
+        input.files = dt.files;
+      });
+    })();
+  </script>
 </body>
 </html>

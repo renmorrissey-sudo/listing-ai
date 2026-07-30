@@ -230,7 +230,12 @@ def test_claim_does_not_change_consent(two_users):
     assert int(claimed["sms_sending_blocked"]) == int(before["sms_sending_blocked"])
 
 
-def test_send_paths_denied_when_blocked(app_client, two_users):
+def test_send_paths_denied_when_blocked(app_client, two_users, monkeypatch):
+    import config as cfg
+
+    # Bypass toll-free gate so the assertion reaches lead consent / sender checks.
+    monkeypatch.setattr(cfg, "SMS_PROVIDER", "simpletexting")
+    monkeypatch.setattr(cfg, "SIMPLETEXTING_API_TOKEN", "tok")
     u1, _ = two_users
     _login(app_client, u1)
     sid = _source(u1, key="send-block")
@@ -241,11 +246,7 @@ def test_send_paths_denied_when_blocked(app_client, two_users):
         source_row=source,
         method="manual",
     )["lead_id"]
-    persona = db.list_voice_personas(u1)[0] if db.list_voice_personas(u1) else None
-    if not persona:
-        # defaults from init
-        personas = db.list_voice_personas(None) if hasattr(db, "list_voice_personas") else []
-        persona = personas[0] if personas else None
+    assert lead_id
     # Use any persona available to user
     with db.get_db() as conn:
         row = conn.execute(
