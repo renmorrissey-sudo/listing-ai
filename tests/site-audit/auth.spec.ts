@@ -29,6 +29,8 @@ test.describe("Authenticated subscriber / CRM", () => {
     const vp = vpName(testInfo.project.name);
     const env = readAuditEnv();
     if (!env.hasAuthCredentials) {
+      // Records Manual Action Required finding (no password logged).
+      await loginAsAuditUser(page, vp);
       test.skip(true, "TOPAI_AUDIT_EMAIL/PASSWORD missing");
     }
 

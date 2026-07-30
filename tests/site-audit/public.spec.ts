@@ -112,7 +112,10 @@ test.describe("Public routes", () => {
               screenshot: false,
             });
           }
-          if (json.toll_free_verification_status === "pending") {
+          if (
+            json.toll_free_verification_status === "pending" &&
+            vp === "desktop-1440"
+          ) {
             await recordIssue(page, {
               title: "Telnyx toll-free verification still pending",
               severity: "External Dependency",
@@ -221,15 +224,31 @@ test.describe("Public navigation expectations", () => {
       expectHtml: true,
     });
 
-    const signIn = page.locator('a[href="/login"], a[href^="/login?"]').first();
-    await expect(signIn).toBeVisible();
+    // Narrow viewports collapse marketing nav behind #mkt-nav-toggle.
+    const menuToggle = page.locator("#mkt-nav-toggle");
+    if (await menuToggle.isVisible().catch(() => false)) {
+      await menuToggle.click();
+      await expect(page.locator("#mkt-nav.is-open")).toBeVisible();
+    }
 
-    const subscribe = page.locator('a[href="/subscribe"]').first();
-    await expect(subscribe).toBeVisible();
+    const navSignIn = page.locator("#mkt-sign-in, a[href='/login']").first();
+    await expect(navSignIn).toBeVisible();
+    await expect(navSignIn).toHaveAttribute("href", /\/login/);
 
-    // View pricing — href may be /pricing or #pricing
+    const navSubscribe = page.locator("#mkt-start-trial, a[href='/subscribe']").first();
+    await expect(navSubscribe).toBeVisible();
+
+    // Hero CTAs remain visible outside the collapsed nav.
+    const heroSignIn = page.locator("#access-tools-cta");
+    if (await heroSignIn.count()) {
+      await expect(heroSignIn).toBeVisible();
+      await expect(heroSignIn).toHaveAttribute("href", /\/login/);
+    }
+
     const pricing = page
-      .locator('a:has-text("View pricing"), a[href="/pricing"], a[href*="#pricing"]')
+      .locator(
+        '#hero-view-pricing, a:has-text("View pricing"), a[href="/pricing"], a[href*="#pricing"]'
+      )
       .first();
     if (await pricing.count()) {
       await expect(pricing).toBeVisible();
@@ -256,7 +275,11 @@ test.describe("Public navigation expectations", () => {
           route: "/",
           viewport: vp,
           authState: "logged-out",
-          reproductionSteps: ["Open /", `Find link to ${pathName}`],
+          reproductionSteps: [
+            "Open /",
+            "Open mobile Menu if present",
+            `Find link to ${pathName}`,
+          ],
           expected: `Link to ${pathName} present in header/footer`,
           actual: "Link not found",
           httpStatus: 200,
