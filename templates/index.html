@@ -150,7 +150,7 @@
       <div class="gate-error" id="gate-error"></div>
       <a class="gate-btn" id="gate-submit" href="/login?next=/app" style="display:block;text-align:center;text-decoration:none;">Sign in</a>
       <div class="gate-divider">don't have a subscription?</div>
-      <a class="gate-subscribe-link" href="/subscribe">Start trial &mdash; 50% off &rArr;</a>
+      <a class="gate-subscribe-link" href="/subscribe">Get 50% off your first month &rArr;</a>
       <input type="hidden" id="gate-email" value="" />
       <div class="gate-links">
         <div>Sold by {{ business_name }}</div>
@@ -187,9 +187,12 @@
     <div class="business-note">Operated by {{ legal_entity_name }}</div>
   </div>
   <div id="header-right">
-    <a class="subscribe-btn" href="/subscribe">Start trial &mdash; 50% off</a>
+    <a class="subscribe-btn" href="/subscribe">Get 50% off your first month</a>
   </div>
 </header>
+{% if subscribe_notice %}
+<div class="subscribe-notice" role="status" style="margin:12px 20px 0;padding:10px 14px;background:#ecfdf5;border:1px solid #6ee7b7;color:#065f46;border-radius:8px;font-size:14px;">{{ subscribe_notice }}</div>
+{% endif %}
 <div class="public-nav" id="public-nav">
   <a class="nav-marketing" href="/">Home</a>
   <a class="nav-marketing" href="/features">Features</a>
@@ -1085,7 +1088,7 @@
   async function doLogout() {
     await fetch('/logout', {method:'POST'});
     document.getElementById('header-right').innerHTML =
-      `<a class="subscribe-btn" href="/subscribe">Start trial &mdash; 50% off</a>`;
+      `<a class="subscribe-btn" href="/subscribe">Get 50% off your first month</a>`;
     document.getElementById('gate').classList.remove('hidden');
     document.getElementById('gate-error').textContent = '';
     document.getElementById('gate-email').value = '';

@@ -215,7 +215,8 @@ def test_verify_email_only_retired(app_client):
 def test_logged_out_header_has_sign_in_not_access_tools(app_client):
     html = app_client.get("/").get_data(as_text=True)
     assert "Sign in" in html
-    assert "Start trial" in html
+    assert "Subscribe" in html
+    assert "Start trial" not in html
     assert "Access Tools" not in html
     assert "Operated by Sky Blue Holdings LLC" in html
     assert "Operated by TopAI RE Tools" not in html

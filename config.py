@@ -77,7 +77,7 @@ if _raw_subscription_price.startswith("$") and "/month" in _raw_subscription_pri
     SUBSCRIPTION_PRICE = _raw_subscription_price
 else:
     SUBSCRIPTION_PRICE = "$49/month"
-TRIAL_OFFER = "50% off first month with promo code TRIAL50"
+TRIAL_OFFER = "Get 50% off your first month with promo code TRIAL50 — this is a discount, not a free trial"
 BILLING_FREQUENCY = "Billed monthly"
 
 # Transactional email (password reset). Prefer SendGrid; SMTP is fallback.

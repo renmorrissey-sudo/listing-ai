@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Start trial — {{ product_name }}</title>
+  <title>Subscribe — {{ product_name }}</title>
   <meta name="robots" content="noindex, nofollow" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -56,6 +56,8 @@
       border-radius: 7px; font-size: 14px; background: #fff;
     }
     input:focus { outline: none; border-color: #4f8ef7; }
+    input[readonly] { background: #f3f5f9; color: #334; cursor: not-allowed; }
+    .field-hint { font-size: 12px; color: #667; margin-top: 5px; }
     .password-wrap { position: relative; }
     .password-wrap input { padding-right: 72px; }
     .toggle-pw {
@@ -66,9 +68,13 @@
     .btn {
       width: 100%; padding: 12px; background: #4f8ef7; color: white; border: none;
       border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 8px;
+      display: inline-block; text-align: center; text-decoration: none;
     }
     .btn:hover { background: #3a7de0; }
     .btn:disabled { opacity: 0.65; cursor: not-allowed; }
+    .btn.secondary {
+      background: white; color: #1d4ed8; border: 1.5px solid #cfe0ff; margin-top: 10px;
+    }
     .error {
       background: #fff5f5; border: 1.5px solid #fca5a5; color: #dc2626;
       border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px;
@@ -88,8 +94,8 @@
 
     <div class="layout">
       <section class="panel" aria-label="Plan details">
-        <h1>Start your subscription</h1>
-        <p class="muted">Create your account, then continue to secure Stripe checkout. Tool access unlocks after payment is confirmed.</p>
+        <h1>Subscribe</h1>
+        <p class="muted">$49/month, billed monthly through Stripe. Use promo code <strong>TRIAL50</strong> at checkout for 50% off your first month — a discount, not a free trial. Tool access unlocks after payment is confirmed.</p>
         <div class="price">{{ subscription_price }} <span>{{ billing_frequency }}</span></div>
         <div class="promo">{{ trial_offer }}</div>
         <p class="meta">Cancel anytime from the billing portal after checkout.</p>
@@ -101,15 +107,42 @@
         </div>
       </section>
 
-      <section class="panel" aria-label="Create account">
+      <section class="panel" aria-label="{% if show_checkout_form %}Create account{% else %}Subscription status{% endif %}">
         {% if notice %}<div class="notice" role="status">{{ notice }}</div>{% endif %}
         {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
 
-        {% if billing_ready %}
-        <form method="post" action="/subscribe">
+        {% if not show_checkout_form %}
+        <h2 style="font-size:18px;margin-bottom:10px;">Subscription status</h2>
+        {% if gate and gate.message and gate.message != notice %}
+        <p class="muted" style="margin-bottom:14px;">{{ gate.message }}</p>
+        {% endif %}
+        {% if gate and gate.access_ends_on %}
+        <p class="meta" style="margin-bottom:14px;">Access ends on <strong>{{ gate.access_ends_on }}</strong>.</p>
+        {% endif %}
+        {% if gate and gate.show_open_tools %}
+        <a class="btn" href="/app">Open Tools</a>
+        {% endif %}
+        {% if gate and gate.show_manage_billing %}
+        <a class="btn secondary" href="/billing/portal">Manage Billing</a>
+        {% endif %}
+        <p class="footer"><a href="/pricing">View pricing</a> · <a href="/logout">Log out</a></p>
+
+        {% elif billing_ready %}
+        <form method="post" action="/subscribe" id="subscribe-form">
           <div class="form-group">
             <label for="email">Email</label>
-            <input id="email" name="email" type="email" autocomplete="email" required value="{{ form_email or '' }}" />
+            <input
+              id="email"
+              name="email"
+              type="email"
+              autocomplete="email"
+              required
+              value="{{ form_email or '' }}"
+              {% if email_locked %}readonly{% endif %}
+            />
+            {% if email_locked %}
+            <p class="field-hint">Checkout is locked to your signed-in account email.</p>
+            {% endif %}
           </div>
           {% if need_password %}
           <div class="form-group">
@@ -127,10 +160,12 @@
             </div>
           </div>
           {% endif %}
-          <button class="btn" type="submit">Continue to checkout</button>
+          <button class="btn" type="submit" id="subscribe-submit">Continue to checkout</button>
         </form>
         <p class="footer">
+          {% if need_password %}
           Already have an account? <a href="/login">Sign in</a><br />
+          {% endif %}
           By continuing you agree to our <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.
         </p>
         {% else %}
@@ -150,6 +185,15 @@
         btn.textContent = show ? 'Hide' : 'Show';
       });
     });
+    (function () {
+      var form = document.getElementById('subscribe-form');
+      var submit = document.getElementById('subscribe-submit');
+      if (!form || !submit) return;
+      form.addEventListener('submit', function () {
+        submit.disabled = true;
+        submit.textContent = 'Starting checkout…';
+      });
+    })();
   </script>
 </body>
 </html>

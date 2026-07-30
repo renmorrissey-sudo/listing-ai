@@ -3,7 +3,7 @@ import secrets
 
 import stripe
 from anthropic import Anthropic
-from flask import Flask, jsonify, redirect, render_template, request, url_for
+from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.exceptions import HTTPException
@@ -253,7 +253,10 @@ def _extract_section(text, start_marker, end_marker):
 from stripe_billing import (
     billing_config_error as _billing_config_error,
     billing_is_configured as _billing_is_configured,
+    checkout_idempotency_key as _checkout_idempotency_key,
     create_subscription_checkout_session as _create_subscription_checkout_session,
+    normalize_email as _normalize_email,
+    resolve_subscribe_gate as _resolve_subscribe_gate,
     stripe_customer_for_email as _stripe_customer_for_email,
     stripe_has_active_subscription as _stripe_has_active_subscription,
     stripe_status_from_subscription as _stripe_status_from_subscription,
@@ -327,7 +330,10 @@ def subscriber_app():
         return redirect(url_for("login", next="/app"))
     if config.SUBSCRIPTION_REQUIRED and not auth.user_has_active_subscription(user):
         return redirect(url_for("subscribe"))
-    return render_template("index.html")
+    notice = None
+    if request.args.get("already_subscribed") == "1":
+        notice = "Your subscription is already active."
+    return render_template("index.html", subscribe_notice=notice)
 
 
 @app.route("/session-status")
@@ -456,9 +462,18 @@ def register():
     return redirect(url_for("subscribe"), code=302)
 
 
-def _subscribe_page(*, error=None, notice=None, form_email="", status=200):
+def _subscribe_page(
+    *,
+    error=None,
+    notice=None,
+    form_email="",
+    status=200,
+    gate=None,
+    email_locked=False,
+):
     user = auth.get_current_user()
     need_password = not user
+    gate = gate or {"can_checkout": True, "state": "none"}
     return (
         render_template(
             "subscribe.html",
@@ -466,12 +481,20 @@ def _subscribe_page(*, error=None, notice=None, form_email="", status=200):
             billing_error=_billing_config_error(),
             need_password=need_password,
             form_email=form_email or ((user or {}).get("email") or ""),
+            email_locked=email_locked or bool(user),
             error=error,
             notice=notice,
             billing_frequency=config.BILLING_FREQUENCY,
+            gate=gate,
+            show_checkout_form=bool(gate.get("can_checkout", True)),
         ),
         status,
     )
+
+
+def _redirect_active_subscriber():
+    flash("Your subscription is already active.", "info")
+    return redirect(url_for("subscriber_app", already_subscribed=1))
 
 
 @app.route("/subscribe", methods=["GET", "POST"])
@@ -479,8 +502,32 @@ def _subscribe_page(*, error=None, notice=None, form_email="", status=200):
 def subscribe():
     """Public plan + signup page. Checkout Session is created only on valid POST."""
     user = auth.get_current_user()
-    if user and auth.user_has_active_subscription(user):
-        return redirect(url_for("subscriber_app"))
+    gate = _resolve_subscribe_gate(user) if user else {
+        "can_checkout": True,
+        "state": "none",
+        "message": None,
+        "access_ends_on": None,
+        "show_manage_billing": False,
+        "show_open_tools": False,
+        "redirect": None,
+    }
+    if user and gate.get("redirect") == "subscriber_app":
+        return _redirect_active_subscriber()
+    if user and not gate.get("can_checkout", True):
+        cancelled = request.args.get("cancelled") == "1"
+        notice = (
+            "Checkout was cancelled. You can try again whenever you are ready."
+            if cancelled
+            else None
+        )
+        block_status = 409 if request.method == "POST" else 200
+        return _subscribe_page(
+            notice=notice or gate.get("message"),
+            gate=gate,
+            form_email=(user.get("email") or ""),
+            email_locked=True,
+            status=block_status,
+        )
 
     cancelled = request.args.get("cancelled") == "1"
     notice = "Checkout was cancelled. You can try again whenever you are ready." if cancelled else None
@@ -488,7 +535,12 @@ def subscribe():
     if request.method == "GET":
         # Never create a Checkout Session on GET.
         status = 200 if _billing_is_configured() else 503
-        return _subscribe_page(notice=notice, status=status)
+        return _subscribe_page(
+            notice=notice,
+            status=status,
+            gate=gate,
+            email_locked=bool(user),
+        )
 
     if not _billing_is_configured():
         logger.error(
@@ -497,17 +549,31 @@ def subscribe():
         )
         return _subscribe_page(
             error="Billing is temporarily unavailable. Please try again later.",
-            form_email=(request.form.get("email") or "").strip(),
+            form_email=_normalize_email(request.form.get("email")),
             status=503,
+            gate=gate,
+            email_locked=bool(user),
         )
 
-    email = (request.form.get("email") or "").strip().lower()
+    email = _normalize_email(request.form.get("email"))
     password = request.form.get("password") or ""
     confirm = request.form.get("confirm_password") or ""
 
     if user:
-        # Authenticated unpaid user: reuse account, skip password fields.
-        email = (user.get("email") or "").strip().lower()
+        # Authenticated unpaid user: reuse account email (immutable), skip password.
+        email = _normalize_email(user.get("email"))
+        # Re-check Stripe/local gate immediately before Checkout (tabs / races).
+        gate = _resolve_subscribe_gate(user)
+        if gate.get("redirect") == "subscriber_app":
+            return _redirect_active_subscriber()
+        if not gate.get("can_checkout", True):
+            return _subscribe_page(
+                notice=gate.get("message"),
+                gate=gate,
+                form_email=email,
+                email_locked=True,
+                status=409,
+            )
     else:
         if not email or "@" not in email:
             return _subscribe_page(error="Enter a valid email address.", form_email=email, status=400)
@@ -534,6 +600,24 @@ def subscribe():
                 form_email=email,
                 status=400,
             )
+        # Block signup when Stripe already has a blocking subscription for this email.
+        if config.STRIPE_SECRET_KEY:
+            try:
+                existing_customer = _stripe_customer_for_email(email)
+                if existing_customer:
+                    from stripe_billing import list_blocking_subscriptions
+
+                    if list_blocking_subscriptions(existing_customer.id):
+                        return _subscribe_page(
+                            error=(
+                                "This email already has a Stripe subscription. "
+                                "Please sign in to manage billing or continue checkout."
+                            ),
+                            form_email=email,
+                            status=400,
+                        )
+            except stripe.StripeError:
+                logger.exception("Stripe pre-signup subscription check failed")
         user_id = db.create_user(email, auth.hash_password(password))
         auth.login_user(user_id)
         user = auth.get_current_user()
@@ -543,6 +627,7 @@ def subscribe():
             user,
             success_url=f"{config.APP_URL}/billing/success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{config.APP_URL}/subscribe?cancelled=1",
+            idempotency_key=_checkout_idempotency_key(user["id"]),
         )
     except stripe.StripeError:
         logger.exception("Stripe checkout session creation failed for user_id=%s", user.get("id"))
@@ -550,6 +635,7 @@ def subscribe():
             error="We could not start checkout right now. Please try again in a moment.",
             form_email=email,
             status=502,
+            email_locked=True,
         )
     except Exception:
         logger.exception("Unexpected checkout failure for user_id=%s", user.get("id"))
@@ -557,6 +643,7 @@ def subscribe():
             error="We could not start checkout right now. Please try again in a moment.",
             form_email=email,
             status=502,
+            email_locked=True,
         )
 
     return redirect(checkout.url, code=303)

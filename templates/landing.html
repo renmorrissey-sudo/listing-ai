@@ -49,13 +49,13 @@
       <div class="cta-row">
         {% if current_user and user_subscribed %}
         <a class="cta" href="/app" id="access-tools-cta">Open Tools</a>
-        <a class="cta secondary" href="/dashboard">Dashboard</a>
+        <a class="cta secondary" href="/pricing" id="hero-view-pricing">View pricing</a>
         {% elif current_user %}
-        <a class="cta" href="/subscribe" id="hero-start-trial">Start trial</a>
+        <a class="cta" href="/subscribe" id="hero-start-trial">Subscribe</a>
         <a class="cta secondary" href="/pricing" id="hero-view-pricing">View pricing</a>
         <a class="cta ghost" href="/app" id="access-tools-cta">Open Tools</a>
         {% else %}
-        <a class="cta" href="/subscribe" id="hero-start-trial">Start trial</a>
+        <a class="cta" href="/subscribe" id="hero-start-trial">Subscribe</a>
         <a class="cta secondary" href="/pricing" id="hero-view-pricing">View pricing</a>
         <a class="cta ghost" href="/login" id="access-tools-cta">Sign in</a>
         {% endif %}

@@ -47,7 +47,8 @@ def test_home_landing_is_public_and_indexable(app_client):
     assert "<h2>Subscriber Access</h2>" not in html
     assert 'id="gate"' not in html
     assert "<video" in html or "landing-video" in html
-    assert "Start trial" in html
+    assert "Subscribe" in html
+    assert "Start trial" not in html
     assert "View pricing" in html
     assert "Sign in" in html
     assert "Access Tools" not in html

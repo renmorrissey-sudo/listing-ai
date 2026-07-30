@@ -1,4 +1,4 @@
-"""Customer-facing Sign in / Start trial / View pricing routing."""
+"""Customer-facing Sign in / Subscribe / View pricing routing."""
 
 import re
 from html.parser import HTMLParser
@@ -36,8 +36,6 @@ def _href_for_label(html, label):
     match = re.search(pattern, html, re.I)
     if match:
         return match.group(1)
-    # href after text (rare)
-    pattern2 = rf'<a\b[^>]*>\s*{re.escape(label)}\s*</a>'
     for m in re.finditer(rf'<a\b([^>]*)>\s*{re.escape(label)}\s*</a>', html, re.I):
         hm = re.search(r'href="([^"]*)"', m.group(1))
         if hm:
@@ -67,8 +65,9 @@ def test_homepage_header_and_hero_routing(app_client):
     assert 'href="/login?next=/app" id="access-tools-cta"' not in html
     assert "buy.stripe.com" not in html
     assert _href_for_label(html, "Sign in") == "/login"
-    assert _href_for_label(html, "Start trial") == "/subscribe"
+    assert _href_for_label(html, "Subscribe") == "/subscribe"
     assert _href_for_label(html, "View pricing") == "/pricing"
+    assert "Start trial" not in html
 
 
 def test_subscribe_sign_in_goes_to_login(app_client, monkeypatch):
@@ -82,6 +81,7 @@ def test_subscribe_sign_in_goes_to_login(app_client, monkeypatch):
     )
     assert "checkout.stripe.com" not in html
     assert "buy.stripe.com" not in html
+    assert "Start trial" not in html
 
 
 def test_mobile_marketing_nav_present(app_client):
@@ -94,16 +94,17 @@ def test_mobile_marketing_nav_present(app_client):
         assert 'href="/subscribe"' in html, path
 
 
-def test_unauth_header_sign_in_and_start_trial(app_client):
+def test_unauth_header_sign_in_and_subscribe(app_client):
     html = app_client.get("/features").get_data(as_text=True)
     assert "Sign in" in html
-    assert "Start trial" in html
+    assert "Subscribe" in html
+    assert "Start trial" not in html
     assert "Open Tools" not in html
     assert _href_for_label(html, "Sign in") == "/login"
-    assert _href_for_label(html, "Start trial") == "/subscribe"
+    assert _href_for_label(html, "Subscribe") == "/subscribe"
 
 
-def test_auth_subscribed_header_open_tools_hides_trial(app_client, two_users, monkeypatch):
+def test_auth_subscribed_header_open_tools_manage_billing(app_client, two_users, monkeypatch):
     monkeypatch.setattr("config.SUBSCRIPTION_REQUIRED", True)
     u1, _ = two_users
     db.update_user_subscription(u1, "active")
@@ -111,26 +112,29 @@ def test_auth_subscribed_header_open_tools_hides_trial(app_client, two_users, mo
     html = app_client.get("/features").get_data(as_text=True)
     nav = html.split('id="mkt-nav"', 1)[1].split("</nav>", 1)[0]
     assert "Open Tools" in nav
-    assert "Dashboard" in nav
+    assert "Manage Billing" in nav
     assert "Log out" in nav
     assert "Sign in" not in nav
+    assert "Subscribe" not in nav
     assert "Start trial" not in nav
     assert "Sign in" not in html
     assert "Start trial" not in html
     assert 'href="/app"' in html
+    assert 'href="/billing/portal"' in html
 
 
-def test_auth_unsubscribed_header_open_tools_keeps_trial(app_client, two_users, monkeypatch):
+def test_auth_unsubscribed_header_keeps_subscribe(app_client, two_users, monkeypatch):
     monkeypatch.setattr("config.SUBSCRIPTION_REQUIRED", True)
     u1, _ = two_users
     _login(app_client, u1)
     html = app_client.get("/features").get_data(as_text=True)
     nav = html.split('id="mkt-nav"', 1)[1].split("</nav>", 1)[0]
     assert "Open Tools" in nav
-    assert "Start trial" in nav
+    assert "Subscribe" in nav
+    assert "Start trial" not in nav
     assert "Sign in" not in nav
     assert "Sign in" not in html
-    assert _href_for_label(html, "Start trial") == "/subscribe"
+    assert _href_for_label(html, "Subscribe") == "/subscribe"
     assert 'href="/app"' in html
 
 

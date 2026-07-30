@@ -69,13 +69,13 @@
     <a href="/features">Features</a>
     <a href="/how-it-works">How It Works</a>
     {% if current_user and user_subscribed %}
-    <a href="/dashboard">Dashboard</a>
     <a href="/app">Open Tools</a>
+    <a href="/billing/portal">Manage Billing</a>
     <a href="/logout">Log out</a>
     {% elif current_user %}
     <a href="/pricing">Pricing</a>
     <a href="/app">Open Tools</a>
-    <a href="/subscribe">Start trial</a>
+    <a href="/subscribe">Subscribe</a>
     <a href="/logout">Log out</a>
     {% else %}
     <a href="/pricing">Pricing</a>
@@ -83,7 +83,7 @@
     <a href="/privacy">Privacy</a>
     <a href="/contact">Contact</a>
     <a href="/login" id="mkt-sign-in">Sign in</a>
-    <a href="/subscribe" id="mkt-start-trial">Start trial</a>
+    <a href="/subscribe" id="mkt-start-trial">Subscribe</a>
     {% endif %}
   </nav>
 </header>
