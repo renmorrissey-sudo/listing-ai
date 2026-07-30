@@ -1367,6 +1367,12 @@
   "branchesOrPullRequests": {
     "auditFrameworkBranch": "cursor/topai-production-site-audit-fa4f",
     "repairBranches": [],
-    "pullRequests": []
+    "pullRequests": [
+      {
+        "url": "https://github.com/renmorrissey-sudo/listing-ai/pull/1",
+        "title": "[TopAI Auditor] Add Playwright production site audit framework",
+        "type": "audit-framework"
+      }
+    ]
   }
 }

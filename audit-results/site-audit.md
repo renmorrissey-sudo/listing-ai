@@ -94,7 +94,8 @@ _None_
 
 - Audit framework branch: `cursor/topai-production-site-audit-fa4f`
 - Repair branches: none
-- Repair pull requests: none (no reproducible product defect meeting repair criteria)
+- Framework PR: https://github.com/renmorrissey-sudo/listing-ai/pull/1
+- Product repair pull requests: none (no reproducible Critical/High/Medium product defect meeting repair criteria)
 
 ## Report paths
 
