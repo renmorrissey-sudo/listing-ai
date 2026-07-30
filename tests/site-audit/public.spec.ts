@@ -8,6 +8,7 @@ import {
   recordIssue,
   scanForSecrets,
 } from "./helpers/page-checks";
+import { addRouteResult, updateState } from "./helpers/findings";
 
 const routes = JSON.parse(
   fs.readFileSync(path.join(process.cwd(), "topai-audit-routes.json"), "utf8")
@@ -28,6 +29,26 @@ test.describe("Public routes", () => {
         const ct = res.headers()["content-type"] || "";
         const status = res.status();
         const body = await res.text();
+        addRouteResult({
+          requestedUrl: route.path,
+          finalUrl: res.url(),
+          status,
+          contentType: ct,
+          title: null,
+          viewport: vp,
+          authState: "logged-out",
+          visibleErrors: [],
+          consoleErrors: [],
+          pageErrors: [],
+          failedRequests: [],
+          httpErrors: status >= 400 ? [`${status} GET ${route.path}`] : [],
+          ok: status === route.expectStatus,
+        });
+        updateState((s) => {
+          if (!s.publicRoutesTested.includes(route.path)) {
+            s.publicRoutesTested.push(route.path);
+          }
+        });
 
         if (status !== route.expectStatus) {
           await recordIssue(page, {
