@@ -8,10 +8,28 @@
   {% include 'crm_base_styles.html' %}
   <style>
     .overview { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 18px 0 22px; }
-    .stat { background: white; border-radius: 12px; padding: 18px; box-shadow: 0 1px 5px rgba(0,0,0,0.08); }
+    .stat {
+      background: white; border-radius: 12px; padding: 18px;
+      box-shadow: 0 1px 5px rgba(0,0,0,0.08); border: 1px solid transparent;
+      color: inherit;
+    }
     .stat .label { font-size: 12px; font-weight: 700; color: #667; text-transform: uppercase; letter-spacing: 0.4px; }
     .stat .value { font-size: 30px; font-weight: 800; margin-top: 6px; color: #1a1a2e; }
     .stat .sub { font-size: 12px; color: #889; margin-top: 4px; }
+    a.stat.stat-link {
+      display: block; text-decoration: none; cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+    }
+    a.stat.stat-link:hover {
+      border-color: #c7dbff;
+      box-shadow: 0 4px 14px rgba(30, 64, 120, 0.12);
+      transform: translateY(-1px);
+    }
+    a.stat.stat-link:focus-visible {
+      outline: none;
+      border-color: #4f8ef7;
+      box-shadow: 0 0 0 3px rgba(79, 142, 247, 0.35);
+    }
     .grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 16px; }
     .tool-card { border: 1px solid #e5ebf5; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
     .tool-card h3 { margin: 0 0 8px; font-size: 16px; }
@@ -19,19 +37,26 @@
     .metric { background: #f8fafc; border-radius: 8px; padding: 10px; border: 1px solid transparent; color: inherit; }
     .metric .k { font-size: 11px; color: #778; font-weight: 700; text-transform: uppercase; }
     .metric .v { font-size: 20px; font-weight: 800; margin-top: 2px; }
-    .metric.metric-zero { opacity: 0.72; cursor: default; }
     a.metric.metric-link {
       display: block; text-decoration: none; cursor: pointer;
-      transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+      transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
     }
     a.metric.metric-link:hover {
       background: #eef5ff; border-color: #c7dbff;
+      box-shadow: 0 2px 8px rgba(30, 64, 120, 0.1);
+      transform: translateY(-1px);
     }
     a.metric.metric-link:focus-visible {
       outline: none;
       border-color: #4f8ef7;
       box-shadow: 0 0 0 3px rgba(79, 142, 247, 0.35);
     }
+    .metric .view-hint {
+      font-size: 11px; color: #6b8fc7; font-weight: 600; margin-top: 4px;
+      opacity: 0; transition: opacity 0.15s ease;
+    }
+    a.metric.metric-link:hover .view-hint,
+    a.metric.metric-link:focus-visible .view-hint { opacity: 1; }
     .activity { list-style: none; padding: 0; margin: 0; }
     .activity li { padding: 10px 0; border-bottom: 1px solid #eef2f7; font-size: 13px; }
     .activity li:last-child { border-bottom: none; }
@@ -51,72 +76,66 @@
     <p class="muted">Track how you use each TopAI tool to market listings, create scripts, and follow up with leads. {{ metrics.overview.activity_30d }} actions in the last 30 days ({{ metrics.overview.activity_7d }} in the last 7).</p>
 
     <section class="overview" aria-label="Overview metrics">
-      <div class="stat">
+      <a class="stat stat-link" href="/app" aria-label="View {{ metrics.overview.listing_generations }} listing generations">
         <div class="label">Listing Generations</div>
         <div class="value">{{ metrics.overview.listing_generations }}</div>
         <div class="sub">{{ metrics.overview.listing_generations * 3 }} content drafts created</div>
-      </div>
-      <div class="stat">
+      </a>
+      <a class="stat stat-link" href="/app#coldcall" aria-label="View {{ metrics.overview.script_generations }} call script runs">
         <div class="label">Call Script Runs</div>
         <div class="value">{{ metrics.overview.script_generations }}</div>
         <div class="sub">Opening, objections, and voicemail</div>
-      </div>
-      <div class="stat">
+      </a>
+      <a class="stat stat-link" href="/app#voice" aria-label="View {{ metrics.overview.ai_calls }} AI calls">
         <div class="label">AI Calls</div>
         <div class="value">{{ metrics.overview.ai_calls }}</div>
         <div class="sub">{{ metrics.overview.appointments_requested }} appointment requests</div>
-      </div>
-      <div class="stat">
+      </a>
+      <a class="stat stat-link" href="/app#sms" aria-label="View {{ metrics.overview.sms_messages }} AI SMS messages">
         <div class="label">AI SMS</div>
         <div class="value">{{ metrics.overview.sms_messages }}</div>
         <div class="sub">Generated, drafted, and sent texts</div>
-      </div>
+      </a>
     </section>
 
     <section class="card" style="margin-bottom:18px;">
       <h2>Pipeline</h2>
-      <p class="muted" style="margin-bottom:12px;">Lead workflow metrics. Claude suggestions never auto-apply — approve them from AI SMS or the lead record.</p>
+      <p class="muted" style="margin-bottom:12px;">Lead workflow metrics. Claude suggestions never auto-apply — approve them from AI SMS or the lead record. Click any card to open the matching filtered list.</p>
       {% macro pipeline_metric(label, count, href, aria) %}
-        {% if count and count > 0 %}
         <a class="metric metric-link" href="{{ href }}" aria-label="{{ aria }}">
           <div class="k">{{ label }}</div>
           <div class="v">{{ count }}</div>
+          <div class="view-hint">View →</div>
         </a>
-        {% else %}
-        <div class="metric metric-zero" aria-label="{{ label }}: 0">
-          <div class="k">{{ label }}</div>
-          <div class="v">0</div>
-        </div>
-        {% endif %}
       {% endmacro %}
 
       <div class="metrics-row">
-        {{ pipeline_metric('Active leads', pipeline.active_leads, '/crm/leads?scope=active', 'View ' ~ pipeline.active_leads ~ ' active leads') }}
-        {{ pipeline_metric('Needs attention', pipeline.needs_attention, '/crm/needs-attention?status=open' ~ (date_qs|default('')), 'View ' ~ pipeline.needs_attention ~ ' needs attention items') }}
+        {{ pipeline_metric('Active leads', pipeline.active_leads, '/crm/leads?active=1', 'View ' ~ pipeline.active_leads ~ ' active leads') }}
+        {{ pipeline_metric('Needs attention', pipeline.needs_attention, '/crm/needs-attention?status=open' ~ (date_qs|default('')), 'View ' ~ pipeline.needs_attention ~ ' leads needing attention') }}
         {{ pipeline_metric('Drafts awaiting', pipeline.drafts_awaiting_approval, '/crm/needs-attention?type=draft_reply&status=open', 'View ' ~ pipeline.drafts_awaiting_approval ~ ' drafts awaiting approval') }}
       </div>
       <div class="metrics-row" style="margin-top:10px;">
-        {{ pipeline_metric('Follow-ups due today', pipeline.follow_ups_due_today, '/crm/follow-ups?range=today&status=open' ~ (date_qs|default('')), 'View ' ~ pipeline.follow_ups_due_today ~ ' follow-ups due today') }}
-        {{ pipeline_metric('Overdue follow-ups', pipeline.overdue_follow_ups, '/crm/follow-ups?range=overdue&status=open' ~ (date_qs|default('')), 'View ' ~ pipeline.overdue_follow_ups ~ ' overdue follow-ups') }}
-        {{ pipeline_metric('Follow-ups this week', pipeline.follow_ups_due_this_week, '/crm/follow-ups?range=this_week&status=open' ~ (date_qs|default('')), 'View ' ~ pipeline.follow_ups_due_this_week ~ ' follow-ups due this week') }}
+        {{ pipeline_metric('Follow-ups due today', pipeline.follow_ups_due_today, '/crm/follow-ups?due=today' ~ (date_qs|default('')), 'View ' ~ pipeline.follow_ups_due_today ~ ' follow-ups due today') }}
+        {{ pipeline_metric('Overdue follow-ups', pipeline.overdue_follow_ups, '/crm/follow-ups?due=overdue' ~ (date_qs|default('')), 'View ' ~ pipeline.overdue_follow_ups ~ ' overdue follow-ups') }}
+        {{ pipeline_metric('Follow-ups this week', pipeline.follow_ups_due_this_week, '/crm/follow-ups?due=this-week' ~ (date_qs|default('')), 'View ' ~ pipeline.follow_ups_due_this_week ~ ' follow-ups due this week') }}
       </div>
       <div class="metrics-row" style="margin-top:10px;">
-        {{ pipeline_metric('Tasks today', pipeline.tasks_due_today, '/crm/tasks?range=today&status=open' ~ (date_qs|default('')), 'View ' ~ pipeline.tasks_due_today ~ ' tasks due today') }}
-        {{ pipeline_metric('Appts today', pipeline.appointments_today, '/crm/calendar?event_type=appointment&range=today' ~ (date_qs|default('')), 'View ' ~ pipeline.appointments_today ~ ' appointments today') }}
+        {{ pipeline_metric('Tasks today', pipeline.tasks_due_today, '/crm/tasks?due=today' ~ (date_qs|default('')), 'View ' ~ pipeline.tasks_due_today ~ ' tasks due today') }}
+        {{ pipeline_metric('Appts today', pipeline.appointments_today, '/crm/calendar?date=today&event_type=appointment' ~ (date_qs|default('')), 'View ' ~ pipeline.appointments_today ~ ' appointments today') }}
       </div>
       <div class="metrics-row" style="margin-top:10px;">
-        {{ pipeline_metric('External leads', pipeline.external_leads|default(0), '/crm/leads?external=1', 'View external leads') }}
-        {{ pipeline_metric('Unverified consent', pipeline.unverified_consent|default(0), '/crm/leads?sms_consent=unverified', 'View unverified consent leads') }}
-        {{ pipeline_metric('Consent review', pipeline.consent_review_required|default(0), '/crm/leads?consent_review=1', 'View consent review required') }}
+        {{ pipeline_metric('External leads', pipeline.external_leads|default(0), '/crm/leads?origin=external', 'View ' ~ (pipeline.external_leads|default(0)) ~ ' external leads') }}
+        {{ pipeline_metric('Unverified consent', pipeline.unverified_consent|default(0), '/crm/leads?consent=unverified', 'View ' ~ (pipeline.unverified_consent|default(0)) ~ ' leads with unverified consent') }}
+        {{ pipeline_metric('Consent review', pipeline.consent_review_required|default(0), '/crm/leads?consent=review', 'View ' ~ (pipeline.consent_review_required|default(0)) ~ ' leads needing consent review') }}
       </div>
       <div class="metrics-row" style="margin-top:10px;">
-        {{ pipeline_metric('SMS blocked', pipeline.sms_blocked|default(0), '/crm/leads?blocked=1', 'View SMS blocked leads') }}
-        {{ pipeline_metric('Verified SMS', pipeline.verified_consent|default(0), '/crm/leads?sms_consent=verified&blocked=0', 'View verified SMS leads') }}
-        {{ pipeline_metric('Opted out', pipeline.opted_out_consent|default(0), '/crm/leads?sms_consent=opted_out', 'View opted out leads') }}
+        {{ pipeline_metric('SMS blocked', pipeline.sms_blocked|default(0), '/crm/leads?sms_blocked=1', 'View ' ~ (pipeline.sms_blocked|default(0)) ~ ' SMS blocked leads') }}
+        {{ pipeline_metric('Verified SMS', pipeline.verified_consent|default(0), '/crm/leads?consent=verified&sms_blocked=0', 'View ' ~ (pipeline.verified_consent|default(0)) ~ ' verified SMS leads') }}
+        {{ pipeline_metric('Opted out', pipeline.opted_out_consent|default(0), '/crm/leads?consent=opted_out', 'View ' ~ (pipeline.opted_out_consent|default(0)) ~ ' opted out leads') }}
       </div>
       <div class="metrics-row" style="margin-top:10px;">
         {% for stage in pipeline.pipeline_stages %}
-        {{ pipeline_metric(stage.label, stage.count, '/crm/leads?stage=' ~ stage.id, 'View ' ~ stage.count ~ ' leads in ' ~ stage.label) }}
+        {{ pipeline_metric(stage.label, stage.count, '/crm/leads?status=' ~ stage.id, 'View ' ~ stage.count ~ ' leads in ' ~ stage.label) }}
         {% endfor %}
       </div>
       <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
