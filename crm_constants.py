@@ -76,6 +76,12 @@ COMMON_TIMEZONES = [
 ]
 
 TASK_STATUSES = ["open", "in_progress", "completed", "cancelled"]
+# Statuses treated as "open"/active work in the Tasks views.
+TASK_OPEN_STATUSES = ["open", "in_progress"]
+# Allowed status filters on the Tasks page (validated against URL input).
+TASK_STATUS_FILTERS = ["open", "completed", "all"]
+# Allowed completion-date range presets for the Completed tasks view.
+TASK_COMPLETION_RANGES = ["today", "last_7_days", "last_30_days", "custom", "all"]
 TASK_TYPES = [
     "call",
     "send_sms",

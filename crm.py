@@ -19,6 +19,8 @@ from crm_constants import (
     NEEDS_ATTENTION_REASONS,
     PIPELINE_STAGES,
     PRIORITIES,
+    TASK_COMPLETION_RANGES,
+    TASK_STATUS_FILTERS,
     TASK_TYPES,
     cancel_reason_label,
     outcome_label,
@@ -361,21 +363,70 @@ def crm_tasks_page():
         return redirect(url_for("subscriber_app"))
     local_date = (request.args.get("local_date") or "").strip()[:10] or None
     range_key = (request.args.get("range") or "").strip().lower() or None
-    status = (request.args.get("status") or "").strip().lower() or None
-    overdue = crm_db.list_tasks(user["id"], "overdue", local_date=local_date)
-    today = crm_db.list_tasks(user["id"], "today", local_date=local_date)
-    upcoming = crm_db.list_tasks(user["id"], "upcoming", local_date=local_date)
-    if status == "open":
-        open_set = {"open", "in_progress"}
-        overdue = [t for t in overdue if t.get("status") in open_set]
-        today = [t for t in today if t.get("status") in open_set]
-        upcoming = [t for t in upcoming if t.get("status") in open_set]
-    if range_key == "today":
-        overdue, upcoming = [], []
-    elif range_key == "overdue":
-        today, upcoming = [], []
-    elif range_key == "upcoming":
-        overdue, today = [], []
+
+    # Validate the status filter against a fixed allow-list (never trust the URL).
+    status = (request.args.get("status") or "").strip().lower()
+    if status not in TASK_STATUS_FILTERS:
+        status = "open"
+
+    # Completed-task filters (only meaningful for completed/all views).
+    completion = (request.args.get("completion") or "").strip().lower()
+    if completion not in TASK_COMPLETION_RANGES:
+        completion = "all"
+    completion_start = (request.args.get("completion_start") or "").strip()[:10] or None
+    completion_end = (request.args.get("completion_end") or "").strip()[:10] or None
+    filter_lead_id = (request.args.get("lead_id") or "").strip() or None
+    filter_owner_id = (request.args.get("owner_id") or "").strip() or None
+    filter_priority = (request.args.get("priority") or "").strip().lower()
+    if filter_priority not in PRIORITIES:
+        filter_priority = ""
+    filter_task_type = (request.args.get("task_type") or "").strip().lower()
+    if filter_task_type not in TASK_TYPES:
+        filter_task_type = ""
+
+    show_open = status in ("open", "all")
+    show_completed = status in ("completed", "all")
+
+    overdue = today = upcoming = []
+    open_count = 0
+    if show_open:
+        open_set = set(("open", "in_progress"))
+        overdue = [
+            t for t in crm_db.list_tasks(user["id"], "overdue", local_date=local_date)
+            if t.get("status") in open_set
+        ]
+        today = [
+            t for t in crm_db.list_tasks(user["id"], "today", local_date=local_date)
+            if t.get("status") in open_set
+        ]
+        upcoming = [
+            t for t in crm_db.list_tasks(user["id"], "upcoming", local_date=local_date)
+            if t.get("status") in open_set
+        ]
+        if range_key == "today":
+            overdue, upcoming = [], []
+        elif range_key == "overdue":
+            today, upcoming = [], []
+        elif range_key == "upcoming":
+            overdue, today = [], []
+        open_count = len(overdue) + len(today) + len(upcoming)
+
+    completed = []
+    completed_count = 0
+    if show_completed:
+        completed = crm_db.list_completed_tasks(
+            user["id"],
+            completion_range=completion,
+            local_date=local_date,
+            start_date=completion_start,
+            end_date=completion_end,
+            lead_id=filter_lead_id,
+            owner_id=filter_owner_id,
+            priority=filter_priority or None,
+            task_type=filter_task_type or None,
+        )
+        completed_count = len(completed)
+
     active_filter = None
     if range_key == "today":
         active_filter = "Tasks due today"
@@ -383,18 +434,38 @@ def crm_tasks_page():
         active_filter = "Overdue tasks"
     elif range_key:
         active_filter = f"Range: {range_key}"
+
     return render_template(
         "crm_tasks.html",
         overdue=overdue,
         today=today,
         upcoming=upcoming,
+        completed=completed,
+        show_open=show_open,
+        show_completed=show_completed,
         task_types=TASK_TYPES,
         priorities=PRIORITIES,
+        completion_ranges=TASK_COMPLETION_RANGES,
+        completion_filter=completion,
+        completion_start=completion_start or "",
+        completion_end=completion_end or "",
+        filter_lead_id=filter_lead_id or "",
+        filter_owner_id=filter_owner_id or "",
+        filter_priority=filter_priority,
+        filter_task_type=filter_task_type,
+        completed_lead_options=crm_db.list_completed_task_lead_options(user["id"])
+        if show_completed
+        else [],
+        completed_owner_options=crm_db.list_completed_task_owner_options(user["id"])
+        if show_completed
+        else [],
         local_date=local_date or "",
         range_filter=range_key or "",
-        status_filter=status or "",
+        status_filter=status,
         active_filter=active_filter,
-        result_count=len(overdue) + len(today) + len(upcoming),
+        open_count=open_count,
+        completed_count=completed_count,
+        result_count=open_count + completed_count,
         **_nav_context(user, "tasks"),
     )
 
@@ -1034,7 +1105,17 @@ def api_task_detail(task_id):
 @auth.subscription_required
 def api_complete_task(task_id):
     user = auth.get_current_user()
-    task, error = crm_db.complete_task(user["id"], task_id)
+    task, error = crm_db.complete_task(user["id"], task_id, actor_user_id=user["id"])
+    if error:
+        return jsonify({"error": error}), 404
+    return jsonify({"ok": True, "task": task})
+
+
+@crm_bp.route("/api/crm/tasks/<int:task_id>/reopen", methods=["POST"])
+@auth.subscription_required
+def api_reopen_task(task_id):
+    user = auth.get_current_user()
+    task, error = crm_db.reopen_task(user["id"], task_id, actor_user_id=user["id"])
     if error:
         return jsonify({"error": error}), 404
     return jsonify({"ok": True, "task": task})

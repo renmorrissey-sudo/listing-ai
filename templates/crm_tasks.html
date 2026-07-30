@@ -6,6 +6,30 @@
   <title>Tasks - {{ product_name }}</title>
   <meta name="robots" content="noindex" />
   {% include 'crm_base_styles.html' %}
+  <style>
+    .status-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 18px; }
+    .status-tabs a {
+      padding: 8px 16px; border-radius: 999px; font-size: 13px; font-weight: 700;
+      text-decoration: none; color: #445; background: #eef2f7; border: 1.5px solid transparent;
+    }
+    .status-tabs a:hover { background: #e3ebf5; }
+    .status-tabs a.active { background: #4f8ef7; color: #fff; }
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .completed-title { text-decoration: line-through; color: #667; }
+    .completed-check {
+      display: inline-block; width: 18px; height: 18px; line-height: 18px; text-align: center;
+      border-radius: 999px; background: #dcfce7; color: #15803d; font-size: 12px; font-weight: 800;
+      margin-right: 6px; vertical-align: middle;
+    }
+    tr.completed-row { background: #fbfdff; }
+    tr.completed-row td { color: #667; }
+    .completed-when { color: #15803d; font-weight: 700; white-space: nowrap; }
+    .completed-by { color: #778; font-size: 12px; }
+    .task-notes { color: #556; font-size: 12px; max-width: 280px; white-space: pre-wrap; }
+    .filters-completed { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin: 4px 0 8px; }
+    .filters-completed .field { display: flex; flex-direction: column; gap: 4px; }
+    .filters-completed label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: #667; font-weight: 700; }
+  </style>
 </head>
 <body>
   {% set page_tagline = 'CRM tasks' %}
@@ -13,7 +37,15 @@
   {% include 'subscriber_tool_nav.html' %}
   <main>
     <h1>Tasks</h1>
-    <p class="muted">Overdue, due today, and upcoming follow-through work.</p>
+    <p class="muted">Overdue, due today, and upcoming follow-through work — plus a searchable record of completed tasks.</p>
+
+    {% set base_qs = ('&local_date=' ~ local_date) if local_date else '' %}
+    <nav class="status-tabs" aria-label="Task status filter">
+      <a href="/crm/tasks?status=open{{ base_qs }}" class="{{ 'active' if status_filter == 'open' else '' }}" {% if status_filter == 'open' %}aria-current="page"{% endif %}>Open</a>
+      <a href="/crm/tasks?status=completed{{ base_qs }}" class="{{ 'active' if status_filter == 'completed' else '' }}" {% if status_filter == 'completed' %}aria-current="page"{% endif %}>Completed tasks</a>
+      <a href="/crm/tasks?status=all{{ base_qs }}" class="{{ 'active' if status_filter == 'all' else '' }}" {% if status_filter == 'all' %}aria-current="page"{% endif %}>All</a>
+    </nav>
+
     {% if active_filter %}
     <div class="filter-banner" role="status">
       <div>
@@ -21,11 +53,12 @@
         {% if status_filter %}<span class="filter-count"> · status={{ status_filter }}</span>{% endif %}
         <span class="filter-count"> · {{ result_count }} result{% if result_count != 1 %}s{% endif %}</span>
       </div>
-      <a href="/crm/tasks">Clear filters</a>
+      <a href="/crm/tasks?status={{ status_filter }}{{ base_qs }}">Clear filters</a>
     </div>
     {% endif %}
     <div id="flash" class="flash"></div>
 
+    {% if show_open %}
     <div class="card" id="task-form-card">
       <h2 id="task-form-title">Create task</h2>
       <input type="hidden" id="task-edit-id" value="" />
@@ -43,11 +76,13 @@
       </div>
       <p class="muted" id="task-edit-hint" style="display:none;margin:10px 0 0;">Editing an existing task. Save to apply changes.</p>
     </div>
+    {% endif %}
 
     {% macro task_table(title, items, empty) %}
     <div class="card">
       <h2>{{ title }}</h2>
       {% if items %}
+      <div class="table-scroll">
       <table>
         <thead><tr><th>Task</th><th>Lead</th><th>Due</th><th>Priority</th><th></th></tr></thead>
         <tbody>
@@ -76,15 +111,130 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
       {% else %}
       <p class="empty">{{ empty }}</p>
       {% endif %}
     </div>
     {% endmacro %}
 
+    {% if show_open %}
     {{ task_table('Overdue', overdue, 'No overdue tasks.') }}
     {{ task_table('Due today', today, 'Nothing due today.') }}
     {{ task_table('Upcoming', upcoming, 'No upcoming tasks.') }}
+    {% endif %}
+
+    {% if show_completed %}
+    <div class="card" id="completed-tasks-card">
+      <h2>Completed tasks</h2>
+      <p class="muted">Completed work is retained here. Reopen a task to move it back to the active list.</p>
+
+      <form method="get" action="/crm/tasks" class="filters-completed" id="completed-filter-form">
+        <input type="hidden" name="status" value="{{ status_filter if status_filter in ['completed','all'] else 'completed' }}" />
+        {% if local_date %}<input type="hidden" name="local_date" value="{{ local_date }}" />{% endif %}
+        <div class="field">
+          <label for="f-completion">Completed</label>
+          <select id="f-completion" name="completion" onchange="toggleCustomRange()">
+            <option value="today" {{ 'selected' if completion_filter == 'today' else '' }}>Today</option>
+            <option value="last_7_days" {{ 'selected' if completion_filter == 'last_7_days' else '' }}>Last 7 days</option>
+            <option value="last_30_days" {{ 'selected' if completion_filter == 'last_30_days' else '' }}>Last 30 days</option>
+            <option value="custom" {{ 'selected' if completion_filter == 'custom' else '' }}>Custom range</option>
+            <option value="all" {{ 'selected' if completion_filter == 'all' or not completion_filter else '' }}>All time</option>
+          </select>
+        </div>
+        <div class="field" id="f-custom-start" style="{{ '' if completion_filter == 'custom' else 'display:none;' }}">
+          <label for="f-start">From</label>
+          <input type="date" id="f-start" name="completion_start" value="{{ completion_start }}" />
+        </div>
+        <div class="field" id="f-custom-end" style="{{ '' if completion_filter == 'custom' else 'display:none;' }}">
+          <label for="f-end">To</label>
+          <input type="date" id="f-end" name="completion_end" value="{{ completion_end }}" />
+        </div>
+        {% if completed_lead_options %}
+        <div class="field">
+          <label for="f-lead">Lead</label>
+          <select id="f-lead" name="lead_id">
+            <option value="">All leads</option>
+            {% for opt in completed_lead_options %}
+            <option value="{{ opt.lead_id }}" {{ 'selected' if filter_lead_id == (opt.lead_id|string) else '' }}>{{ opt.lead_name or ('Lead #' ~ opt.lead_id) }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
+        {% if completed_owner_options %}
+        <div class="field">
+          <label for="f-owner">Owner</label>
+          <select id="f-owner" name="owner_id">
+            <option value="">All owners</option>
+            {% for opt in completed_owner_options %}
+            <option value="{{ opt.owner_id }}" {{ 'selected' if filter_owner_id == (opt.owner_id|string) else '' }}>{{ opt.owner_email or ('User #' ~ opt.owner_id) }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
+        <div class="field">
+          <label for="f-priority">Priority</label>
+          <select id="f-priority" name="priority">
+            <option value="">All priorities</option>
+            {% for p in priorities %}<option value="{{ p }}" {{ 'selected' if filter_priority == p else '' }}>{{ p }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-type">Type</label>
+          <select id="f-type" name="task_type">
+            <option value="">All types</option>
+            {% for t in task_types %}<option value="{{ t }}" {{ 'selected' if filter_task_type == t else '' }}>{{ t.replace('_',' ') }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <div class="row">
+            <button class="btn" type="submit">Apply filters</button>
+            <a class="btn secondary" href="/crm/tasks?status={{ status_filter }}{{ base_qs }}">Reset</a>
+          </div>
+        </div>
+      </form>
+
+      <p class="muted" id="completed-count-line">{{ completed_count }} completed task{% if completed_count != 1 %}s{% endif %}.</p>
+
+      {% if completed %}
+      <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Task</th><th>Lead</th><th>Due</th><th>Completed</th><th>Priority</th><th>Notes</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for task in completed %}
+          <tr class="completed-row">
+            <td>
+              <span class="completed-check" title="Completed">&#10003;</span>
+              <strong class="completed-title">{{ task.title }}</strong>
+              <div class="muted">{{ task.task_type.replace('_',' ') }}</div>
+            </td>
+            <td>{% if task.lead_id %}<a href="/crm/leads/{{ task.lead_id }}">{{ task.lead_name or 'Lead' }}</a>{% else %}—{% endif %}</td>
+            <td class="muted">{{ (task.due_at or '—')[:16] }}</td>
+            <td>
+              <span class="completed-when">{{ (task.completed_at or '—')[:16].replace('T',' ') }}</span>
+              {% if task.completed_by_email %}<div class="completed-by">by {{ task.completed_by_email }}</div>{% endif %}
+            </td>
+            <td><span class="pill">{{ task.priority }}</span></td>
+            <td><div class="task-notes">{{ task.description or '—' }}</div></td>
+            <td class="row">
+              {% if task.lead_id %}<a class="btn secondary" href="/crm/leads/{{ task.lead_id }}">View</a>{% endif %}
+              <button class="btn" type="button" onclick="reopenTask({{ task.id }})">Reopen</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% else %}
+      <p class="empty">No completed tasks match these filters.</p>
+      {% endif %}
+    </div>
+    {% endif %}
   </main>
   <script>
     (function ensureLocalDate() {
@@ -93,6 +243,8 @@
       const d = new Date();
       const pad = (n) => String(n).padStart(2, '0');
       params.set('local_date', `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
+      // Use replace() so switching status tabs does not add spurious history entries;
+      // real filter navigations remain in history so browser Back restores them.
       window.location.replace(`${window.location.pathname}?${params.toString()}`);
     })();
 
@@ -109,6 +261,16 @@
       if (Number.isNaN(d.getTime())) return '';
       const pad = (n) => String(n).padStart(2, '0');
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    function toggleCustomRange() {
+      const sel = document.getElementById('f-completion');
+      if (!sel) return;
+      const isCustom = sel.value === 'custom';
+      const start = document.getElementById('f-custom-start');
+      const end = document.getElementById('f-custom-end');
+      if (start) start.style.display = isCustom ? '' : 'none';
+      if (end) end.style.display = isCustom ? '' : 'none';
     }
 
     function resetTaskForm() {
@@ -171,6 +333,15 @@
     }
     async function cancelTask(id) {
       const res = await fetch(`/api/crm/tasks/${id}/cancel`, {method: 'POST'});
+      if (!res.ok) {
+        const data = await res.json();
+        return showFlash(data.error || 'Failed', true);
+      }
+      location.reload();
+    }
+    async function reopenTask(id) {
+      if (!window.confirm('Reopen this task and move it back to the active list?')) return;
+      const res = await fetch(`/api/crm/tasks/${id}/reopen`, {method: 'POST'});
       if (!res.ok) {
         const data = await res.json();
         return showFlash(data.error || 'Failed', true);

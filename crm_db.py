@@ -17,6 +17,8 @@ from crm_constants import (
     PIPELINE_STAGES,
     PRIORITIES,
     PROTECTED_RESOLVE_REASONS,
+    TASK_COMPLETION_RANGES,
+    TASK_OPEN_STATUSES,
     TASK_STATUSES,
     TASK_TYPES,
     build_appointment_outcome_suggestion,
@@ -1335,9 +1337,11 @@ def get_task(user_id, task_id):
     with get_db() as conn:
         row = conn.execute(
             """
-            SELECT t.*, l.name AS lead_name, l.phone_number
+            SELECT t.*, l.name AS lead_name, l.phone_number,
+                   cu.email AS completed_by_email
             FROM tasks t
             LEFT JOIN leads l ON l.id = t.lead_id
+            LEFT JOIN users cu ON cu.id = t.completed_by
             WHERE t.id = ? AND t.user_id = ?
             """,
             (task_id, user_id),
@@ -1408,8 +1412,9 @@ def update_task(user_id, task_id, data):
     return get_task(user_id, task_id), None
 
 
-def complete_task(user_id, task_id):
+def complete_task(user_id, task_id, actor_user_id=None):
     now = _now()
+    actor = actor_user_id or user_id
     with get_db() as conn:
         task = conn.execute(
             "SELECT * FROM tasks WHERE id = ? AND user_id = ?",
@@ -1417,13 +1422,17 @@ def complete_task(user_id, task_id):
         ).fetchone()
         if not task:
             return None, "Task not found."
+        # Idempotent: repeated clicks must not overwrite the original completion
+        # metadata or emit duplicate activity entries.
+        if task["status"] == "completed":
+            return get_task(user_id, task_id), None
         conn.execute(
             """
             UPDATE tasks
-            SET status = 'completed', completed_at = ?, updated_at = ?
+            SET status = 'completed', completed_at = ?, completed_by = ?, updated_at = ?
             WHERE id = ? AND user_id = ?
             """,
-            (now, now, task_id, user_id),
+            (now, actor, now, task_id, user_id),
         )
     if task["lead_id"]:
         add_lead_activity(
@@ -1431,10 +1440,207 @@ def complete_task(user_id, task_id):
             user_id,
             "task_completed",
             f"Task completed: {task['title']}",
-            {"task_id": task_id},
+            {"task_id": task_id, "completed_at": now, "completed_by": actor},
+            actor_user_id=actor,
         )
     resolve_needs_attention_for_source(user_id, "task", task_id, "Task completed")
-    return dict(task), None
+    return get_task(user_id, task_id), None
+
+
+def reopen_task(user_id, task_id, actor_user_id=None):
+    """Return a completed task to the open queue while preserving audit history.
+
+    Clears completed_at/completed_by (so the task is genuinely active again) but
+    records a task_reopened activity capturing the prior completion for an
+    auditable history. Idempotent: reopening a task that is not completed is a
+    no-op and emits no duplicate activity.
+    """
+    now = _now()
+    actor = actor_user_id or user_id
+    with get_db() as conn:
+        task = conn.execute(
+            "SELECT * FROM tasks WHERE id = ? AND user_id = ?",
+            (task_id, user_id),
+        ).fetchone()
+        if not task:
+            return None, "Task not found."
+        if task["status"] != "completed":
+            return get_task(user_id, task_id), None
+        prev_completed_at = task["completed_at"]
+        prev_completed_by = task["completed_by"] if "completed_by" in task.keys() else None
+        conn.execute(
+            """
+            UPDATE tasks
+            SET status = 'open', completed_at = NULL, completed_by = NULL, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (now, task_id, user_id),
+        )
+    if task["lead_id"]:
+        add_lead_activity(
+            task["lead_id"],
+            user_id,
+            "task_reopened",
+            f"Task reopened: {task['title']}",
+            {
+                "task_id": task_id,
+                "reopened_at": now,
+                "reopened_by": actor,
+                "previous_completed_at": prev_completed_at,
+                "previous_completed_by": prev_completed_by,
+            },
+            actor_user_id=actor,
+        )
+    return get_task(user_id, task_id), None
+
+
+def _completion_date_bounds(range_key=None, local_date=None, start_date=None, end_date=None):
+    """Return (start_day, end_day) inclusive YYYY-MM-DD bounds for a completion range.
+
+    Any missing/invalid bound is returned as None (no constraint on that side).
+    All values are validated to the YYYY-MM-DD shape so they are never used to
+    build raw/unsafe SQL — they are always passed as bound parameters.
+    """
+    key = (range_key or "all").strip().lower()
+    if key not in TASK_COMPLETION_RANGES:
+        key = "all"
+    day = _calendar_day(local_date)
+    today = datetime.strptime(day, "%Y-%m-%d").date()
+
+    def _valid(value):
+        value = str(value or "").strip()[:10]
+        return value if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) else None
+
+    if key == "today":
+        return day, day
+    if key == "last_7_days":
+        return (today - timedelta(days=6)).strftime("%Y-%m-%d"), day
+    if key == "last_30_days":
+        return (today - timedelta(days=29)).strftime("%Y-%m-%d"), day
+    if key == "custom":
+        return _valid(start_date), _valid(end_date)
+    return None, None
+
+
+def list_completed_tasks(
+    user_id,
+    completion_range="all",
+    local_date=None,
+    start_date=None,
+    end_date=None,
+    lead_id=None,
+    owner_id=None,
+    priority=None,
+    task_type=None,
+    limit=500,
+):
+    """List completed tasks for a user, newest completion first, with safe filters.
+
+    All filters are applied via bound parameters and validated against known
+    allow-lists; URL values are never interpolated into SQL.
+    """
+    start_day, end_day = _completion_date_bounds(
+        completion_range, local_date=local_date, start_date=start_date, end_date=end_date
+    )
+    clauses = ["t.user_id = ?", "t.status = 'completed'"]
+    params = [user_id]
+    if start_day:
+        clauses.append("substr(t.completed_at, 1, 10) >= ?")
+        params.append(start_day)
+    if end_day:
+        clauses.append("substr(t.completed_at, 1, 10) <= ?")
+        params.append(end_day)
+    if lead_id not in (None, "", 0, "0"):
+        try:
+            params.append(int(lead_id))
+            clauses.append("t.lead_id = ?")
+        except (TypeError, ValueError):
+            pass
+    if owner_id not in (None, "", 0, "0"):
+        try:
+            params.append(int(owner_id))
+            clauses.append("t.assigned_user_id = ?")
+        except (TypeError, ValueError):
+            pass
+    if priority in PRIORITIES:
+        clauses.append("t.priority = ?")
+        params.append(priority)
+    if task_type in TASK_TYPES:
+        clauses.append("t.task_type = ?")
+        params.append(task_type)
+    try:
+        limit = max(1, min(int(limit), 2000))
+    except (TypeError, ValueError):
+        limit = 500
+    params.append(limit)
+    with get_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT t.*, l.name AS lead_name, l.phone_number,
+                   cu.email AS completed_by_email
+            FROM tasks t
+            LEFT JOIN leads l ON l.id = t.lead_id
+            LEFT JOIN users cu ON cu.id = t.completed_by
+            WHERE {' AND '.join(clauses)}
+            ORDER BY COALESCE(t.completed_at, t.updated_at) DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def count_tasks_completed(user_id, range_key="today", local_date=None):
+    """Count completed tasks whose completion date falls in the given range."""
+    start_day, end_day = _completion_date_bounds(range_key, local_date=local_date)
+    clauses = ["user_id = ?", "status = 'completed'"]
+    params = [user_id]
+    if start_day:
+        clauses.append("substr(completed_at, 1, 10) >= ?")
+        params.append(start_day)
+    if end_day:
+        clauses.append("substr(completed_at, 1, 10) <= ?")
+        params.append(end_day)
+    with get_db() as conn:
+        return conn.execute(
+            f"SELECT COUNT(*) AS count FROM tasks WHERE {' AND '.join(clauses)}",
+            tuple(params),
+        ).fetchone()["count"]
+
+
+def list_completed_task_lead_options(user_id, limit=200):
+    """Distinct leads that have completed tasks, for the completion filter dropdown."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT t.lead_id, l.name AS lead_name
+            FROM tasks t
+            JOIN leads l ON l.id = t.lead_id
+            WHERE t.user_id = ? AND t.status = 'completed' AND t.lead_id IS NOT NULL
+            ORDER BY l.name ASC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_completed_task_owner_options(user_id, limit=50):
+    """Distinct owners (assigned users) that have completed tasks, for filtering."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT t.assigned_user_id AS owner_id, u.email AS owner_email
+            FROM tasks t
+            LEFT JOIN users u ON u.id = t.assigned_user_id
+            WHERE t.user_id = ? AND t.status = 'completed'
+              AND t.assigned_user_id IS NOT NULL
+            ORDER BY u.email ASC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def cancel_task(user_id, task_id):
@@ -2397,6 +2603,10 @@ def get_pipeline_metrics(user_id, since_iso=None, local_date=None, tz_offset_min
         "follow_ups_due_today": fu_counts["follow_ups_due_today"],
         "follow_ups_due_this_week": fu_counts["follow_ups_due_this_week"],
         "tasks_due_today": count_tasks_due_today(user_id, local_date=day),
+        "tasks_completed_today": count_tasks_completed(user_id, "today", local_date=day),
+        "tasks_completed_this_week": count_tasks_completed(
+            user_id, "last_7_days", local_date=day
+        ),
         "appointments_today": count_appointments_today(user_id, local_date=day),
         "unreviewed_inbound": unreviewed,
         "drafts_awaiting_approval": count_pending_draft_insights(user_id),

@@ -102,6 +102,8 @@
       </div>
       <div class="metrics-row" style="margin-top:10px;">
         {{ pipeline_metric('Tasks today', pipeline.tasks_due_today, '/crm/tasks?range=today&status=open' ~ (date_qs|default('')), 'View ' ~ pipeline.tasks_due_today ~ ' tasks due today') }}
+        {{ pipeline_metric('Completed today', pipeline.tasks_completed_today|default(0), '/crm/tasks?status=completed&completion=today' ~ (date_qs|default('')), 'View ' ~ (pipeline.tasks_completed_today|default(0)) ~ ' tasks completed today') }}
+        {{ pipeline_metric('Completed this week', pipeline.tasks_completed_this_week|default(0), '/crm/tasks?status=completed&completion=last_7_days' ~ (date_qs|default('')), 'View ' ~ (pipeline.tasks_completed_this_week|default(0)) ~ ' tasks completed this week') }}
         {{ pipeline_metric('Appts today', pipeline.appointments_today, '/crm/calendar?event_type=appointment&range=today' ~ (date_qs|default('')), 'View ' ~ pipeline.appointments_today ~ ' appointments today') }}
       </div>
       <div class="metrics-row" style="margin-top:10px;">
