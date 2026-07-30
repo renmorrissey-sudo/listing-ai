@@ -25,7 +25,16 @@ from crm_constants import (
     outcome_label,
     status_label,
 )
-from db import get_db, merge_lead_call_outcome_notes
+from crm_time import (
+    DEFAULT_TIMEZONE,
+    classify_open_follow_up,
+    compute_follow_up_windows,
+    is_open_status,
+    local_calendar_date,
+    matches_range,
+    parse_iso_dt,
+)
+from db import get_db, get_user_timezone, merge_lead_call_outcome_notes
 
 logger = logging.getLogger(__name__)
 
@@ -330,25 +339,44 @@ def _normalize_due_at_key(due_at):
 
 
 def _parse_iso_dt(value):
-    if not value:
-        return None
-    text = str(value).replace("Z", "+00:00")
-    try:
-        dt = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
+    """Parse ISO datetime; prefers shared crm_time parser (aware UTC)."""
+    return parse_iso_dt(value)
 
 
-def _local_date_for_due(due_at, tz_offset_minutes=None, local_date=None):
-    """Return YYYY-MM-DD in the agent's local timezone when offset is provided."""
+def _follow_up_windows(
+    user_id=None,
+    *,
+    timezone_name=None,
+    now=None,
+    local_date=None,
+    tz_offset_minutes=None,
+):
+    """Build shared classification windows from the account IANA timezone.
+
+    Browser local_date / tz_offset_minutes are ignored for bucketing — the
+    authenticated account timezone is the single source of truth. Optional
+    `now` supports fixed-clock tests.
+    """
+    tz_name = timezone_name
+    if not tz_name and user_id is not None:
+        try:
+            tz_name = get_user_timezone(user_id)
+        except Exception:
+            tz_name = DEFAULT_TIMEZONE
+    return compute_follow_up_windows(tz_name or DEFAULT_TIMEZONE, now=now)
+
+
+def _local_date_for_due(
+    due_at, tz_offset_minutes=None, local_date=None, timezone_name=None
+):
+    """Return YYYY-MM-DD in the account timezone (preferred) or legacy offset."""
+    if timezone_name:
+        return local_calendar_date(due_at, timezone_name)
     dt = _parse_iso_dt(due_at)
     if dt is None:
         return str(due_at or "")[:10]
     if tz_offset_minutes is None:
-        # Fall back to UTC calendar day (or caller-provided local_date context).
+        # Legacy fallback: UTC calendar day. Prefer passing timezone_name.
         return dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
     try:
         offset = int(tz_offset_minutes)
@@ -687,8 +715,27 @@ def list_lead_follow_ups(user_id, lead_id, include_completed=True, limit=100):
         return [_row_to_follow_up(r) for r in rows]
 
 
-def group_follow_ups_for_lead(follow_ups, local_date=None, tz_offset_minutes=None):
-    day = _calendar_day(local_date)
+def group_follow_ups_for_lead(
+    follow_ups,
+    local_date=None,
+    tz_offset_minutes=None,
+    *,
+    timezone_name=None,
+    now=None,
+    windows=None,
+    user_id=None,
+):
+    """Group follow-ups into overdue / today / upcoming / completed / cancelled.
+
+    Uses the shared account-timezone windows so sections match summary cards.
+    """
+    windows = windows or _follow_up_windows(
+        user_id,
+        timezone_name=timezone_name,
+        now=now,
+        local_date=local_date,
+        tz_offset_minutes=tz_offset_minutes,
+    )
     groups = {
         "overdue": [],
         "today": [],
@@ -701,17 +748,15 @@ def group_follow_ups_for_lead(follow_ups, local_date=None, tz_offset_minutes=Non
         if status == "cancelled":
             groups["cancelled"].append(item)
             continue
-        if status != "pending":
+        if not is_open_status(status):
             groups["completed"].append(item)
             continue
-        due_day = _local_date_for_due(
-            item.get("due_at"), tz_offset_minutes=tz_offset_minutes, local_date=day
-        )
-        if due_day < day:
+        bucket = classify_open_follow_up(item.get("due_at"), windows)
+        if bucket == "overdue":
             groups["overdue"].append(item)
-        elif due_day == day:
+        elif bucket == "today":
             groups["today"].append(item)
-        else:
+        elif bucket == "upcoming":
             groups["upcoming"].append(item)
     return groups
 
@@ -724,9 +769,19 @@ def list_follow_ups(
     tz_offset_minutes=None,
     start_at=None,
     end_at=None,
+    *,
+    timezone_name=None,
+    now=None,
+    windows=None,
 ):
     """List follow-ups for calendar / agenda views. Always scoped to user_id."""
-    day = _calendar_day(local_date)
+    windows = windows or _follow_up_windows(
+        user_id,
+        timezone_name=timezone_name,
+        now=now,
+        local_date=local_date,
+        tz_offset_minutes=tz_offset_minutes,
+    )
     with get_db() as conn:
         rows = conn.execute(
             _follow_up_select_sql()
@@ -742,59 +797,55 @@ def list_follow_ups(
     if start_at or end_at:
         filtered = []
         for item in items:
-            due = str(item.get("due_at") or "")
-            if start_at and due < str(start_at):
-                continue
-            if end_at and due > str(end_at):
-                continue
+            due = parse_iso_dt(item.get("due_at"))
+            if due is None:
+                due_s = str(item.get("due_at") or "")
+                if start_at and due_s < str(start_at):
+                    continue
+                if end_at and due_s > str(end_at):
+                    continue
+            else:
+                start_dt = parse_iso_dt(start_at) if start_at else None
+                end_dt = parse_iso_dt(end_at) if end_at else None
+                if start_dt and due < start_dt:
+                    continue
+                if end_dt and due > end_dt:
+                    continue
             filtered.append(item)
         items = filtered
 
     if bucket in (None, "", "all", "agenda"):
         return items
     if bucket == "completed":
-        return [i for i in items if i.get("status") != "pending"]
-    if bucket == "overdue":
+        return [i for i in items if not is_open_status(i.get("status"))]
+    if bucket in {"overdue", "today", "upcoming", "week", "this_week", "this-week"}:
+        range_key = "this_week" if bucket in {"week", "this_week", "this-week"} else bucket
         return [
             i
             for i in items
-            if i.get("status") == "pending"
-            and _local_date_for_due(i.get("due_at"), tz_offset_minutes, day) < day
+            if is_open_status(i.get("status"))
+            and matches_range(i.get("due_at"), range_key, windows)
         ]
-    if bucket == "today":
-        return [
-            i
-            for i in items
-            if i.get("status") == "pending"
-            and _local_date_for_due(i.get("due_at"), tz_offset_minutes, day) == day
-        ]
-    if bucket == "upcoming":
-        return [
-            i
-            for i in items
-            if i.get("status") == "pending"
-            and _local_date_for_due(i.get("due_at"), tz_offset_minutes, day) > day
-        ]
-    if bucket == "week":
-        start = datetime.strptime(day, "%Y-%m-%d").date()
-        end = start + timedelta(days=7)
-        out = []
-        for item in items:
-            if item.get("status") != "pending":
-                continue
-            due_day = _local_date_for_due(item.get("due_at"), tz_offset_minutes, day)
-            try:
-                d = datetime.strptime(due_day, "%Y-%m-%d").date()
-            except ValueError:
-                continue
-            if start <= d < end:
-                out.append(item)
-        return out
     return items
 
 
-def follow_up_dashboard_counts(user_id, local_date=None, tz_offset_minutes=None):
+def follow_up_dashboard_counts(
+    user_id,
+    local_date=None,
+    tz_offset_minutes=None,
+    *,
+    timezone_name=None,
+    now=None,
+    windows=None,
+):
     """Counts for dashboard cards — must match list_follow_ups_for_dashboard_range."""
+    windows = windows or _follow_up_windows(
+        user_id,
+        timezone_name=timezone_name,
+        now=now,
+        local_date=local_date,
+        tz_offset_minutes=tz_offset_minutes,
+    )
     return {
         "follow_ups_due_today": len(
             list_follow_ups_for_dashboard_range(
@@ -802,6 +853,9 @@ def follow_up_dashboard_counts(user_id, local_date=None, tz_offset_minutes=None)
                 "today",
                 local_date=local_date,
                 tz_offset_minutes=tz_offset_minutes,
+                timezone_name=timezone_name,
+                now=now,
+                windows=windows,
             )
         ),
         "follow_ups_overdue": len(
@@ -810,6 +864,9 @@ def follow_up_dashboard_counts(user_id, local_date=None, tz_offset_minutes=None)
                 "overdue",
                 local_date=local_date,
                 tz_offset_minutes=tz_offset_minutes,
+                timezone_name=timezone_name,
+                now=now,
+                windows=windows,
             )
         ),
         "follow_ups_due_this_week": len(
@@ -818,6 +875,9 @@ def follow_up_dashboard_counts(user_id, local_date=None, tz_offset_minutes=None)
                 "this_week",
                 local_date=local_date,
                 tz_offset_minutes=tz_offset_minutes,
+                timezone_name=timezone_name,
+                now=now,
+                windows=windows,
             )
         ),
     }
@@ -2275,15 +2335,31 @@ def apply_coach_queue_flags(user_id, lead_id, analysis, insight_id=None):
             upsert_needs_attention(user_id, lead_id, code, priority="high", source_ref_type="insight", source_ref_id=insight_id)
 
 
-def get_pipeline_metrics(user_id, since_iso=None, local_date=None, tz_offset_minutes=None):
+def get_pipeline_metrics(
+    user_id,
+    since_iso=None,
+    local_date=None,
+    tz_offset_minutes=None,
+    *,
+    timezone_name=None,
+    now=None,
+    windows=None,
+):
     """Pipeline card counts. Uses the same helpers as filtered destination lists."""
-    refresh_needs_attention(user_id, local_date=local_date)
-    now = _now()
-    week_end = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
-    month_start = datetime.now(timezone.utc).replace(
+    windows = windows or _follow_up_windows(
+        user_id,
+        timezone_name=timezone_name,
+        now=now,
+        local_date=local_date,
+        tz_offset_minutes=tz_offset_minutes,
+    )
+    day = windows.local_date
+    refresh_needs_attention(user_id, local_date=day)
+    now_iso = _now()
+    week_end = (windows.now_utc + timedelta(days=7)).isoformat()
+    month_start = windows.now_utc.replace(
         day=1, hour=0, minute=0, second=0, microsecond=0
     ).isoformat()
-    day = _calendar_day(local_date)
 
     with get_db() as conn:
         def count(sql, params):
@@ -2304,7 +2380,7 @@ def get_pipeline_metrics(user_id, since_iso=None, local_date=None, tz_offset_min
         )
         appts_week = count(
             "SELECT COUNT(*) AS count FROM appointments WHERE user_id = ? AND start_at >= ? AND start_at <= ?",
-            (user_id, now, week_end),
+            (user_id, now_iso, week_end),
         )
         outcomes_month = count(
             "SELECT COUNT(*) AS count FROM appointments WHERE user_id = ? AND outcome IS NOT NULL AND updated_at >= ?",
@@ -2356,7 +2432,12 @@ def get_pipeline_metrics(user_id, since_iso=None, local_date=None, tz_offset_min
         )
     delivery_total = sent + failed
     fu_counts = follow_up_dashboard_counts(
-        user_id, local_date=day, tz_offset_minutes=tz_offset_minutes
+        user_id,
+        local_date=day,
+        tz_offset_minutes=tz_offset_minutes,
+        timezone_name=windows.timezone_name,
+        now=windows.now_utc,
+        windows=windows,
     )
     return {
         "active_leads": count_filtered_leads(user_id, scope="active"),
@@ -2634,10 +2715,30 @@ def list_calendar_events(
     return unique[: max(int(limit), 1)]
 
 
-def calendar_summary(user_id, local_date=None, tz_offset_minutes=None):
-    day = _calendar_day(local_date)
+def calendar_summary(
+    user_id,
+    local_date=None,
+    tz_offset_minutes=None,
+    *,
+    timezone_name=None,
+    now=None,
+    windows=None,
+):
+    windows = windows or _follow_up_windows(
+        user_id,
+        timezone_name=timezone_name,
+        now=now,
+        local_date=local_date,
+        tz_offset_minutes=tz_offset_minutes,
+    )
+    day = windows.local_date
     counts = follow_up_dashboard_counts(
-        user_id, local_date=day, tz_offset_minutes=tz_offset_minutes
+        user_id,
+        local_date=day,
+        tz_offset_minutes=tz_offset_minutes,
+        timezone_name=windows.timezone_name,
+        now=windows.now_utc,
+        windows=windows,
     )
     tasks_today = list_tasks(user_id, bucket="today", local_date=day, limit=50)
     appts = list_appointments(user_id, limit=200)
@@ -2645,14 +2746,12 @@ def calendar_summary(user_id, local_date=None, tz_offset_minutes=None):
         a
         for a in appts
         if a.get("status") not in {"cancelled"}
-        and _local_date_for_due(a.get("start_at"), tz_offset_minutes, day) == day
+        and local_calendar_date(a.get("start_at"), windows.timezone_name) == day
     ]
     week_events = list_calendar_events(
         user_id,
-        start_at=f"{day}T00:00:00",
-        end_at=(datetime.strptime(day, "%Y-%m-%d") + timedelta(days=7)).strftime(
-            "%Y-%m-%dT23:59:59"
-        ),
+        start_at=windows.start_today_utc.isoformat(),
+        end_at=(windows.start_next_week_utc - timedelta(microseconds=1)).isoformat(),
         include_cancelled=False,
         include_completed=False,
         limit=300,
@@ -2776,38 +2875,38 @@ def count_filtered_leads(
 
 
 def list_follow_ups_for_dashboard_range(
-    user_id, range_key="today", local_date=None, tz_offset_minutes=None, limit=500
+    user_id,
+    range_key="today",
+    local_date=None,
+    tz_offset_minutes=None,
+    limit=500,
+    *,
+    timezone_name=None,
+    now=None,
+    windows=None,
 ):
     """Follow-ups for dashboard cards. Same bucketing as follow_up_dashboard_counts."""
-    range_key = str(range_key or "today").strip().lower()
-    day = _calendar_day(local_date)
+    range_key = str(range_key or "today").strip().lower().replace("-", "_")
+    windows = windows or _follow_up_windows(
+        user_id,
+        timezone_name=timezone_name,
+        now=now,
+        local_date=local_date,
+        tz_offset_minutes=tz_offset_minutes,
+    )
     items = list_follow_ups(
         user_id,
         bucket="all",
         limit=limit,
-        local_date=day,
-        tz_offset_minutes=tz_offset_minutes,
+        timezone_name=windows.timezone_name,
+        now=windows.now_utc,
+        windows=windows,
     )
-    start = datetime.strptime(day, "%Y-%m-%d").date()
-    end = start + timedelta(days=7)
     out = []
     for item in items:
-        if item.get("status") != "pending":
+        if not is_open_status(item.get("status")):
             continue
-        due_day = _local_date_for_due(item.get("due_at"), tz_offset_minutes, day)
-        try:
-            d = datetime.strptime(due_day, "%Y-%m-%d").date()
-        except ValueError:
-            continue
-        if range_key in {"today", "due_today"} and d == start:
-            out.append(item)
-        elif range_key == "overdue" and d < start:
-            out.append(item)
-        elif range_key in {"this_week", "week"} and start <= d < end:
-            out.append(item)
-        elif range_key in {"upcoming"} and d > start:
-            out.append(item)
-        elif range_key in {"all", "open"}:
+        if matches_range(item.get("due_at"), range_key, windows):
             out.append(item)
     return out
 

@@ -53,7 +53,11 @@
 
     <div class="layout">
       <aside class="side">
-        <div class="metric"><div class="k">Overdue follow-ups</div><div class="v">{{ summary.follow_ups_overdue }}</div></div>
+        <a class="metric" href="/crm/follow-ups?due=overdue" style="display:block;text-decoration:none;color:inherit;"
+           aria-label="View {{ summary.follow_ups_overdue }} overdue follow-ups">
+          <div class="k">Overdue follow-ups</div>
+          <div class="v">{{ summary.follow_ups_overdue }}</div>
+        </a>
         <div class="metric"><div class="k">Tasks due today</div><div class="v">{{ summary.tasks_due_today }}</div></div>
         <div class="metric"><div class="k">Appointments today</div><div class="v">{{ summary.appointments_today }}</div></div>
         <div class="metric"><div class="k">Upcoming this week</div><div class="v">{{ summary.upcoming_events_this_week }}</div></div>

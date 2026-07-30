@@ -102,8 +102,11 @@ def test_event_filters_and_stable_ids(two_users):
 
 
 def test_timezone_local_day_helper(two_users):
-    # 02:00 UTC on Jul 30 is Jul 29 evening in UTC-6.
+    # 02:00 UTC on Jul 30 is Jul 29 evening in America/Denver.
     due = "2026-07-30T02:00:00+00:00"
+    assert crm_db._local_date_for_due(due, timezone_name="America/Denver") == "2026-07-29"
+    assert crm_db._local_date_for_due(due, timezone_name="UTC") == "2026-07-30"
+    # Legacy fixed-offset path remains for display helpers.
     assert crm_db._local_date_for_due(due, tz_offset_minutes=360) == "2026-07-29"
     assert crm_db._local_date_for_due(due, tz_offset_minutes=0) == "2026-07-30"
 

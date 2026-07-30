@@ -1671,38 +1671,14 @@ def get_dashboard_metrics(user_id):
             "SELECT COUNT(*) AS count FROM lead_insights WHERE user_id = ? AND status = 'pending'",
             (user_id,),
         ).fetchone()["count"]
-        follow_ups_due = conn.execute(
-            """
-            SELECT COUNT(*) AS count FROM lead_follow_ups
-            WHERE user_id = ? AND status = 'pending' AND due_at <= ?
-            """,
-            (user_id, now.isoformat()),
-        ).fetchone()["count"]
-        today = now.strftime("%Y-%m-%d")
-        week_end = (now + timedelta(days=7)).isoformat()
-        follow_ups_due_today = conn.execute(
-            """
-            SELECT COUNT(*) AS count FROM lead_follow_ups
-            WHERE user_id = ? AND status = 'pending'
-              AND substr(due_at, 1, 10) = ?
-            """,
-            (user_id, today),
-        ).fetchone()["count"]
-        follow_ups_overdue = conn.execute(
-            """
-            SELECT COUNT(*) AS count FROM lead_follow_ups
-            WHERE user_id = ? AND status = 'pending' AND due_at < ?
-            """,
-            (user_id, now.isoformat()),
-        ).fetchone()["count"]
-        follow_ups_due_this_week = conn.execute(
-            """
-            SELECT COUNT(*) AS count FROM lead_follow_ups
-            WHERE user_id = ? AND status = 'pending'
-              AND due_at >= ? AND due_at < ?
-            """,
-            (user_id, now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat(), week_end),
-        ).fetchone()["count"]
+        # Shared account-timezone classification (same as Follow-ups / Pipeline).
+        import crm_db
+
+        fu_counts = crm_db.follow_up_dashboard_counts(user_id)
+        follow_ups_due_today = fu_counts["follow_ups_due_today"]
+        follow_ups_overdue = fu_counts["follow_ups_overdue"]
+        follow_ups_due_this_week = fu_counts["follow_ups_due_this_week"]
+        follow_ups_due = follow_ups_due_today + follow_ups_overdue
         recent_leads = conn.execute(
             """
             SELECT id, name, phone_number, status, next_action, follow_up_at, next_follow_up_at, updated_at
