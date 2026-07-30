@@ -15,30 +15,41 @@ export async function loginAsAuditUser(
   if (!env.hasAuthCredentials) {
     updateState((s) => {
       s.loginSucceeded = false;
-      s.notes.push(
-        "Authenticated audit skipped: TOPAI_AUDIT_EMAIL and/or TOPAI_AUDIT_PASSWORD missing"
-      );
+      if (
+        !s.notes.some((n) =>
+          n.includes("Authenticated audit skipped: TOPAI_AUDIT_EMAIL")
+        )
+      ) {
+        s.notes.push(
+          "Authenticated audit skipped: TOPAI_AUDIT_EMAIL and/or TOPAI_AUDIT_PASSWORD missing"
+        );
+      }
     });
-    await recordIssue(page, {
-      title: "Audit credentials not configured",
-      severity: "Manual Action Required",
-      route: "/login",
-      viewport,
-      authState: "logged-out",
-      reproductionSteps: [
-        "Inspect Cursor automation / cloud environment secrets",
-        "Confirm TOPAI_AUDIT_EMAIL and TOPAI_AUDIT_PASSWORD are injected for the auditor run",
-      ],
-      expected:
-        "TOPAI_AUDIT_BASE_URL, TOPAI_AUDIT_EMAIL, and TOPAI_AUDIT_PASSWORD are present",
-      actual: `Missing: ${env.missingVars.join(", ") || "auth credentials"}`,
-      recommendedFix:
-        "Add TOPAI_AUDIT_* secrets to the Cursor automation environment (never commit them)",
-      recommendedRegressionTest:
-        "run-audit.mjs should fail fast with Manual Action Required when auth env is absent",
-      screenshot: false,
-      classification: "Manual Action Required",
-    });
+    // Record once (desktop) to avoid duplicate Manual Action findings per viewport.
+    if (viewport === "desktop-1440" || viewport === "unknown") {
+      await recordIssue(page, {
+        title: "Audit credentials not configured",
+        severity: "Manual Action Required",
+        route: "/login",
+        viewport: "all",
+        authState: "logged-out",
+        reproductionSteps: [
+          "Inspect Cursor automation / cloud environment secrets",
+          "Confirm TOPAI_AUDIT_EMAIL and TOPAI_AUDIT_PASSWORD are injected for the auditor run",
+        ],
+        expected:
+          "TOPAI_AUDIT_BASE_URL, TOPAI_AUDIT_EMAIL, and TOPAI_AUDIT_PASSWORD are present",
+        actual: `Missing: ${env.missingVars
+          .filter((v) => v !== "TOPAI_AUDIT_BASE_URL")
+          .join(", ") || "auth credentials"}`,
+        recommendedFix:
+          "Add TOPAI_AUDIT_* secrets to the Cursor automation environment (never commit them)",
+        recommendedRegressionTest:
+          "run-audit.mjs should fail fast with Manual Action Required when auth env is absent",
+        screenshot: false,
+        classification: "Manual Action Required",
+      });
+    }
     return false;
   }
 
