@@ -63,6 +63,18 @@ export async function loginAsAuditUser(
   ]);
 
   const url = page.url();
+  const flashText = (
+    await page
+      .locator('.flash, .error, [role="alert"], .alert')
+      .allInnerTexts()
+      .catch(() => [] as string[])
+  )
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  const invalidCredentials = flashText.some((t) =>
+    /invalid email or password/i.test(t)
+  );
   const loggedIn =
     /\/(app|dashboard|crm)\b/.test(url) ||
     (await page
@@ -88,15 +100,50 @@ export async function loginAsAuditUser(
         "Observe final URL and page content",
       ],
       expected: "User reaches /app or authenticated CRM/tools with Log out visible",
-      actual: `Final URL: ${url}; status=${response?.status() ?? "n/a"}; console=${collectors.consoleErrors.slice(0, 3).join(" | ") || "none"}`,
+      actual: `Final URL: ${url}; status=${response?.status() ?? "n/a"}; flash=${flashText.join(" | ") || "none"}; console=${collectors.consoleErrors.slice(0, 3).join(" | ") || "none"}`,
       httpStatus: response?.status() ?? null,
       consoleEvidence: collectors.consoleErrors.slice(0, 10),
       networkEvidence: collectors.httpErrors.slice(0, 10),
       suspectedCodeLocation: "app.py:/login, auth.py",
-      recommendedFix:
-        "Verify audit account exists with active subscription; inspect login error handling",
+      recommendedFix: invalidCredentials
+        ? "Refresh TOPAI_AUDIT_EMAIL / TOPAI_AUDIT_PASSWORD in the automation environment to a valid active subscriber (do not commit secrets)"
+        : "Verify audit account exists with active subscription; inspect login error handling",
       recommendedRegressionTest: "tests/site-audit/auth.spec.ts login flow",
+      ...(invalidCredentials
+        ? { classification: "Manual Action Required" }
+        : {}),
     });
+
+    // Record once for credential refresh when production rejects the configured account.
+    if (
+      invalidCredentials &&
+      (viewport === "desktop-1440" || viewport === "unknown")
+    ) {
+      await recordIssue(page, {
+        title: "Audit subscriber credentials rejected by production",
+        severity: "Manual Action Required",
+        route: "/login",
+        viewport: "all",
+        authState: "logged-out",
+        reproductionSteps: [
+          "Confirm TOPAI_AUDIT_EMAIL and TOPAI_AUDIT_PASSWORD are present (presence only)",
+          "POST /login with those credentials",
+          "Observe flash: Invalid email or password",
+        ],
+        expected:
+          "Configured audit subscriber can sign in and reach /app",
+        actual:
+          "Production returned Invalid email or password; authenticated CRM suites could not run",
+        httpStatus: response?.status() ?? null,
+        suspectedCodeLocation: "Cursor automation secrets / production user store",
+        recommendedFix:
+          "Create or reset a dedicated active-subscriber audit account and update TOPAI_AUDIT_* secrets (never commit them)",
+        recommendedRegressionTest:
+          "Authenticated site-audit project should pass login before CRM route coverage",
+        screenshot: false,
+        classification: "Manual Action Required",
+      });
+    }
   }
 
   return loggedIn;
