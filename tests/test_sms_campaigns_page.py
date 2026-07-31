@@ -19,6 +19,7 @@ def _telnyx(monkeypatch, *, verification="pending", worker=False, trial=False):
     monkeypatch.setattr(config, "TELNYX_API_KEY", "KEY")
     monkeypatch.setattr(config, "TELNYX_PHONE_NUMBER", "+18888210810")
     monkeypatch.setattr(config, "TELNYX_MESSAGING_PROFILE_ID", "profile-1")
+    monkeypatch.setenv("TELNYX_TOLL_FREE_VERIFICATION_STATUS", verification)
     monkeypatch.setattr(config, "TELNYX_TOLL_FREE_VERIFICATION_STATUS", verification)
     monkeypatch.setattr(config, "TELNYX_TRIAL_MODE", trial)
     monkeypatch.setattr(

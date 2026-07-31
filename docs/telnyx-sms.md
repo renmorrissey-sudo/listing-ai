@@ -34,8 +34,11 @@ API version on Messaging Profile: **API V2**.
 | `TELNYX_PUBLIC_KEY` | Ed25519 webhook verify |
 | `TELNYX_TRIAL_MODE=true` | Restrict destinations |
 | `TELNYX_VERIFIED_TEST_NUMBER` | Only allowed destination in trial |
+| `TELNYX_TOLL_FREE_VERIFICATION_STATUS` | `pending` \| `verified` \| `unknown` (only `verified` enables outbound Telnyx SMS) |
 | `APP_URL` | `https://topairealestatetools.com` |
 | Twilio / SimpleTexting vars | Retained inactive for rollback |
+
+Set `TELNYX_TOLL_FREE_VERIFICATION_STATUS=verified` on **both** the `web` and `worker` services (or as a shared Variable with no service-level override of `pending`). Changing it requires a **redeploy/restart** of both services — the value is read from the process environment at runtime and is not stored in the database or tenant SMS settings.
 
 ## Railway services
 
