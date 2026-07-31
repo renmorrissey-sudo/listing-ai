@@ -1,0 +1,66 @@
+{
+  "baseUrlEnv": "TOPAI_AUDIT_BASE_URL",
+  "viewports": [
+    { "name": "mobile-390", "width": 390, "height": 844 },
+    { "name": "tablet-768", "width": 768, "height": 1024 },
+    { "name": "desktop-1440", "width": 1440, "height": 900 }
+  ],
+  "publicRoutes": [
+    { "path": "/", "expectStatus": 200, "contentTypeIncludes": "text/html", "titleIncludes": "TopAI" },
+    { "path": "/login", "expectStatus": 200, "contentTypeIncludes": "text/html", "titleIncludes": "Sign in" },
+    { "path": "/forgot-password", "expectStatus": 200, "contentTypeIncludes": "text/html" },
+    { "path": "/subscribe", "expectStatus": 200, "contentTypeIncludes": "text/html" },
+    { "path": "/terms", "expectStatus": 200, "contentTypeIncludes": "text/html" },
+    { "path": "/privacy", "expectStatus": 200, "contentTypeIncludes": "text/html" },
+    { "path": "/refund-policy", "expectStatus": 200, "contentTypeIncludes": "text/html" },
+    { "path": "/contact", "expectStatus": 200, "contentTypeIncludes": "text/html" },
+    { "path": "/sms-consent", "expectStatus": 200, "contentTypeIncludes": "text/html" },
+    { "path": "/pricing", "expectStatus": 200, "contentTypeIncludes": "text/html" },
+    { "path": "/features", "expectStatus": 200, "contentTypeIncludes": "text/html" },
+    { "path": "/how-it-works", "expectStatus": 200, "contentTypeIncludes": "text/html" },
+    {
+      "path": "/static/sms-opt-in-proof.png",
+      "expectStatus": 200,
+      "contentTypeIncludes": "image/",
+      "kind": "asset"
+    },
+    {
+      "path": "/health",
+      "expectStatus": 200,
+      "contentTypeIncludes": "application/json",
+      "kind": "health"
+    }
+  ],
+  "authenticatedRoutes": [
+    { "path": "/app", "expectStatus": 200 },
+    { "path": "/dashboard", "expectStatus": 200, "note": "Canonical CRM dashboard route" },
+    { "path": "/crm/dashboard", "expectStatus": [200, 301, 302, 404], "note": "Alias check; canonical is /dashboard" },
+    { "path": "/crm/leads", "expectStatus": 200 },
+    { "path": "/crm/external-leads/import", "expectStatus": 200 },
+    { "path": "/crm/sms-campaigns", "expectStatus": 200 },
+    { "path": "/crm/sms-diagnostics", "expectStatus": 200 },
+    { "path": "/crm/follow-ups", "expectStatus": 200 },
+    { "path": "/crm/tasks", "expectStatus": 200 },
+    { "path": "/crm/needs-attention", "expectStatus": 200 },
+    { "path": "/crm/calendar", "expectStatus": 200, "label": "Leads Calendar" },
+    { "path": "/tutorial", "expectStatus": 200 },
+    { "path": "/app#coldcall", "expectStatus": 200, "label": "Cold Call Scripts" },
+    { "path": "/app#voice", "expectStatus": 200, "label": "AI Calling Assistant" },
+    { "path": "/app#sms", "expectStatus": 200, "label": "AI SMS Assistant" }
+  ],
+  "discoverFromPublic": ["/", "/pricing", "/features", "/how-it-works"],
+  "safety": {
+    "neverSubmit": [
+      "sms consent form",
+      "lead inquiry",
+      "forgot-password email request",
+      "subscribe checkout",
+      "billing portal mutations",
+      "CSV import commit",
+      "SMS campaign create/launch",
+      "SMS send",
+      "AI phone call",
+      "lead create/update/delete"
+    ]
+  }
+}
