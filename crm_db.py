@@ -2322,56 +2322,25 @@ def get_pipeline_metrics(user_id, since_iso=None, local_date=None, tz_offset_min
             "SELECT status, COUNT(*) AS count FROM leads WHERE user_id = ? GROUP BY status",
             (user_id,),
         ).fetchall()
-        try:
-            unverified_consent = count(
-                """
-                SELECT COUNT(*) AS count FROM leads
-                WHERE user_id = ? AND sms_consent_status = 'unverified'
-                """,
-                (user_id,),
-            )
-            sms_blocked = count(
-                """
-                SELECT COUNT(*) AS count FROM leads
-                WHERE user_id = ? AND COALESCE(sms_sending_blocked, 1) = 1
-                """,
-                (user_id,),
-            )
-            external_leads = count(
-                """
-                SELECT COUNT(*) AS count FROM leads
-                WHERE user_id = ?
-                  AND (external_source_id IS NOT NULL OR source LIKE 'external:%')
-                """,
-                (user_id,),
-            )
-            consent_review = count(
-                """
-                SELECT COUNT(*) AS count FROM needs_attention
-                WHERE user_id = ? AND status='open'
-                  AND reason_code='consent_review_required'
-                """,
-                (user_id,),
-            )
-            verified_consent = count(
-                """
-                SELECT COUNT(*) AS count FROM leads
-                WHERE user_id = ? AND sms_consent_status = 'verified'
-                  AND COALESCE(sms_sending_blocked, 1) = 0
-                """,
-                (user_id,),
-            )
-            opted_out_consent = count(
-                """
-                SELECT COUNT(*) AS count FROM leads
-                WHERE user_id = ?
-                  AND (sms_consent_status = 'opted_out' OR opt_out_status = 'opted_out')
-                """,
-                (user_id,),
-            )
-        except Exception:
-            unverified_consent = sms_blocked = external_leads = consent_review = 0
-            verified_consent = opted_out_consent = 0
+    # Same helpers as /crm/leads destination filters (count parity).
+    try:
+        unverified_consent = count_filtered_leads(
+            user_id, sms_consent_status="unverified"
+        )
+        sms_blocked = count_filtered_leads(user_id, sms_sending_blocked=True)
+        external_leads = count_filtered_leads(user_id, external_only=True)
+        consent_review = count_filtered_leads(
+            user_id, consent_review_required=True
+        )
+        verified_consent = count_filtered_leads(
+            user_id, sms_consent_status="verified", sms_sending_blocked=False
+        )
+        opted_out_consent = count_filtered_leads(
+            user_id, sms_consent_status="opted_out"
+        )
+    except Exception:
+        unverified_consent = sms_blocked = external_leads = consent_review = 0
+        verified_consent = opted_out_consent = 0
 
     by_status = {normalize_lead_status(r["status"]): r["count"] for r in status_rows}
     stages = []
@@ -2380,9 +2349,9 @@ def get_pipeline_metrics(user_id, since_iso=None, local_date=None, tz_offset_min
             {
                 "id": stage_id,
                 "label": label,
-                # Same helper as /crm/leads?stage=… destination list.
+                # Same helper as /crm/leads?status=<stage> destination list.
                 "count": count_filtered_leads(user_id, stage=stage_id),
-                "href": f"/crm/leads?stage={stage_id}",
+                "href": f"/crm/leads?status={stage_id}",
             }
         )
     delivery_total = sent + failed
@@ -2750,8 +2719,15 @@ def filter_leads(
             sql += " AND l.source = ?"
             params.append(source)
         if sms_consent_status:
-            sql += " AND l.sms_consent_status = ?"
-            params.append(sms_consent_status)
+            # Match dashboard Opted Out card: consent status OR opt_out_status.
+            if sms_consent_status == "opted_out":
+                sql += (
+                    " AND (l.sms_consent_status = 'opted_out'"
+                    " OR l.opt_out_status = 'opted_out')"
+                )
+            else:
+                sql += " AND l.sms_consent_status = ?"
+                params.append(sms_consent_status)
         if sms_sending_blocked is not None:
             blocked = 1 if sms_sending_blocked in (True, 1, "1", "true") else 0
             sql += " AND COALESCE(l.sms_sending_blocked, 1) = ?"

@@ -15,7 +15,9 @@ from crm_constants import (
     CALENDAR_EVENT_TYPES,
     COMMON_TIMEZONES,
     FOLLOW_UP_CANCEL_REASONS,
+    LEAD_STATUS_SET,
     LEAD_STATUSES,
+    LEGACY_STATUS_MAP,
     NEEDS_ATTENTION_REASONS,
     PIPELINE_STAGES,
     PRIORITIES,
@@ -26,6 +28,17 @@ from crm_constants import (
     status_label,
 )
 
+PIPELINE_STAGE_IDS = {stage_id for stage_id, _label, _members in PIPELINE_STAGES}
+ALLOWED_SMS_CONSENT = {"unverified", "verified", "opted_out", "not_permitted"}
+ALLOWED_POND = {"claimable", "claimed", "assigned", "unassigned"}
+ALLOWED_FOLLOW_UP_RANGES = {
+    "today": "today",
+    "overdue": "overdue",
+    "this_week": "this_week",
+    "this-week": "this_week",
+    "week": "this_week",
+}
+
 crm_bp = Blueprint("crm", __name__)
 logger = logging.getLogger(__name__)
 
@@ -35,6 +48,101 @@ def _user_or_redirect():
     if not user or not auth.user_has_active_subscription(user):
         return None
     return user
+
+
+def _truthy_arg(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes"}
+
+
+def _parse_blocked_arg(*values):
+    for value in values:
+        raw = str(value or "").strip().lower()
+        if raw in {"1", "true", "yes"}:
+            return True, "1"
+        if raw in {"0", "false", "no"}:
+            return False, "0"
+    return None, ""
+
+
+def _parse_dashboard_range_arg(*values):
+    """Normalize range/due query values used by dashboard drill-downs."""
+    for value in values:
+        key = str(value or "").strip().lower()
+        if key in ALLOWED_FOLLOW_UP_RANGES:
+            return ALLOWED_FOLLOW_UP_RANGES[key]
+    return None
+
+
+def _parse_leads_list_filters(args):
+    """Parse /crm/leads query params, including dashboard drill-down aliases.
+
+    Unknown filter values are ignored. Tenant scoping is always enforced by
+    filter_leads(user_id=...).
+    """
+    status_raw = (args.get("status") or "").strip().lower() or None
+    stage = (args.get("stage") or "").strip().lower() or None
+    if stage and stage not in PIPELINE_STAGE_IDS:
+        stage = None
+
+    status = None
+    if not stage and status_raw:
+        if status_raw in PIPELINE_STAGE_IDS:
+            # Dashboard stage cards use status=<stage_id> (e.g. contacting).
+            stage = status_raw
+        elif status_raw in LEAD_STATUS_SET or status_raw in LEGACY_STATUS_MAP:
+            status = status_raw
+        # else: ignore unknown status values
+
+    scope = (args.get("scope") or "").strip().lower() or None
+    if scope and scope != "active":
+        scope = None
+    if _truthy_arg(args.get("active")):
+        scope = "active"
+
+    source = (args.get("source") or "").strip() or None
+
+    consent_raw = (args.get("consent") or args.get("sms_consent") or "").strip().lower() or None
+    review = (args.get("consent_review") or "").strip() or None
+    sms_consent = None
+    if consent_raw == "review":
+        review = "1"
+    elif consent_raw in ALLOWED_SMS_CONSENT:
+        sms_consent = consent_raw
+    if review and not _truthy_arg(review):
+        review = None
+    elif review:
+        review = "1"
+
+    pond = (args.get("pond") or "").strip().lower() or None
+    if pond and pond not in ALLOWED_POND:
+        pond = None
+
+    external = (args.get("external") or "").strip() or None
+    origin = (args.get("origin") or "").strip().lower() or None
+    if origin == "external" or _truthy_arg(external):
+        external = "1"
+    elif external:
+        external = None
+
+    sms_blocked, blocked = _parse_blocked_arg(args.get("sms_blocked"), args.get("blocked"))
+
+    batch = (args.get("batch") or "").strip() or None
+    import_batch_id = int(batch) if batch and batch.isdigit() else None
+
+    return {
+        "status": status,
+        "source": source,
+        "scope": scope,
+        "stage": stage,
+        "sms_consent": sms_consent,
+        "pond": pond,
+        "external": external,
+        "blocked": blocked,
+        "sms_blocked": sms_blocked,
+        "review": review,
+        "batch": batch if import_batch_id is not None else "",
+        "import_batch_id": import_batch_id,
+    }
 
 
 def _format_call_duration(seconds):
@@ -260,26 +368,33 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
     }
 
 
+@crm_bp.route("/crm/dashboard")
+def crm_dashboard_alias():
+    """Production alias for /dashboard (https://…/crm/dashboard)."""
+    qs = request.query_string.decode("utf-8") if request.query_string else ""
+    target = "/dashboard"
+    if qs:
+        target = f"{target}?{qs}"
+    return redirect(target)
+
+
 @crm_bp.route("/crm/leads")
 def crm_leads_page():
     user = _user_or_redirect()
     if not user:
         return redirect(url_for("subscriber_app"))
-    status = (request.args.get("status") or "").strip() or None
-    source = (request.args.get("source") or "").strip() or None
-    scope = (request.args.get("scope") or "").strip() or None
-    stage = (request.args.get("stage") or "").strip() or None
-    sms_consent = (request.args.get("sms_consent") or "").strip() or None
-    pond = (request.args.get("pond") or "").strip() or None
-    external = (request.args.get("external") or "").strip() or None
-    blocked = (request.args.get("blocked") or "").strip() or None
-    review = (request.args.get("consent_review") or "").strip() or None
-    batch = (request.args.get("batch") or "").strip() or None
-    sms_blocked = None
-    if blocked in {"1", "true", "yes"}:
-        sms_blocked = True
-    elif blocked in {"0", "false", "no"}:
-        sms_blocked = False
+    filters = _parse_leads_list_filters(request.args)
+    status = filters["status"]
+    source = filters["source"]
+    scope = filters["scope"]
+    stage = filters["stage"]
+    sms_consent = filters["sms_consent"]
+    pond = filters["pond"]
+    external = filters["external"]
+    blocked = filters["blocked"]
+    sms_blocked = filters["sms_blocked"]
+    review = filters["review"]
+    batch = filters["batch"]
     leads = crm_db.filter_leads(
         user["id"],
         status=status,
@@ -290,7 +405,7 @@ def crm_leads_page():
         sms_sending_blocked=sms_blocked,
         pond_status=pond,
         external_only=external,
-        import_batch_id=int(batch) if batch and batch.isdigit() else None,
+        import_batch_id=filters["import_batch_id"],
         consent_review_required=review,
     )
     active_filter = None
@@ -312,8 +427,10 @@ def crm_leads_page():
         )
     if external:
         active_filter = (active_filter + " · External") if active_filter else "External leads"
-    if blocked in {"1", "true", "yes"}:
+    if blocked == "1":
         active_filter = (active_filter + " · SMS blocked") if active_filter else "SMS blocked"
+    elif blocked == "0":
+        active_filter = (active_filter + " · SMS enabled") if active_filter else "SMS enabled"
     if review:
         active_filter = (
             (active_filter + " · Consent review required")
@@ -326,6 +443,7 @@ def crm_leads_page():
         "crm_leads.html",
         leads=leads,
         statuses=LEAD_STATUSES,
+        pipeline_stages=PIPELINE_STAGES,
         status_filter=status or "",
         source_filter=source or "",
         scope_filter=scope or "",
@@ -360,8 +478,12 @@ def crm_tasks_page():
     if not user:
         return redirect(url_for("subscriber_app"))
     local_date = (request.args.get("local_date") or "").strip()[:10] or None
-    range_key = (request.args.get("range") or "").strip().lower() or None
+    range_key = _parse_dashboard_range_arg(
+        request.args.get("due"), request.args.get("range")
+    )
     status = (request.args.get("status") or "").strip().lower() or None
+    if status and status not in {"open", "in_progress", "completed", "cancelled"}:
+        status = None
     overdue = crm_db.list_tasks(user["id"], "overdue", local_date=local_date)
     today = crm_db.list_tasks(user["id"], "today", local_date=local_date)
     upcoming = crm_db.list_tasks(user["id"], "upcoming", local_date=local_date)
@@ -721,16 +843,20 @@ def crm_follow_ups_page():
     view = (request.args.get("view") or "agenda").strip().lower()
     if view not in {"agenda", "month", "week"}:
         view = "agenda"
-    range_key = (request.args.get("range") or "").strip().lower() or None
+    range_key = _parse_dashboard_range_arg(
+        request.args.get("due"), request.args.get("range")
+    )
     status = (request.args.get("status") or "").strip().lower() or None
+    if status and status not in {"open", "pending", "completed", "cancelled"}:
+        status = None
 
-    if range_key in {"today", "overdue", "this_week", "week"} and (
-        not status or status == "open"
+    if range_key in {"today", "overdue", "this_week"} and (
+        not status or status in {"open", "pending"}
     ):
         # Same query path as dashboard Pipeline cards.
         ranged = crm_db.list_follow_ups_for_dashboard_range(
             user["id"],
-            "this_week" if range_key == "week" else range_key,
+            range_key,
             local_date=local_date,
             tz_offset_minutes=tz_offset,
         )
@@ -769,7 +895,7 @@ def crm_follow_ups_page():
                 "cancelled": [],
             }
             follow_ups = groups["overdue"]
-        elif range_key in {"this_week", "week"}:
+        elif range_key == "this_week":
             follow_ups = crm_db.list_follow_ups_for_dashboard_range(
                 user["id"],
                 "this_week",
@@ -788,7 +914,7 @@ def crm_follow_ups_page():
         active_filter = "Follow-ups due today"
     elif range_key == "overdue":
         active_filter = "Overdue follow-ups"
-    elif range_key in {"this_week", "week"}:
+    elif range_key == "this_week":
         active_filter = "Follow-ups due this week"
     return render_template(
         "crm_follow_ups.html",
@@ -896,7 +1022,11 @@ def crm_leads_calendar_page():
         "yes",
     }
     event_type = (request.args.get("event_type") or request.args.get("event_types") or "").strip()
-    range_key = (request.args.get("range") or "").strip().lower() or None
+    date_arg = (request.args.get("date") or "").strip().lower() or None
+    range_key = _parse_dashboard_range_arg(
+        request.args.get("range"),
+        "today" if date_arg == "today" else date_arg,
+    )
     day = local_date or None
     start_at = end_at = None
     if range_key == "today":

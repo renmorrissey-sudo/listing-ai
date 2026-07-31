@@ -28,39 +28,43 @@
     </div>
     {% endif %}
     <form class="filters" method="get" action="/crm/leads">
-      <select name="status">
+      {% if scope_filter %}<input type="hidden" name="active" value="1" />{% endif %}
+      <select name="stage" aria-label="Pipeline stage">
+        <option value="">All stages</option>
+        {% for stage_id, label, _members in pipeline_stages|default([]) %}
+        <option value="{{ stage_id }}" {% if stage_filter == stage_id %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <select name="status" aria-label="Exact status">
         <option value="">All statuses</option>
         {% for slug, label in statuses %}
-        <option value="{{ slug }}" {% if status_filter == slug %}selected{% endif %}>{{ label }}</option>
+        <option value="{{ slug }}" {% if status_filter == slug and not stage_filter %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
       <input name="source" placeholder="Source" value="{{ source_filter }}" />
-      <select name="sms_consent">
+      <select name="consent" aria-label="SMS consent">
         <option value="">All consent</option>
         <option value="unverified" {% if sms_consent_filter == 'unverified' %}selected{% endif %}>Unverified</option>
         <option value="verified" {% if sms_consent_filter == 'verified' %}selected{% endif %}>Verified</option>
         <option value="opted_out" {% if sms_consent_filter == 'opted_out' %}selected{% endif %}>Opted out</option>
         <option value="not_permitted" {% if sms_consent_filter == 'not_permitted' %}selected{% endif %}>Not permitted</option>
+        <option value="review" {% if consent_review_filter == '1' %}selected{% endif %}>Consent review</option>
       </select>
-      <select name="blocked">
+      <select name="sms_blocked" aria-label="SMS blocked">
         <option value="">SMS blocked?</option>
         <option value="1" {% if blocked_filter == '1' %}selected{% endif %}>Blocked</option>
         <option value="0" {% if blocked_filter == '0' %}selected{% endif %}>Enabled</option>
       </select>
-      <select name="external">
+      <select name="origin" aria-label="Lead origin">
         <option value="">All origins</option>
-        <option value="1" {% if external_filter == '1' %}selected{% endif %}>External only</option>
+        <option value="external" {% if external_filter == '1' %}selected{% endif %}>External only</option>
       </select>
-      <select name="pond">
+      <select name="pond" aria-label="Pond status">
         <option value="">All pond</option>
         <option value="claimable" {% if pond_filter == 'claimable' %}selected{% endif %}>Claimable</option>
         <option value="claimed" {% if pond_filter == 'claimed' %}selected{% endif %}>Claimed</option>
         <option value="assigned" {% if pond_filter == 'assigned' %}selected{% endif %}>Assigned</option>
         <option value="unassigned" {% if pond_filter == 'unassigned' %}selected{% endif %}>Unassigned</option>
-      </select>
-      <select name="consent_review">
-        <option value="">Consent review</option>
-        <option value="1" {% if consent_review_filter == '1' %}selected{% endif %}>Review required</option>
       </select>
       <input name="batch" placeholder="Batch id" value="{{ batch_filter }}" style="width:90px;" />
       <button class="btn" type="submit">Filter</button>
