@@ -63,6 +63,12 @@ export async function loginAsAuditUser(
   ]);
 
   const url = page.url();
+  let urlPath = url;
+  try {
+    urlPath = new URL(url).pathname + (new URL(url).search || "");
+  } catch {
+    /* keep full url string only if unparsable */
+  }
   const flashText = (
     await page
       .locator('.flash, .error, [role="alert"], .alert')
@@ -100,7 +106,7 @@ export async function loginAsAuditUser(
         "Observe final URL and page content",
       ],
       expected: "User reaches /app or authenticated CRM/tools with Log out visible",
-      actual: `Final URL: ${url}; status=${response?.status() ?? "n/a"}; flash=${flashText.join(" | ") || "none"}; console=${collectors.consoleErrors.slice(0, 3).join(" | ") || "none"}`,
+      actual: `Final path: ${urlPath}; status=${response?.status() ?? "n/a"}; flash=${flashText.join(" | ") || "none"}; console=${collectors.consoleErrors.slice(0, 3).join(" | ") || "none"}`,
       httpStatus: response?.status() ?? null,
       consoleEvidence: collectors.consoleErrors.slice(0, 10),
       networkEvidence: collectors.httpErrors.slice(0, 10),
