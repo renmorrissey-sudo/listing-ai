@@ -3,7 +3,7 @@ import secrets
 
 import stripe
 from anthropic import Anthropic
-from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
+from flask import Flask, flash, g, jsonify, redirect, render_template, request, url_for
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.exceptions import HTTPException
@@ -130,7 +130,7 @@ def handle_http_exception(error):
 def handle_unexpected_exception(error):
     import uuid as _uuid
 
-    correlation_id = _uuid.uuid4().hex[:12]
+    correlation_id = getattr(g, "sms_correlation_id", None) or _uuid.uuid4().hex[:12]
     logger.exception("Unhandled error correlation_id=%s: %s", correlation_id, error)
     # Public HTML forms should not receive opaque JSON 500s.
     if request.path == "/sms-consent" and request.method == "POST":
@@ -1349,27 +1349,69 @@ def generate_sms():
 @auth.subscription_required
 @limiter.limit(lambda: f"{config.SMS_DAILY_LIMIT} per day", key_func=_user_rate_limit_key)
 def send_sms_message():
+    from sms_send_diagnostics import (
+        log_attempt,
+        new_attempt,
+        public_fields,
+        set_stage,
+    )
+
     user = auth.get_current_user()
+    diag = new_attempt(source_page="ai_sms_compose")
+    g.sms_correlation_id = diag["correlation_id"]
     data = request.get_json(silent=True)
     cleaned, error = validate_sms_send_payload(data)
     if error:
-        return jsonify({"error": error}), 400
+        set_stage(diag, "validation", error="payload_invalid")
+        log_attempt(diag, level=logging.WARNING, extra=error)
+        return jsonify({"error": error, **public_fields(diag)}), 400
+
+    set_stage(
+        diag,
+        "validation",
+        normalized_destination=cleaned["phone_number"],
+        provider=(config.SMS_PROVIDER or "").lower(),
+    )
+    log_attempt(diag)
 
     persona = db.get_voice_persona(cleaned["persona_id"], user["id"])
     if not persona:
-        return jsonify({"error": "Selected persona was not found."}), 404
+        set_stage(diag, "validation", error="persona_not_found")
+        log_attempt(diag, level=logging.WARNING)
+        return jsonify({"error": "Selected persona was not found.", **public_fields(diag)}), 404
 
     from lead_service import SMS_SOURCE
     from sms_outbound import send_authorized_sms
 
-    lead_id, _created, _lead = upsert_crm_lead(
-        user["id"],
-        cleaned["phone_number"],
-        cleaned,
-        source=SMS_SOURCE,
-        touch_sms=True,
-        assigned_user_id=user["id"],
-    )
+    set_stage(diag, "lead_upsert", normalized_destination=cleaned["phone_number"])
+    try:
+        lead_id, _created, _lead = upsert_crm_lead(
+            user["id"],
+            cleaned["phone_number"],
+            cleaned,
+            source=SMS_SOURCE,
+            touch_sms=True,
+            assigned_user_id=user["id"],
+        )
+    except Exception:
+        logger.exception(
+            "SMS lead_upsert failed before provider call correlation_id=%s to=%s",
+            diag.get("correlation_id"),
+            cleaned.get("phone_number"),
+        )
+        set_stage(
+            diag,
+            "lead_upsert",
+            reached_provider=False,
+            error="lead_upsert_failed",
+        )
+        log_attempt(diag, level=logging.ERROR)
+        return jsonify({
+            "error": "SMS could not be sent due to an internal application error.",
+            **public_fields(diag),
+        }), 500
+
+    set_stage(diag, "lead_upsert", lead_id=lead_id)
     provider = get_sms_provider()
     if not cleaned.get("send_now"):
         message_id = db.create_sms_message(
@@ -1393,13 +1435,16 @@ def send_sms_message():
             "message_body": cleaned["message_body"],
             "send_configured": provider.is_configured(),
             "sms_sending_enabled": is_sms_sending_enabled(),
+            **public_fields(diag),
         }), 201
 
     from sms_authorization import check_telnyx_toll_free_send_allowed
 
     toll_ok, toll_err = check_telnyx_toll_free_send_allowed()
     if not toll_ok:
-        return jsonify({"error": toll_err}), 403
+        set_stage(diag, "toll_free", error="toll_free_not_verified")
+        log_attempt(diag, level=logging.WARNING)
+        return jsonify({"error": toll_err, **public_fields(diag)}), 403
 
     result, err, status = send_authorized_sms(
         user["id"],
@@ -1408,11 +1453,18 @@ def send_sms_message():
         source_page="ai_sms_compose",
         compliance_confirmed=True,
         persona_id=persona["id"],
+        correlation_id=diag["correlation_id"],
+        diagnostics=diag,
     )
     if err:
-        return jsonify({"error": err, **(result or {})}), status
+        return jsonify({"error": err, **(result or {}), **public_fields(diag)}), status
     db.record_tool_usage(user["id"], "ai_sms", "sent")
-    return jsonify({**result, "send_configured": True, "sms_sending_enabled": True}), status
+    return jsonify({
+        **result,
+        "send_configured": True,
+        "sms_sending_enabled": True,
+        **public_fields(diag),
+    }), status
 
 
 @app.route("/sms/test", methods=["POST"])

@@ -2,7 +2,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import config
-from db_backend import connect as backend_connect
+from db_backend import bind_bool, connect as backend_connect
 
 
 def _connect():
@@ -662,6 +662,9 @@ def update_lead_contact_fields(
         new_status = lead["status"]
         if bump_status_from_new_to and (lead["status"] or "new") == "new":
             new_status = bump_status_from_new_to
+        # Postgres CASE WHEN requires boolean binds — integers (0/1) raise DatatypeMismatch.
+        touch_contact = bind_bool(touch_call or touch_sms)
+        touch_call_flag = bind_bool(touch_call)
         conn.execute(
             """
             UPDATE leads
@@ -686,11 +689,11 @@ def update_lead_contact_fields(
                 notes,
                 notes,
                 new_status,
-                1 if (touch_call or touch_sms) else 0,
+                touch_contact,
                 now,
-                1 if touch_call else 0,
+                touch_call_flag,
                 now,
-                1 if (touch_call or touch_sms) else 0,
+                touch_contact,
                 now,
                 now,
                 lead_id,

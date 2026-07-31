@@ -107,6 +107,7 @@ class TelnyxSMSProvider(BaseSMSProvider):
         }
 
     def _request(self, method, path, body=None):
+        # Outbound auth uses TELNYX_API_KEY only — never TELNYX_PUBLIC_KEY.
         url = f"{self.api_base}{path}"
         data = None
         headers = {
@@ -117,6 +118,21 @@ class TelnyxSMSProvider(BaseSMSProvider):
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
+            if path == "/messages" and isinstance(body, dict):
+                from sms_send_diagnostics import safe_telnyx_payload
+
+                logger.info(
+                    "Telnyx provider_request method=%s url=%s auth=Bearer[TELNYX_API_KEY] payload=%s",
+                    method,
+                    url,
+                    safe_telnyx_payload(
+                        from_number=body.get("from"),
+                        to_number=body.get("to"),
+                        text=body.get("text"),
+                        messaging_profile_id=body.get("messaging_profile_id"),
+                        webhook_url=body.get("webhook_url"),
+                    ),
+                )
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
@@ -184,6 +200,12 @@ class TelnyxSMSProvider(BaseSMSProvider):
         err = self.config_error()
         if err:
             raise SmsProviderError(err, provider=self.name)
+        if self.public_key and self.api_key and self.public_key == self.api_key:
+            # Misconfiguration guard: public key must never authenticate outbound sends.
+            raise SmsProviderError(
+                "SMS could not be sent. Messaging provider authentication is misconfigured.",
+                provider=self.name,
+            )
         from_num = from_number or self.phone_number
         payload = {
             "to": to_number,
@@ -206,14 +228,23 @@ class TelnyxSMSProvider(BaseSMSProvider):
             payload["webhook_url"] = status_callback
             payload["use_profile_webhooks"] = True
 
-        result, _status = self._request("POST", "/messages", payload)
+        # Official Telnyx Messaging API V2: POST /v2/messages with Bearer API key.
+        result, http_status = self._request("POST", "/messages", payload)
         data = result.get("data") or result
         provider_message_id = data.get("id")
         if not provider_message_id:
             raise SmsProviderError(
                 "SMS could not be sent. SMS provider did not return a message ID.",
+                status_code=http_status,
                 provider=self.name,
             )
+        logger.info(
+            "Telnyx provider_response http=%s provider_message_id=%s to=%s from=%s",
+            http_status,
+            provider_message_id,
+            to_number,
+            from_num,
+        )
         return {
             "provider_message_id": str(provider_message_id),
             "status": (data.get("to") or [{}])[0].get("status")
@@ -226,6 +257,7 @@ class TelnyxSMSProvider(BaseSMSProvider):
             else data.get("parts"),
             "cost": (data.get("cost") or {}).get("amount") if isinstance(data.get("cost"), dict) else None,
             "raw_status": data.get("status"),
+            "http_status": http_status,
         }
 
     def get_message_status(self, provider_message_id: str) -> dict:

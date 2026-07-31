@@ -471,10 +471,14 @@
       data = {};
     }
     if (!res.ok) {
-      const msg = data.error || data.message || 'Something went wrong. Please try again.';
+      let msg = data.error || data.message || 'Something went wrong. Please try again.';
+      if (data.correlation_id && !String(msg).includes(data.correlation_id)) {
+        msg = `${msg} (ref: ${data.correlation_id})`;
+      }
       const err = new Error(msg);
       err.providerCode = data.provider_code;
       err.payload = data;
+      err.correlationId = data.correlation_id;
       throw err;
     }
     return data;
