@@ -60,6 +60,7 @@
     .placeholder svg { opacity: 0.35; }
     .placeholder p { font-size: 14px; }
     .error-msg { background: #fff5f5; border: 1.5px solid #fca5a5; color: #dc2626; border-radius: 8px; padding: 12px 16px; font-size: 13px; margin-top: 12px; display: none; }
+    .success-msg { background: #ecfdf5; border: 1.5px solid #6ee7b7; color: #065f46; border-radius: 8px; padding: 12px 16px; font-size: 13px; margin-top: 12px; display: none; line-height: 1.5; }
     .notice { background: #fff8e6; border: 1.5px solid #f0d98c; color: #7a5c00; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.45; margin-bottom: 14px; }
     .checkbox-row { display: flex; gap: 9px; align-items: flex-start; margin: 12px 0; font-size: 13px; color: #556; line-height: 1.45; }
     .checkbox-row input { width: auto; margin-top: 3px; }
@@ -363,7 +364,8 @@
           <input type="checkbox" name="compliance_confirmed" id="sms-compliance-confirmed" value="true" required />
           <span>I confirm that this contact has consented to receive SMS messages from me or my business for this purpose. I maintain the supporting consent records and am responsible for TCPA, DNC, carrier, brokerage, privacy, opt-out, and local-law compliance.</span>
         </label>
-        <div class="error-msg" id="sms-error"></div>
+        <div class="error-msg" id="sms-error" role="alert"></div>
+        <div class="success-msg" id="sms-success" role="status" aria-live="polite"></div>
         <div id="sms-provider-status" class="notice" style="margin-top:12px;font-size:12px;display:none;" aria-live="polite"></div>
         <div id="sms-trial-banner" class="notice" style="margin-top:12px;font-size:12px;display:none;border-color:#c45c26;color:#7a3410;" aria-live="polite"></div>
         <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
@@ -486,6 +488,154 @@
     return data;
   }
 
+  function formatPhoneDisplay(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const digits = raw.replace(/\D/g, '');
+    if (digits.length === 11 && digits.startsWith('1')) {
+      return `+1 (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
+    }
+    if (digits.length === 10) {
+      return `+1 (${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+    }
+    return raw;
+  }
+
+  function formatLocalDateTime(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return String(value);
+    return d.toLocaleString();
+  }
+
+  function hideSmsSuccess() {
+    const el = document.getElementById('sms-success');
+    if (!el) return;
+    el.style.display = 'none';
+    el.innerHTML = '';
+  }
+
+  function hideSmsError() {
+    const el = document.getElementById('sms-error');
+    if (!el) return;
+    el.style.display = 'none';
+    el.textContent = '';
+  }
+
+  function showSmsSuccessNotice(result) {
+    const el = document.getElementById('sms-success');
+    if (!el || !result) return;
+    const status = (result.status || result.send_status || 'queued').toLowerCase();
+    const toDisplay = result.to_number_display
+      || formatPhoneDisplay(result.to_number)
+      || formatPhoneDisplay(result.phone_number)
+      || '';
+    const mid = result.provider_message_id || '';
+    const submitted = formatLocalDateTime(result.submitted_at || result.sent_at || new Date().toISOString());
+    const delivered = formatLocalDateTime(result.delivered_at);
+    let title = 'SMS submitted successfully to Telnyx.';
+    let lines = [
+      `Status: ${status === 'submitted' ? 'queued' : status}`,
+      toDisplay ? `To: ${toDisplay}` : '',
+      mid ? `Message ID: ${mid}` : '',
+      submitted ? `Submitted: ${submitted}` : '',
+    ];
+    if (status === 'delivered') {
+      title = 'SMS delivered successfully.';
+      lines = [
+        'Status: delivered',
+        toDisplay ? `To: ${toDisplay}` : '',
+        delivered ? `Delivered: ${delivered}` : (submitted ? `Delivered: ${submitted}` : ''),
+        mid ? `Message ID: ${mid}` : '',
+      ];
+    } else if (status === 'sent') {
+      title = 'SMS sent successfully.';
+    }
+    el.innerHTML = `<strong>${escapeHtml(title)}</strong><br/>${lines.filter(Boolean).map(escapeHtml).join('<br/>')}`;
+    el.style.display = 'block';
+  }
+
+  function showSmsFailureNotice(err) {
+    const el = document.getElementById('sms-error');
+    if (!el) return;
+    const payload = (err && err.payload) || {};
+    const stage = payload.stage || '';
+    const ref = payload.correlation_id || '';
+    const code = payload.provider_code || payload.latest_telnyx_error_code;
+    let msg = (err && err.message) || 'SMS could not be submitted.';
+    if ((payload.send_status || '').toLowerCase() === 'delivery_failed' || stage === 'provider_delivery') {
+      msg = code
+        ? `SMS delivery failed. Telnyx error: ${code}`
+        : 'SMS delivery failed.';
+    } else if (stage === 'provider_request' || stage === 'provider request') {
+      msg = `SMS could not be submitted. Stage: provider request${ref ? `. Reference: ${ref}` : ''}`;
+    } else if (ref && !String(msg).includes(ref)) {
+      msg = `${msg} Reference: ${ref}.`;
+    }
+    el.textContent = msg;
+    el.style.display = 'block';
+  }
+
+  let smsStatusPollTimer = null;
+  let smsStatusPollCount = 0;
+  let smsSendInFlight = false;
+
+  function stopSmsStatusPolling() {
+    if (smsStatusPollTimer) {
+      clearInterval(smsStatusPollTimer);
+      smsStatusPollTimer = null;
+    }
+    smsStatusPollCount = 0;
+  }
+
+  function startSmsStatusPolling() {
+    stopSmsStatusPolling();
+    smsStatusPollCount = 0;
+    smsStatusPollTimer = setInterval(async () => {
+      smsStatusPollCount += 1;
+      try {
+        await refreshSmsProviderStatus();
+        const panel = document.getElementById('sms-provider-status');
+        const text = panel ? panel.textContent || '' : '';
+        if (text.includes('Latest SMS status: delivered') || text.includes('Latest SMS status: delivery failed') || text.includes('Latest SMS status: rejected')) {
+          stopSmsStatusPolling();
+          const status = await fetchJson('/sms/status', {cache: 'no-store'});
+          if (status && (status.latest_sms_status || status.latest_send_status) === 'delivered') {
+            showSmsSuccessNotice({
+              status: 'delivered',
+              to_number: status.latest_sms_destination,
+              to_number_display: status.latest_sms_destination_display,
+              provider_message_id: status.latest_sms_message_id,
+              submitted_at: status.latest_sms_submitted_at,
+              delivered_at: status.latest_sms_delivered_at,
+            });
+          } else if (status && ['delivery_failed', 'rejected', 'provider_error'].includes(status.latest_sms_status)) {
+            hideSmsSuccess();
+            showSmsFailureNotice({
+              message: 'SMS delivery failed.',
+              payload: {
+                send_status: status.latest_sms_status,
+                provider_code: status.latest_telnyx_error_code,
+                correlation_id: status.latest_correlation_id,
+                stage: 'provider_delivery',
+              },
+            });
+          }
+        }
+      } catch (_ignore) {}
+      if (smsStatusPollCount >= 12) stopSmsStatusPolling();
+    }, 4000);
+  }
+
+  async function refreshSmsProviderStatus() {
+    const phoneInput = document.querySelector('#sms-form input[name="phone_number"]');
+    const phone = phoneInput && phoneInput.value ? phoneInput.value.trim() : '';
+    const qs = phone ? `?phone_number=${encodeURIComponent(phone)}` : '';
+    const status = await fetchJson(`/sms/status${qs}`, {cache: 'no-store'});
+    if (status) renderProviderStatus(status);
+    return status;
+  }
+
   function renderProviderStatus(status) {
     const panel = document.getElementById('sms-provider-status') || document.getElementById('sms-twilio-status');
     const trial = document.getElementById('sms-trial-banner');
@@ -517,11 +667,36 @@
         `Toll-free verification status: ${status.toll_free_verification_status || 'unknown'}`,
         `Trial mode: ${status.trial_mode ? 'enabled' : 'disabled'}`,
         `SMS sending enabled: ${yesNo(status.sms_sending_enabled)}`,
-        `Latest Telnyx send status: ${status.latest_send_status || 'none'}`,
-        `Latest Telnyx error code: ${status.latest_telnyx_error_code != null ? status.latest_telnyx_error_code : (status.latest_error_code != null ? status.latest_error_code : 'none')}`,
       ];
-      const errMsg = status.latest_telnyx_error_message || status.latest_error_message;
-      if (errMsg) rows.push(`Latest Telnyx error: ${errMsg}`);
+      if (status.has_outbound) {
+        const smsStatus = status.latest_sms_status || status.latest_send_status;
+        rows.push(`Latest SMS status: ${smsStatus || 'unknown'}`);
+        if (status.latest_sms_destination_display || status.latest_sms_destination) {
+          rows.push(`Latest SMS destination: ${status.latest_sms_destination_display || formatPhoneDisplay(status.latest_sms_destination)}`);
+        }
+        if (status.latest_sms_submitted_at) {
+          rows.push(`Latest SMS submitted time: ${formatLocalDateTime(status.latest_sms_submitted_at)}`);
+        }
+        if (status.latest_sms_delivered_at) {
+          rows.push(`Latest SMS delivered time: ${formatLocalDateTime(status.latest_sms_delivered_at)}`);
+        }
+        if (status.latest_sms_message_id) {
+          rows.push(`Telnyx message ID: ${status.latest_sms_message_id}`);
+        }
+        const errCode = status.latest_telnyx_error_code != null
+          ? status.latest_telnyx_error_code
+          : status.latest_error_code;
+        if (errCode != null && errCode !== '') {
+          rows.push(`Telnyx error code: ${errCode}`);
+        }
+        const errMsg = status.latest_telnyx_error_message || status.latest_error_message;
+        if (errMsg) rows.push(`Latest Telnyx error: ${errMsg}`);
+        if (status.latest_correlation_id) {
+          rows.push(`Reference: ${status.latest_correlation_id}`);
+        }
+      } else {
+        rows.push(status.empty_state_message || 'No SMS has been sent yet.');
+      }
       panel.innerHTML = `<strong>Telnyx status</strong><br/>${rows.map(escapeHtml).join('<br/>')}`;
       panel.style.display = 'block';
       return;
@@ -531,6 +706,14 @@
       `SMS provider: ${provider || 'unknown'}`,
       `Provider configured: ${yesNo(status.send_configured || status.configured || status.credentials_configured)}`,
     ];
+    if (status.has_outbound) {
+      rows.push(`Latest SMS status: ${status.latest_sms_status || status.latest_send_status || 'unknown'}`);
+      if (status.latest_sms_destination_display || status.latest_sms_destination) {
+        rows.push(`Latest SMS destination: ${status.latest_sms_destination_display || formatPhoneDisplay(status.latest_sms_destination)}`);
+      }
+    } else if (status.empty_state_message) {
+      rows.push(status.empty_state_message);
+    }
     if (status.latest_error_message || status.latest_twilio_error_message) {
       rows.push(`Latest error: ${status.latest_error_message || status.latest_twilio_error_message}`);
     }
@@ -730,7 +913,10 @@
     const verifyNote = document.getElementById('sms-verification-block');
     if (!history || !placeholder) return;
     try {
-      const data = await fetchJson('/sms/messages', {cache: 'no-store'});
+      const phoneInput = document.querySelector('#sms-form input[name="phone_number"]');
+      const phone = phoneInput && phoneInput.value ? phoneInput.value.trim() : '';
+      const qs = phone ? `?phone_number=${encodeURIComponent(phone)}` : '';
+      const data = await fetchJson(`/sms/messages${qs}`, {cache: 'no-store'});
       if (!data) return;
       const statusPayload = data.provider_status || data.twilio_status || {};
       smsTollFreeVerified = !data.toll_free_verification_blocked && (
@@ -777,10 +963,13 @@
       }
       history.innerHTML = data.messages.map(msg => {
         const err = msg.error_message ? `<div class="call-meta">${escapeHtml(msg.error_message)}</div>` : '';
+        const phoneDisp = msg.phone_number_display || formatPhoneDisplay(msg.phone_number) || msg.phone_number;
+        const mid = msg.provider_message_id ? `<div class="call-meta">Message ID: ${escapeHtml(msg.provider_message_id)}</div>` : '';
         return `<div class="call-item">
           <strong>${escapeHtml(msg.lead_name || 'Lead')} - ${escapeHtml(msg.status)}</strong>
-          <div class="call-meta">${escapeHtml(msg.direction || 'outbound')} | ${escapeHtml(msg.phone_number)}</div>
+          <div class="call-meta">${escapeHtml(msg.direction || 'outbound')} | ${escapeHtml(phoneDisp)}</div>
           <div class="call-summary">${escapeHtml(msg.message_body || '')}</div>
+          ${mid}
           ${err}
         </div>`;
       }).join('');
@@ -1293,14 +1482,19 @@
     const label = document.getElementById('sms-send-label');
     const errEl = document.getElementById('sms-error');
     const compliance = document.getElementById('sms-compliance-confirmed');
-    errEl.style.display = 'none';
+    if (smsSendInFlight) return;
+    hideSmsError();
+    hideSmsSuccess();
     if (!compliance || !compliance.checked) {
       errEl.textContent = 'Certify contact SMS consent before sending.';
       errEl.style.display = 'block';
       return;
     }
+    smsSendInFlight = true;
     btn.disabled = true; spinner.style.display = 'block'; label.textContent = 'Sending...';
     const data = Object.fromEntries(new FormData(e.target).entries());
+    const preservedBody = data.message_body || '';
+    const preservedPhone = data.phone_number || '';
     data.compliance_confirmed = Boolean(data.compliance_confirmed);
     data.send_now = true;
     try {
@@ -1312,20 +1506,48 @@
       if (result && result.warning) {
         errEl.textContent = result.warning;
         errEl.style.display = 'block';
-      } else {
-        e.target.reset();
-        updateSmsCharCount();
       }
+      // Preserve generated message + destination; do not reset the form.
+      const bodyEl = document.getElementById('sms-message-body');
+      if (bodyEl && preservedBody) bodyEl.value = preservedBody;
+      const phoneEl = e.target.querySelector('input[name="phone_number"]');
+      if (phoneEl && preservedPhone) {
+        phoneEl.value = result && (result.to_number_display || result.to_number)
+          ? (result.to_number_display || formatPhoneDisplay(result.to_number) || preservedPhone)
+          : preservedPhone;
+      }
+      updateSmsCharCount();
+      hideSmsError();
+      if (result) {
+        showSmsSuccessNotice({
+          status: result.status || result.send_status || 'queued',
+          to_number: result.to_number || preservedPhone,
+          to_number_display: result.to_number_display || formatPhoneDisplay(result.to_number || preservedPhone),
+          provider_message_id: result.provider_message_id,
+          submitted_at: result.submitted_at || new Date().toISOString(),
+          delivered_at: result.delivered_at,
+          message_body: preservedBody,
+        });
+      }
+      label.textContent = 'Submitted';
+      spinner.style.display = 'none';
       await loadSmsData();
+      try { await refreshSmsProviderStatus(); } catch (_ignore) {}
+      startSmsStatusPolling();
+      setTimeout(() => {
+        smsSendInFlight = false;
+        label.textContent = 'Send SMS';
+        syncSmsSendEnabled();
+      }, 2500);
+      return;
     } catch (err) {
-      errEl.textContent = err.message;
-      errEl.style.display = 'block';
-      try {
-        const status = await fetchJson('/sms/status', {cache: 'no-store'});
-        if (status) renderProviderStatus(status);
-      } catch (_ignore) {}
+      hideSmsSuccess();
+      showSmsFailureNotice(err);
+      try { await refreshSmsProviderStatus(); } catch (_ignore) {}
     }
-    spinner.style.display = 'none'; label.textContent = 'Send SMS';
+    smsSendInFlight = false;
+    spinner.style.display = 'none';
+    label.textContent = 'Send SMS';
     syncSmsSendEnabled();
   });
 

@@ -190,6 +190,8 @@ def _handle_received(payload, *, app=None):
 
 
 def _handle_delivery(payload):
+    from sms_status_model import normalize_provider_status
+
     provider = TelnyxSMSProvider()
     event = provider.normalize_delivery_webhook(payload)
     pmid = event.get("provider_message_id")
@@ -199,20 +201,39 @@ def _handle_delivery(payload):
     if not row:
         return {"ok": True, "ignored": True}, 200
 
-    status = (event.get("status") or "unknown").lower()
-    mapped = {
-        "queued": "queued",
-        "sending": "submitted",
-        "sent": "sent",
-        "delivered": "delivered",
-        "delivery_failed": "delivery_failed",
-        "delivery_unconfirmed": "sent",
-        "sending_failed": "failed",
-        "expired": "expired",
-        "rejected": "rejected",
-    }.get(status, status)
-    db.update_sms_message_send_result(row["id"], status=mapped)
-    if mapped in {"failed", "delivery_failed", "rejected", "expired"} and row.get("lead_id"):
+    raw_status = (event.get("status") or "unknown").lower()
+    mapped = normalize_provider_status(
+        raw_status, event_type=event.get("raw_type")
+    )
+    # Idempotent: do not regress a terminal delivered state on late/duplicate events.
+    current = (row.get("status") or "").lower()
+    if current == "delivered" and mapped in {"queued", "sent", "submitted"}:
+        if event.get("event_id"):
+            tdb.mark_webhook_processed("telnyx", str(event["event_id"]), "processed")
+        return {"ok": True, "status": current, "duplicate_state": True}, 200
+
+    safe_error = None
+    if mapped in {"delivery_failed", "rejected", "provider_error", "failed", "expired"}:
+        detail = event.get("error_message")
+        code = event.get("error_code")
+        if code and detail:
+            safe_error = f"Telnyx error {code}: {str(detail)[:180]}"
+        elif code:
+            safe_error = f"Telnyx error {code}"
+        elif detail:
+            safe_error = f"SMS delivery failed: {str(detail)[:180]}"
+        else:
+            safe_error = "SMS delivery failed."
+
+    db.update_sms_message_send_result(
+        row["id"],
+        status=mapped,
+        error_message=safe_error,
+        failure_code=event.get("error_code"),
+        raw_provider_status=raw_status[:80] if raw_status else None,
+        provider_cost=event.get("cost"),
+    )
+    if mapped in {"failed", "delivery_failed", "rejected", "expired", "provider_error"} and row.get("lead_id"):
         crm_db.upsert_needs_attention(
             row["user_id"],
             row["lead_id"],
@@ -225,7 +246,11 @@ def _handle_delivery(payload):
             row["user_id"],
             "message_failed",
             lead_id=row.get("lead_id"),
-            metadata={"provider_message_id": pmid, "status": mapped},
+            metadata={
+                "provider_message_id": pmid,
+                "status": mapped,
+                "error_code": event.get("error_code"),
+            },
         )
     elif mapped == "delivered":
         tdb.append_sms_audit(

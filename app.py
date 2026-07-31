@@ -1005,6 +1005,24 @@ def start_voice_call():
     }), 201
 
 
+def _attach_latest_outbound_status(status_payload, user_id, *, lead_id=None, phone_number=None):
+    """Merge tenant-scoped latest outbound SMS diagnostics into status payload."""
+    from sms_status_model import latest_outbound_diagnostics
+
+    # Never trust a browser-supplied tenant id — always use session user_id.
+    latest_outbound = db.get_latest_outbound_sms(
+        user_id, lead_id=lead_id, phone_number=phone_number
+    )
+    diagnostics = latest_outbound_diagnostics(latest_outbound)
+    status_payload.update(diagnostics)
+    # Backward-compatible keys used by older UI snippets.
+    if diagnostics.get("has_outbound"):
+        status_payload["latest_send_status"] = diagnostics["latest_sms_status"]
+    else:
+        status_payload["latest_send_status"] = None
+    return status_payload
+
+
 @app.route("/sms/messages")
 @auth.subscription_required
 def sms_messages():
@@ -1030,6 +1048,7 @@ def sms_messages():
         is_sms_sending_enabled,
         is_telnyx_toll_free_verified,
     )
+    from sms_status_model import format_phone_display
 
     sending_enabled = bool(status.get("sms_sending_enabled", is_sms_sending_enabled()))
     status["sms_sending_enabled"] = sending_enabled
@@ -1041,6 +1060,15 @@ def sms_messages():
         (config.SMS_PROVIDER or "").lower() == "telnyx"
         and not is_telnyx_toll_free_verified()
     )
+    lead_id = request.args.get("lead_id", type=int)
+    phone_number = (request.args.get("phone_number") or "").strip() or None
+    _attach_latest_outbound_status(
+        status, user["id"], lead_id=lead_id, phone_number=phone_number
+    )
+    # Prefer latest outbound failure fields over the older failed-only query when present.
+    if status.get("has_outbound") and not status.get("latest_error_code"):
+        # Keep configuration_status error fields only when the latest attempt failed.
+        pass
     return jsonify({
         "send_configured": bool(status.get("send_configured", provider.is_configured())),
         "sms_sending_enabled": sending_enabled,
@@ -1052,6 +1080,22 @@ def sms_messages():
         "coach_configured": sms_coach.is_configured(),
         "sms_provider": status["sms_provider"],
         "provider_status": status,
+        "latest_outbound": {
+            k: status.get(k)
+            for k in (
+                "has_outbound",
+                "latest_sms_status",
+                "latest_sms_status_label",
+                "latest_sms_destination",
+                "latest_sms_destination_display",
+                "latest_sms_submitted_at",
+                "latest_sms_delivered_at",
+                "latest_sms_message_id",
+                "latest_telnyx_error_code",
+                "latest_correlation_id",
+                "empty_state_message",
+            )
+        },
         # Legacy key retained for older clients; UI prefers provider_status.
         "twilio_status": status if status.get("provider") == "twilio" else None,
         "messages": [
@@ -1061,13 +1105,18 @@ def sms_messages():
                 "persona_name": m.get("persona_name"),
                 "lead_name": m.get("lead_name"),
                 "phone_number": m.get("phone_number"),
+                "phone_number_display": format_phone_display(m.get("phone_number")),
                 "lead_type": m.get("lead_type"),
                 "direction": m.get("direction"),
                 "status": m.get("status"),
+                "provider_message_id": m.get("provider_message_id"),
                 "message_body": m.get("message_body"),
                 "error_message": m.get("error_message"),
                 "created_at": m.get("created_at"),
                 "sent_at": m.get("sent_at"),
+                "submitted_at": m.get("submitted_at"),
+                "delivered_at": m.get("delivered_at"),
+                "failed_at": m.get("failed_at"),
             }
             for m in messages
         ],
@@ -1077,7 +1126,7 @@ def sms_messages():
 @app.route("/sms/status")
 @auth.subscription_required
 def sms_status():
-    """Account-owner SMS configuration / latest send error (no secrets)."""
+    """Account-owner SMS configuration / latest outbound send diagnostics (no secrets)."""
     user = auth.get_current_user()
     provider = get_sms_provider()
     latest = db.latest_failed_sms_error(user["id"])
@@ -1103,12 +1152,11 @@ def sms_status():
         if payload.get("trial_mode")
         else None
     )
-    latest_outbound = None
-    for m in db.list_sms_messages(user["id"], limit=20) or []:
-        if (m.get("direction") or "outbound") == "outbound":
-            latest_outbound = m
-            break
-    payload["latest_send_status"] = (latest_outbound or {}).get("status") or "none"
+    lead_id = request.args.get("lead_id", type=int)
+    phone_number = (request.args.get("phone_number") or "").strip() or None
+    _attach_latest_outbound_status(
+        payload, user["id"], lead_id=lead_id, phone_number=phone_number
+    )
     # Never echo secrets even if misconfigured upstream.
     for secret_key in (
         "api_key",
