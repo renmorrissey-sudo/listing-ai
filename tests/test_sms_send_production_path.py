@@ -125,6 +125,39 @@ def test_existing_lead_touch_sms_upsert_uses_bind_bool(two_users, monkeypatch):
     assert lead2["phone_number"] == "+13038703107"
 
 
+def test_existing_lead_upsert_null_notes_true_and_false_touch(two_users):
+    """Regression e8471214e348: NULL notes bind must be TEXT-typed for Postgres."""
+    from lead_service import upsert_crm_lead
+
+    u1, _ = two_users
+    lid, created, _ = upsert_crm_lead(u1, "+13038703107", {"lead_name": "Pat"})
+    assert created is True
+
+    # Typical AI SMS compose: no notes/lead_context → notes=NULL on update.
+    lid2, created2, lead2 = upsert_crm_lead(
+        u1,
+        "+13038703107",
+        {"lead_name": "Pat", "lead_type": "buyer"},
+        touch_sms=True,
+    )
+    assert created2 is False
+    assert lid2 == lid
+    assert lead2["last_outbound_at"]
+
+    db.update_lead_contact_fields(
+        lid, u1, name="Pat", notes=None, touch_sms=False, touch_call=False
+    )
+    db.update_lead_contact_fields(
+        lid, u1, name="Pat", notes=None, touch_sms=True, touch_call=False
+    )
+    db.update_lead_contact_fields(
+        lid, u1, name="Pat", notes="Consent note", touch_sms=True, touch_call=True
+    )
+    lead = db.get_lead(lid, u1)
+    assert lead["notes"] == "Consent note"
+    assert lead["latest_call_at"]
+
+
 def test_verified_send_uses_telnyx_payload_and_saves_id(app_client, two_users, monkeypatch):
     u1, _ = two_users
     db.update_user_subscription(u1, "active")
