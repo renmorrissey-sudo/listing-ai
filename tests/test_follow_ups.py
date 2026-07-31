@@ -143,19 +143,22 @@ def test_follow_ups_appear_on_lead_detail_and_calendar(app_client, two_users):
 
 def test_timezone_local_date_bucketing(two_users):
     u1, _ = two_users
+    db.update_business_profile(u1, timezone="America/Denver")
     lead_id = _lead(u1)
-    # 2026-07-30 02:00 UTC is still 2026-07-29 evening in UTC-6.
+    # 2026-07-30 02:00 UTC is still 2026-07-29 evening in America/Denver.
     due = "2026-07-30T02:00:00+00:00"
     crm_db.set_lead_follow_up(u1, lead_id, due, "Evening call")
     items = crm_db.list_lead_follow_ups(u1, lead_id)
+    now = datetime(2026, 7, 30, 17, 0, tzinfo=timezone.utc)
+    groups_denver = crm_db.group_follow_ups_for_lead(
+        items, timezone_name="America/Denver", now=now, user_id=u1
+    )
     groups_utc = crm_db.group_follow_ups_for_lead(
-        items, local_date="2026-07-30", tz_offset_minutes=0
+        items, timezone_name="UTC", now=now, user_id=u1
     )
-    groups_mt = crm_db.group_follow_ups_for_lead(
-        items, local_date="2026-07-29", tz_offset_minutes=360
-    )
+    assert len(groups_denver["overdue"]) == 1
     assert len(groups_utc["today"]) == 1
-    assert len(groups_mt["today"]) == 1
+    assert crm_db._local_date_for_due(due, timezone_name="America/Denver") == "2026-07-29"
     assert crm_db._local_date_for_due(due, tz_offset_minutes=360) == "2026-07-29"
 
 
