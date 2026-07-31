@@ -172,6 +172,12 @@ class TelnyxSMSProvider(BaseSMSProvider):
             provider=self.name,
         )
 
+    @staticmethod
+    def _normalize_e164(phone: str | None) -> str:
+        from lead_service import normalize_phone_e164
+
+        return normalize_phone_e164(phone or "")
+
     def send_message(
         self,
         *,
@@ -184,10 +190,22 @@ class TelnyxSMSProvider(BaseSMSProvider):
         err = self.config_error()
         if err:
             raise SmsProviderError(err, provider=self.name)
-        from_num = from_number or self.phone_number
+        to_num = self._normalize_e164(to_number)
+        if not to_num:
+            raise SmsProviderError(
+                "Enter a valid destination phone number (10-digit US or E.164).",
+                provider=self.name,
+            )
+        from_num = self._normalize_e164(from_number or self.phone_number)
+        text = (body or "").strip()
+        if not text:
+            raise SmsProviderError("SMS message body is empty.", provider=self.name)
+        # Never authenticate outbound API calls with the webhook public key.
+        if not (self.api_key or "").strip():
+            raise SmsProviderError("Telnyx API key is not configured.", provider=self.name)
         payload = {
-            "to": to_number,
-            "text": body,
+            "to": to_num,
+            "text": text,
             "type": "SMS",
         }
         if from_num:
@@ -206,6 +224,13 @@ class TelnyxSMSProvider(BaseSMSProvider):
             payload["webhook_url"] = status_callback
             payload["use_profile_webhooks"] = True
 
+        logger.info(
+            "Telnyx outbound request endpoint=%s/messages from=%s to=%s has_profile=%s",
+            self.api_base,
+            from_num or None,
+            to_num,
+            bool(payload.get("messaging_profile_id")),
+        )
         result, _status = self._request("POST", "/messages", payload)
         data = result.get("data") or result
         provider_message_id = data.get("id")
@@ -219,7 +244,7 @@ class TelnyxSMSProvider(BaseSMSProvider):
             "status": (data.get("to") or [{}])[0].get("status")
             if isinstance(data.get("to"), list) and data.get("to")
             else data.get("status") or "queued",
-            "to": to_number,
+            "to": to_num,
             "from": from_num,
             "segments": (data.get("parts") or data.get("encoding") or {}).get("parts")
             if isinstance(data.get("parts"), dict)
