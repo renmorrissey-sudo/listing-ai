@@ -2729,9 +2729,14 @@ def filter_leads(
                 sql += " AND l.sms_consent_status = ?"
                 params.append(sms_consent_status)
         if sms_sending_blocked is not None:
-            blocked = 1 if sms_sending_blocked in (True, 1, "1", "true") else 0
-            sql += " AND COALESCE(l.sms_sending_blocked, 1) = ?"
-            params.append(blocked)
+            from db_backend import sql_is_true
+
+            blocked = sms_sending_blocked in (True, 1, "1", "true", "yes")
+            if blocked:
+                sql += f" AND {sql_is_true('l.sms_sending_blocked')}"
+            else:
+                # Portable "not blocked" across Postgres BOOLEAN and SQLite 0/1.
+                sql += f" AND NOT ({sql_is_true('l.sms_sending_blocked')})"
         if pond_status:
             sql += " AND l.pond_status = ?"
             params.append(pond_status)

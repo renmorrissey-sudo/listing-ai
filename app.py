@@ -176,10 +176,18 @@ def handle_unexpected_exception(error):
             ),
             500,
         )
-    return jsonify({
+    payload = {
         "error": "Something went wrong. Please try again.",
         "correlation_id": correlation_id,
-    }), 500
+    }
+    if request.path.startswith("/sms/"):
+        payload["stage"] = "database"
+        payload["error_category"] = "unhandled_exception"
+        payload["error"] = (
+            "TopAI could not complete the SMS request. "
+            f"Reference: {correlation_id}."
+        )
+    return jsonify(payload), 500
 
 
 def build_listing_prompt(data):
@@ -1353,23 +1361,57 @@ def send_sms_message():
     data = request.get_json(silent=True)
     cleaned, error = validate_sms_send_payload(data)
     if error:
-        return jsonify({"error": error}), 400
+        return jsonify({
+            "error": error,
+            "stage": "validation",
+            "error_category": "validation",
+            "to_number": (data or {}).get("phone_number"),
+        }), 400
 
     persona = db.get_voice_persona(cleaned["persona_id"], user["id"])
     if not persona:
-        return jsonify({"error": "Selected persona was not found."}), 404
+        return jsonify({
+            "error": "Selected persona was not found.",
+            "stage": "validation",
+            "error_category": "not_found",
+        }), 404
 
-    from lead_service import SMS_SOURCE
+    from lead_service import SMS_SOURCE, normalize_phone_e164
     from sms_outbound import send_authorized_sms
 
-    lead_id, _created, _lead = upsert_crm_lead(
-        user["id"],
-        cleaned["phone_number"],
-        cleaned,
-        source=SMS_SOURCE,
-        touch_sms=True,
-        assigned_user_id=user["id"],
-    )
+    normalized_to = normalize_phone_e164(cleaned["phone_number"])
+    cleaned["phone_number"] = normalized_to
+    try:
+        lead_id, _created, _lead = upsert_crm_lead(
+            user["id"],
+            normalized_to,
+            cleaned,
+            source=SMS_SOURCE,
+            touch_sms=True,
+            assigned_user_id=user["id"],
+        )
+    except Exception:
+        import uuid as _uuid
+
+        correlation_id = _uuid.uuid4().hex[:12]
+        logger.exception(
+            "SMS lead upsert failed correlation_id=%s user_id=%s to=%s",
+            correlation_id,
+            user["id"],
+            normalized_to,
+        )
+        return jsonify({
+            "error": (
+                "TopAI could not prepare the SMS send. "
+                f"Reference: {correlation_id}."
+            ),
+            "stage": "database",
+            "error_category": "database_error",
+            "correlation_id": correlation_id,
+            "to_number": normalized_to,
+            "send_status": "failed",
+        }), 500
+
     provider = get_sms_provider()
     if not cleaned.get("send_now"):
         message_id = db.create_sms_message(
@@ -1391,6 +1433,7 @@ def send_sms_message():
             "lead_id": lead_id,
             "status": "draft",
             "message_body": cleaned["message_body"],
+            "to_number": normalized_to,
             "send_configured": provider.is_configured(),
             "sms_sending_enabled": is_sms_sending_enabled(),
         }), 201
@@ -1399,7 +1442,13 @@ def send_sms_message():
 
     toll_ok, toll_err = check_telnyx_toll_free_send_allowed()
     if not toll_ok:
-        return jsonify({"error": toll_err}), 403
+        return jsonify({
+            "error": toll_err,
+            "stage": "validation",
+            "error_category": "toll_free_verification",
+            "to_number": normalized_to,
+            "send_status": "failed",
+        }), 403
 
     result, err, status = send_authorized_sms(
         user["id"],
@@ -1410,9 +1459,16 @@ def send_sms_message():
         persona_id=persona["id"],
     )
     if err:
-        return jsonify({"error": err, **(result or {})}), status
+        body = {"error": err, **(result or {})}
+        body.setdefault("to_number", normalized_to)
+        return jsonify(body), status
     db.record_tool_usage(user["id"], "ai_sms", "sent")
-    return jsonify({**result, "send_configured": True, "sms_sending_enabled": True}), status
+    return jsonify({
+        **result,
+        "send_configured": True,
+        "sms_sending_enabled": True,
+        "to_number": (result or {}).get("to_number") or normalized_to,
+    }), status
 
 
 @app.route("/sms/test", methods=["POST"])

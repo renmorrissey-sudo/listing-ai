@@ -2,7 +2,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import config
-from db_backend import connect as backend_connect
+from db_backend import bind_bool, connect as backend_connect
 
 
 def _connect():
@@ -662,6 +662,10 @@ def update_lead_contact_fields(
         new_status = lead["status"]
         if bump_status_from_new_to and (lead["status"] or "new") == "new":
             new_status = bump_status_from_new_to
+        # Postgres CASE WHEN requires a boolean expression. Binding SQLite-style
+        # integers (1/0) raises: "argument of CASE/WHEN must be type boolean".
+        touch_contact = bind_bool(touch_call or touch_sms)
+        touch_call_flag = bind_bool(touch_call)
         conn.execute(
             """
             UPDATE leads
@@ -686,11 +690,11 @@ def update_lead_contact_fields(
                 notes,
                 notes,
                 new_status,
-                1 if (touch_call or touch_sms) else 0,
+                touch_contact,
                 now,
-                1 if touch_call else 0,
+                touch_call_flag,
                 now,
-                1 if (touch_call or touch_sms) else 0,
+                touch_contact,
                 now,
                 now,
                 lead_id,
@@ -1021,7 +1025,7 @@ def clear_lead_sms_opt_out(lead_id, user_id):
                     ELSE consent_status
                 END,
                 sms_consent_status = 'unverified',
-                sms_sending_blocked = 1,
+                sms_sending_blocked = ?,
                 status = CASE
                     WHEN status = 'do_not_contact' THEN 'contacted'
                     ELSE status
@@ -1030,7 +1034,7 @@ def clear_lead_sms_opt_out(lead_id, user_id):
                 updated_at = ?
             WHERE id = ? AND user_id = ?
             """,
-            (now, lead_id, user_id),
+            (bind_bool(True), now, lead_id, user_id),
         )
 
 
