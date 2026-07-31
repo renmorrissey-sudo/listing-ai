@@ -297,13 +297,13 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
     needs = [n for n in crm_db.list_needs_attention(user["id"]) if n.get("lead_id") == lead_id]
     messages = db.list_lead_messages(user["id"], lead_id)
     follow_ups = crm_db.list_lead_follow_ups(user["id"], lead_id, include_completed=True)
-    local_date = (request.args.get("local_date") or "").strip()[:10] or None
-    try:
-        tz_offset = int(request.args.get("tz_offset_minutes"))
-    except (TypeError, ValueError):
-        tz_offset = None
+    user_timezone = db.get_user_timezone(user["id"])
+    windows = crm_db._follow_up_windows(user["id"], timezone_name=user_timezone)
     follow_up_groups = crm_db.group_follow_ups_for_lead(
-        follow_ups, local_date=local_date, tz_offset_minutes=tz_offset
+        follow_ups,
+        timezone_name=user_timezone,
+        windows=windows,
+        user_id=user["id"],
     )
     next_follow_up = None
     for key in ("overdue", "today", "upcoming"):
@@ -640,16 +640,23 @@ def api_lead_activities(lead_id):
 def api_set_follow_up(lead_id):
     user = auth.get_current_user()
     if request.method == "GET":
-        local_date = (request.args.get("local_date") or "").strip()[:10] or None
-        try:
-            tz_offset = int(request.args.get("tz_offset_minutes"))
-        except (TypeError, ValueError):
-            tz_offset = None
+        user_timezone = db.get_user_timezone(user["id"])
+        windows = crm_db._follow_up_windows(user["id"], timezone_name=user_timezone)
         items = crm_db.list_lead_follow_ups(user["id"], lead_id, include_completed=True)
         groups = crm_db.group_follow_ups_for_lead(
-            items, local_date=local_date, tz_offset_minutes=tz_offset
+            items,
+            timezone_name=user_timezone,
+            windows=windows,
+            user_id=user["id"],
         )
-        return jsonify({"follow_ups": items, "groups": groups})
+        return jsonify(
+            {
+                "follow_ups": items,
+                "groups": groups,
+                "timezone": user_timezone,
+                "local_date": windows.local_date,
+            }
+        )
 
     data = request.get_json(silent=True) or {}
     due_at = data.get("due_at")
@@ -740,25 +747,31 @@ def api_dismiss_follow_up(lead_id):
 def api_list_follow_ups():
     user = auth.get_current_user()
     bucket = (request.args.get("bucket") or "all").strip()
-    local_date = (request.args.get("local_date") or "").strip()[:10] or None
-    try:
-        tz_offset = int(request.args.get("tz_offset_minutes"))
-    except (TypeError, ValueError):
-        tz_offset = None
+    user_timezone = db.get_user_timezone(user["id"])
+    windows = crm_db._follow_up_windows(user["id"], timezone_name=user_timezone)
     start_at = (request.args.get("start_at") or "").strip() or None
     end_at = (request.args.get("end_at") or "").strip() or None
     items = crm_db.list_follow_ups(
         user["id"],
         bucket=bucket,
-        local_date=local_date,
-        tz_offset_minutes=tz_offset,
         start_at=start_at,
         end_at=end_at,
+        timezone_name=user_timezone,
+        windows=windows,
     )
     counts = crm_db.follow_up_dashboard_counts(
-        user["id"], local_date=local_date, tz_offset_minutes=tz_offset
+        user["id"],
+        timezone_name=user_timezone,
+        windows=windows,
     )
-    return jsonify({"follow_ups": items, "counts": counts})
+    return jsonify(
+        {
+            "follow_ups": items,
+            "counts": counts,
+            "timezone": user_timezone,
+            "local_date": windows.local_date,
+        }
+    )
 
 
 @crm_bp.route("/api/crm/follow-ups/<int:follow_up_id>", methods=["GET", "PATCH"])
@@ -835,11 +848,8 @@ def crm_follow_ups_page():
     user = _user_or_redirect()
     if not user:
         return redirect(url_for("subscriber_app"))
-    local_date = (request.args.get("local_date") or "").strip()[:10] or None
-    try:
-        tz_offset = int(request.args.get("tz_offset_minutes"))
-    except (TypeError, ValueError):
-        tz_offset = None
+    user_timezone = db.get_user_timezone(user["id"])
+    windows = crm_db._follow_up_windows(user["id"], timezone_name=user_timezone)
     view = (request.args.get("view") or "agenda").strip().lower()
     if view not in {"agenda", "month", "week"}:
         view = "agenda"
@@ -853,15 +863,18 @@ def crm_follow_ups_page():
     if range_key in {"today", "overdue", "this_week"} and (
         not status or status in {"open", "pending"}
     ):
-        # Same query path as dashboard Pipeline cards.
+        # Same query path as dashboard Pipeline cards and summary counts.
         ranged = crm_db.list_follow_ups_for_dashboard_range(
             user["id"],
             range_key,
-            local_date=local_date,
-            tz_offset_minutes=tz_offset,
+            timezone_name=user_timezone,
+            windows=windows,
         )
         groups = crm_db.group_follow_ups_for_lead(
-            ranged, local_date=local_date, tz_offset_minutes=tz_offset
+            ranged,
+            timezone_name=user_timezone,
+            windows=windows,
+            user_id=user["id"],
         )
         follow_ups = ranged
     else:
@@ -869,45 +882,22 @@ def crm_follow_ups_page():
             user["id"],
             bucket="all",
             limit=500,
-            local_date=local_date,
-            tz_offset_minutes=tz_offset,
+            timezone_name=user_timezone,
+            windows=windows,
         )
         if status == "open":
             follow_ups = [f for f in follow_ups if f.get("status") == "pending"]
         groups = crm_db.group_follow_ups_for_lead(
-            follow_ups, local_date=local_date, tz_offset_minutes=tz_offset
+            follow_ups,
+            timezone_name=user_timezone,
+            windows=windows,
+            user_id=user["id"],
         )
-        if range_key == "today":
-            groups = {
-                "overdue": [],
-                "today": groups["today"],
-                "upcoming": [],
-                "completed": [],
-                "cancelled": [],
-            }
-            follow_ups = groups["today"]
-        elif range_key == "overdue":
-            groups = {
-                "overdue": groups["overdue"],
-                "today": [],
-                "upcoming": [],
-                "completed": [],
-                "cancelled": [],
-            }
-            follow_ups = groups["overdue"]
-        elif range_key == "this_week":
-            follow_ups = crm_db.list_follow_ups_for_dashboard_range(
-                user["id"],
-                "this_week",
-                local_date=local_date,
-                tz_offset_minutes=tz_offset,
-            )
-            groups = crm_db.group_follow_ups_for_lead(
-                follow_ups, local_date=local_date, tz_offset_minutes=tz_offset
-            )
 
     counts = crm_db.follow_up_dashboard_counts(
-        user["id"], local_date=local_date, tz_offset_minutes=tz_offset
+        user["id"],
+        timezone_name=user_timezone,
+        windows=windows,
     )
     active_filter = None
     if range_key == "today":
@@ -925,12 +915,12 @@ def crm_follow_ups_page():
         priorities=PRIORITIES,
         follow_up_cancel_reasons=FOLLOW_UP_CANCEL_REASONS,
         cancel_reason_label=cancel_reason_label,
-        local_date=local_date or "",
+        local_date=windows.local_date,
         range_filter=range_key or "",
         status_filter=status or "",
         active_filter=active_filter,
         result_count=len(follow_ups),
-        user_timezone=db.get_user_timezone(user["id"]),
+        user_timezone=user_timezone,
         **_nav_context(user, "follow-ups"),
     )
 
@@ -981,19 +971,19 @@ def api_calendar_events():
         include_cancelled=include_cancelled,
         include_completed=include_completed,
     )
-    local_date = (request.args.get("local_date") or "").strip()[:10] or None
-    try:
-        tz_offset = int(request.args.get("tz_offset_minutes"))
-    except (TypeError, ValueError):
-        tz_offset = None
+    user_timezone = db.get_user_timezone(user["id"])
+    windows = crm_db._follow_up_windows(user["id"], timezone_name=user_timezone)
     summary = crm_db.calendar_summary(
-        user["id"], local_date=local_date, tz_offset_minutes=tz_offset
+        user["id"],
+        timezone_name=user_timezone,
+        windows=windows,
     )
     return jsonify(
         {
             "events": events,
             "summary": summary,
-            "timezone": db.get_user_timezone(user["id"]),
+            "timezone": user_timezone,
+            "local_date": windows.local_date,
         }
     )
 
@@ -1003,11 +993,9 @@ def crm_leads_calendar_page():
     user = _user_or_redirect()
     if not user:
         return redirect(url_for("subscriber_app"))
-    local_date = (request.args.get("local_date") or "").strip()[:10] or None
-    try:
-        tz_offset = int(request.args.get("tz_offset_minutes"))
-    except (TypeError, ValueError):
-        tz_offset = None
+    user_timezone = db.get_user_timezone(user["id"])
+    windows = crm_db._follow_up_windows(user["id"], timezone_name=user_timezone)
+    local_date = (request.args.get("local_date") or "").strip()[:10] or windows.local_date
     view = (request.args.get("view") or "month").strip().lower()
     if view not in {"month", "week", "day", "agenda"}:
         view = "month"
@@ -1027,12 +1015,12 @@ def crm_leads_calendar_page():
         request.args.get("range"),
         "today" if date_arg == "today" else date_arg,
     )
-    day = local_date or None
+    day = local_date or windows.local_date
     start_at = end_at = None
     if range_key == "today":
-        day = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        start_at = f"{day}T00:00:00"
-        end_at = f"{day}T23:59:59"
+        day = day or windows.local_date
+        start_at = windows.start_today_utc.isoformat()
+        end_at = (windows.start_tomorrow_utc - timedelta(microseconds=1)).isoformat()
         view = "agenda"
     event_types = [t.strip() for t in event_type.split(",") if t.strip()] or None
     # Dashboard "Appointments today" includes appointment-family event types.
@@ -1078,7 +1066,9 @@ def crm_leads_calendar_page():
             for a in appts
         ]
     summary = crm_db.calendar_summary(
-        user["id"], local_date=local_date, tz_offset_minutes=tz_offset
+        user["id"],
+        timezone_name=user_timezone,
+        windows=windows,
     )
     active_filter = None
     if range_key == "today" and event_type == "appointment":
@@ -1095,10 +1085,10 @@ def crm_leads_calendar_page():
         priorities=PRIORITIES,
         follow_up_cancel_reasons=FOLLOW_UP_CANCEL_REASONS,
         common_timezones=COMMON_TIMEZONES,
-        user_timezone=db.get_user_timezone(user["id"]),
+        user_timezone=user_timezone,
         include_cancelled=include_cancelled,
         include_completed=include_completed,
-        local_date=local_date or "",
+        local_date=local_date or windows.local_date,
         range_filter=range_key or "",
         event_type_filter=event_type or "",
         active_filter=active_filter,
@@ -1435,8 +1425,22 @@ def api_pipeline():
         since = (now - timedelta(days=30)).isoformat()
     elif range_key == "custom":
         since = (request.args.get("since") or "").strip() or None
-    metrics = crm_db.get_pipeline_metrics(user["id"], since_iso=since)
-    return jsonify({"metrics": metrics, "range": range_key})
+    user_timezone = db.get_user_timezone(user["id"])
+    windows = crm_db._follow_up_windows(user["id"], timezone_name=user_timezone)
+    metrics = crm_db.get_pipeline_metrics(
+        user["id"],
+        since_iso=since,
+        timezone_name=user_timezone,
+        windows=windows,
+    )
+    return jsonify(
+        {
+            "metrics": metrics,
+            "range": range_key,
+            "timezone": user_timezone,
+            "local_date": windows.local_date,
+        }
+    )
 
 
 @crm_bp.route("/api/crm/insights/<int:insight_id>/approve-status", methods=["POST"])

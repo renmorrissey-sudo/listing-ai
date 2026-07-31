@@ -191,9 +191,16 @@ def test_destination_count_matches_dashboard(app_client, two_users):
 
 def test_follow_up_task_appointment_counts_match_lists(app_client, two_users):
     u1, _ = two_users
+    db.update_business_profile(u1, timezone="UTC")
     day = _today()
     lead_id = _lead(u1)
-    crm_db.set_lead_follow_up(u1, lead_id, f"{day}T16:00:00+00:00", "Today FU")
+    # Later today in UTC so it remains in the this-week window (now <= due).
+    later = (datetime.now(timezone.utc) + timedelta(hours=2)).replace(microsecond=0)
+    if later.strftime("%Y-%m-%d") != day:
+        later = datetime.now(timezone.utc).replace(
+            hour=23, minute=30, second=0, microsecond=0
+        )
+    crm_db.set_lead_follow_up(u1, lead_id, later.isoformat(), "Today FU")
     overdue = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
     crm_db.set_lead_follow_up(
         u1, _lead(u1, name="Old"), overdue, "Overdue FU", replace_existing=False
@@ -214,15 +221,15 @@ def test_follow_up_task_appointment_counts_match_lists(app_client, two_users):
         },
     )
 
-    metrics = crm_db.get_pipeline_metrics(u1, local_date=day, tz_offset_minutes=0)
+    metrics = crm_db.get_pipeline_metrics(u1, timezone_name="UTC")
     today_fu = crm_db.list_follow_ups_for_dashboard_range(
-        u1, "today", local_date=day, tz_offset_minutes=0
+        u1, "today", timezone_name="UTC"
     )
     overdue_fu = crm_db.list_follow_ups_for_dashboard_range(
-        u1, "overdue", local_date=day, tz_offset_minutes=0
+        u1, "overdue", timezone_name="UTC"
     )
     week_fu = crm_db.list_follow_ups_for_dashboard_range(
-        u1, "this_week", local_date=day, tz_offset_minutes=0
+        u1, "this_week", timezone_name="UTC"
     )
     assert metrics["follow_ups_due_today"] == len(today_fu)
     assert metrics["overdue_follow_ups"] == len(overdue_fu)
@@ -234,9 +241,9 @@ def test_follow_up_task_appointment_counts_match_lists(app_client, two_users):
 
     _login(app_client, u1)
     for path, count in [
-        (f"/crm/follow-ups?due=today&local_date={day}&tz_offset_minutes=0", metrics["follow_ups_due_today"]),
-        (f"/crm/follow-ups?due=overdue&local_date={day}&tz_offset_minutes=0", metrics["overdue_follow_ups"]),
-        (f"/crm/follow-ups?due=this-week&local_date={day}&tz_offset_minutes=0", metrics["follow_ups_due_this_week"]),
+        ("/crm/follow-ups?due=today", metrics["follow_ups_due_today"]),
+        ("/crm/follow-ups?due=overdue", metrics["overdue_follow_ups"]),
+        ("/crm/follow-ups?due=this-week", metrics["follow_ups_due_this_week"]),
         (f"/crm/tasks?due=today&local_date={day}", metrics["tasks_due_today"]),
         (f"/crm/calendar?date=today&event_type=appointment&local_date={day}", metrics["appointments_today"]),
     ]:

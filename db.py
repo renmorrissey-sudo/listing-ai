@@ -662,9 +662,13 @@ def update_lead_contact_fields(
         new_status = lead["status"]
         if bump_status_from_new_to and (lead["status"] or "new") == "new":
             new_status = bump_status_from_new_to
-        # Postgres CASE WHEN requires boolean binds — integers (0/1) raise DatatypeMismatch.
+        # Postgres CASE WHEN requires a boolean expression. Binding SQLite-style
+        # integers (1/0) raises: "argument of CASE/WHEN must be type boolean".
         touch_contact = bind_bool(touch_call or touch_sms)
         touch_call_flag = bind_bool(touch_call)
+        # CAST notes binds as TEXT: Postgres cannot infer the type of a bare
+        # NULL parameter in `? IS NOT NULL` (IndeterminateDatatype). SQLite
+        # accepts either form; SMS upsert often passes notes=NULL.
         conn.execute(
             """
             UPDATE leads
@@ -672,7 +676,8 @@ def update_lead_contact_fields(
                 lead_type = COALESCE(?, lead_type),
                 property_interest = COALESCE(?, property_interest),
                 notes = CASE
-                    WHEN ? IS NOT NULL AND (notes IS NULL OR notes = '') THEN ?
+                    WHEN CAST(? AS TEXT) IS NOT NULL
+                         AND (notes IS NULL OR notes = '') THEN CAST(? AS TEXT)
                     ELSE notes
                 END,
                 status = ?,
@@ -1024,7 +1029,7 @@ def clear_lead_sms_opt_out(lead_id, user_id):
                     ELSE consent_status
                 END,
                 sms_consent_status = 'unverified',
-                sms_sending_blocked = 1,
+                sms_sending_blocked = ?,
                 status = CASE
                     WHEN status = 'do_not_contact' THEN 'contacted'
                     ELSE status
@@ -1033,7 +1038,7 @@ def clear_lead_sms_opt_out(lead_id, user_id):
                 updated_at = ?
             WHERE id = ? AND user_id = ?
             """,
-            (now, lead_id, user_id),
+            (bind_bool(True), now, lead_id, user_id),
         )
 
 
@@ -1674,38 +1679,14 @@ def get_dashboard_metrics(user_id):
             "SELECT COUNT(*) AS count FROM lead_insights WHERE user_id = ? AND status = 'pending'",
             (user_id,),
         ).fetchone()["count"]
-        follow_ups_due = conn.execute(
-            """
-            SELECT COUNT(*) AS count FROM lead_follow_ups
-            WHERE user_id = ? AND status = 'pending' AND due_at <= ?
-            """,
-            (user_id, now.isoformat()),
-        ).fetchone()["count"]
-        today = now.strftime("%Y-%m-%d")
-        week_end = (now + timedelta(days=7)).isoformat()
-        follow_ups_due_today = conn.execute(
-            """
-            SELECT COUNT(*) AS count FROM lead_follow_ups
-            WHERE user_id = ? AND status = 'pending'
-              AND substr(due_at, 1, 10) = ?
-            """,
-            (user_id, today),
-        ).fetchone()["count"]
-        follow_ups_overdue = conn.execute(
-            """
-            SELECT COUNT(*) AS count FROM lead_follow_ups
-            WHERE user_id = ? AND status = 'pending' AND due_at < ?
-            """,
-            (user_id, now.isoformat()),
-        ).fetchone()["count"]
-        follow_ups_due_this_week = conn.execute(
-            """
-            SELECT COUNT(*) AS count FROM lead_follow_ups
-            WHERE user_id = ? AND status = 'pending'
-              AND due_at >= ? AND due_at < ?
-            """,
-            (user_id, now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat(), week_end),
-        ).fetchone()["count"]
+        # Shared account-timezone classification (same as Follow-ups / Pipeline).
+        import crm_db
+
+        fu_counts = crm_db.follow_up_dashboard_counts(user_id)
+        follow_ups_due_today = fu_counts["follow_ups_due_today"]
+        follow_ups_overdue = fu_counts["follow_ups_overdue"]
+        follow_ups_due_this_week = fu_counts["follow_ups_due_this_week"]
+        follow_ups_due = follow_ups_due_today + follow_ups_overdue
         recent_leads = conn.execute(
             """
             SELECT id, name, phone_number, status, next_action, follow_up_at, next_follow_up_at, updated_at

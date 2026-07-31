@@ -473,7 +473,10 @@
     if (!res.ok) {
       let msg = data.error || data.message || 'Something went wrong. Please try again.';
       if (data.correlation_id && !String(msg).includes(data.correlation_id)) {
-        msg = `${msg} (ref: ${data.correlation_id})`;
+        msg = `${msg} Reference: ${data.correlation_id}.`;
+      }
+      if (data.stage && data.to_number && !String(msg).toLowerCase().includes('reference')) {
+        // Keep destination visible for send failures without leaking secrets.
       }
       const err = new Error(msg);
       err.providerCode = data.provider_code;

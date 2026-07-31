@@ -3,7 +3,7 @@ import secrets
 
 import stripe
 from anthropic import Anthropic
-from flask import Flask, flash, g, jsonify, redirect, render_template, request, url_for
+from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.exceptions import HTTPException
@@ -130,7 +130,7 @@ def handle_http_exception(error):
 def handle_unexpected_exception(error):
     import uuid as _uuid
 
-    correlation_id = getattr(g, "sms_correlation_id", None) or _uuid.uuid4().hex[:12]
+    correlation_id = _uuid.uuid4().hex[:12]
     logger.exception("Unhandled error correlation_id=%s: %s", correlation_id, error)
     # Public HTML forms should not receive opaque JSON 500s.
     if request.path == "/sms-consent" and request.method == "POST":
@@ -176,10 +176,18 @@ def handle_unexpected_exception(error):
             ),
             500,
         )
-    return jsonify({
+    payload = {
         "error": "Something went wrong. Please try again.",
         "correlation_id": correlation_id,
-    }), 500
+    }
+    if request.path.startswith("/sms/"):
+        payload["stage"] = "database"
+        payload["error_category"] = "unhandled_exception"
+        payload["error"] = (
+            "TopAI could not complete the SMS request. "
+            f"Reference: {correlation_id}."
+        )
+    return jsonify(payload), 500
 
 
 def build_listing_prompt(data):
@@ -1349,69 +1357,61 @@ def generate_sms():
 @auth.subscription_required
 @limiter.limit(lambda: f"{config.SMS_DAILY_LIMIT} per day", key_func=_user_rate_limit_key)
 def send_sms_message():
-    from sms_send_diagnostics import (
-        log_attempt,
-        new_attempt,
-        public_fields,
-        set_stage,
-    )
-
     user = auth.get_current_user()
-    diag = new_attempt(source_page="ai_sms_compose")
-    g.sms_correlation_id = diag["correlation_id"]
     data = request.get_json(silent=True)
     cleaned, error = validate_sms_send_payload(data)
     if error:
-        set_stage(diag, "validation", error="payload_invalid")
-        log_attempt(diag, level=logging.WARNING, extra=error)
-        return jsonify({"error": error, **public_fields(diag)}), 400
-
-    set_stage(
-        diag,
-        "validation",
-        normalized_destination=cleaned["phone_number"],
-        provider=(config.SMS_PROVIDER or "").lower(),
-    )
-    log_attempt(diag)
+        return jsonify({
+            "error": error,
+            "stage": "validation",
+            "error_category": "validation",
+            "to_number": (data or {}).get("phone_number"),
+        }), 400
 
     persona = db.get_voice_persona(cleaned["persona_id"], user["id"])
     if not persona:
-        set_stage(diag, "validation", error="persona_not_found")
-        log_attempt(diag, level=logging.WARNING)
-        return jsonify({"error": "Selected persona was not found.", **public_fields(diag)}), 404
+        return jsonify({
+            "error": "Selected persona was not found.",
+            "stage": "validation",
+            "error_category": "not_found",
+        }), 404
 
-    from lead_service import SMS_SOURCE
+    from lead_service import SMS_SOURCE, normalize_phone_e164
     from sms_outbound import send_authorized_sms
 
-    set_stage(diag, "lead_upsert", normalized_destination=cleaned["phone_number"])
+    normalized_to = normalize_phone_e164(cleaned["phone_number"])
+    cleaned["phone_number"] = normalized_to
     try:
         lead_id, _created, _lead = upsert_crm_lead(
             user["id"],
-            cleaned["phone_number"],
+            normalized_to,
             cleaned,
             source=SMS_SOURCE,
             touch_sms=True,
             assigned_user_id=user["id"],
         )
     except Exception:
+        import uuid as _uuid
+
+        correlation_id = _uuid.uuid4().hex[:12]
         logger.exception(
-            "SMS lead_upsert failed before provider call correlation_id=%s to=%s",
-            diag.get("correlation_id"),
-            cleaned.get("phone_number"),
+            "SMS lead upsert failed correlation_id=%s user_id=%s to=%s",
+            correlation_id,
+            user["id"],
+            normalized_to,
         )
-        set_stage(
-            diag,
-            "lead_upsert",
-            reached_provider=False,
-            error="lead_upsert_failed",
-        )
-        log_attempt(diag, level=logging.ERROR)
         return jsonify({
-            "error": "SMS could not be sent due to an internal application error.",
-            **public_fields(diag),
+            "error": (
+                "TopAI could not prepare the SMS send. "
+                f"Reference: {correlation_id}."
+            ),
+            "stage": "database",
+            "error_category": "database_error",
+            "correlation_id": correlation_id,
+            "to_number": normalized_to,
+            "send_status": "failed",
         }), 500
 
-    set_stage(diag, "lead_upsert", lead_id=lead_id)
     provider = get_sms_provider()
     if not cleaned.get("send_now"):
         message_id = db.create_sms_message(
@@ -1433,18 +1433,22 @@ def send_sms_message():
             "lead_id": lead_id,
             "status": "draft",
             "message_body": cleaned["message_body"],
+            "to_number": normalized_to,
             "send_configured": provider.is_configured(),
             "sms_sending_enabled": is_sms_sending_enabled(),
-            **public_fields(diag),
         }), 201
 
     from sms_authorization import check_telnyx_toll_free_send_allowed
 
     toll_ok, toll_err = check_telnyx_toll_free_send_allowed()
     if not toll_ok:
-        set_stage(diag, "toll_free", error="toll_free_not_verified")
-        log_attempt(diag, level=logging.WARNING)
-        return jsonify({"error": toll_err, **public_fields(diag)}), 403
+        return jsonify({
+            "error": toll_err,
+            "stage": "validation",
+            "error_category": "toll_free_verification",
+            "to_number": normalized_to,
+            "send_status": "failed",
+        }), 403
 
     result, err, status = send_authorized_sms(
         user["id"],
@@ -1453,17 +1457,17 @@ def send_sms_message():
         source_page="ai_sms_compose",
         compliance_confirmed=True,
         persona_id=persona["id"],
-        correlation_id=diag["correlation_id"],
-        diagnostics=diag,
     )
     if err:
-        return jsonify({"error": err, **(result or {}), **public_fields(diag)}), status
+        body = {"error": err, **(result or {})}
+        body.setdefault("to_number", normalized_to)
+        return jsonify(body), status
     db.record_tool_usage(user["id"], "ai_sms", "sent")
     return jsonify({
         **result,
         "send_configured": True,
         "sms_sending_enabled": True,
-        **public_fields(diag),
+        "to_number": (result or {}).get("to_number") or normalized_to,
     }), status
 
 
@@ -1957,22 +1961,19 @@ def dashboard():
     user = auth.get_current_user()
     if not user or not auth.user_has_active_subscription(user):
         return redirect(url_for("subscriber_app"))
-    local_date = (request.args.get("local_date") or "").strip()[:10] or None
-    try:
-        tz_offset = int(request.args.get("tz_offset_minutes"))
-    except (TypeError, ValueError):
-        tz_offset = None
+    user_timezone = db.get_user_timezone(user["id"])
+    windows = crm_db._follow_up_windows(user["id"], timezone_name=user_timezone)
+    local_date = (request.args.get("local_date") or "").strip()[:10] or windows.local_date
     metrics = db.get_dashboard_metrics(user["id"])
     pipeline = crm_db.get_pipeline_metrics(
-        user["id"], local_date=local_date, tz_offset_minutes=tz_offset
+        user["id"],
+        timezone_name=user_timezone,
+        windows=windows,
     )
     needs = crm_db.list_needs_attention(user["id"], local_date=local_date)[:8]
     notifications = crm_db.list_notifications(user["id"], unread_only=True, limit=8)
+    # Destination filters no longer need browser offset — account TZ is used server-side.
     date_qs = ""
-    if local_date:
-        date_qs = f"&local_date={local_date}"
-        if tz_offset is not None:
-            date_qs += f"&tz_offset_minutes={tz_offset}"
     return render_template(
         "dashboard.html",
         email=user["email"],
@@ -1984,8 +1985,9 @@ def dashboard():
         notifications=notifications,
         status_label=status_label,
         local_date=local_date or "",
-        tz_offset_minutes=tz_offset,
+        tz_offset_minutes=None,
         date_qs=date_qs,
+        user_timezone=user_timezone,
     )
 
 

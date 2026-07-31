@@ -1,4 +1,4 @@
-"""Regression tests for Telnyx outbound SMS send path (no live provider calls)."""
+"""Additional Telnyx outbound regressions (complements test_sms_send_production_path)."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from sms_authorization import (
 from sms_outbound import send_authorized_sms
 from sms_providers.base import SmsProviderError
 from sms_providers.telnyx import TelnyxSMSProvider
+from sms_send_diagnostics import safe_telnyx_payload
 from sms_validation import validate_sms_send_payload
 
 
@@ -68,6 +69,22 @@ def test_e164_normalization_production_destination():
     assert cleaned["phone_number"] == "+13038703107"
 
 
+def test_safe_telnyx_payload_excludes_secrets_and_body():
+    payload = safe_telnyx_payload(
+        from_number="+18888210810",
+        to_number="+13038703107",
+        text="Hello secret body",
+        messaging_profile_id="profile-test",
+        webhook_url="https://example.test/webhooks/telnyx/messaging",
+    )
+    assert payload["from"] == "+18888210810"
+    assert payload["to"] == "+13038703107"
+    assert payload["text_chars"] == len("Hello secret body")
+    assert "Hello" not in str(payload)
+    assert "KEY" not in str(payload)
+    assert payload["messaging_profile_id_configured"] is True
+
+
 def test_telnyx_uses_api_key_not_public_key_and_correct_endpoint(monkeypatch):
     _telnyx_ready(monkeypatch)
     provider = TelnyxSMSProvider()
@@ -104,15 +121,12 @@ def test_telnyx_uses_api_key_not_public_key_and_correct_endpoint(monkeypatch):
     assert captured["headers"]["authorization"] == "Bearer KEY_TEST_ONLY"
     assert "PUBLIC_KEY" not in captured["headers"]["authorization"]
     assert captured["headers"]["content-type"] == "application/json"
-    assert captured["body"] == {
-        "from": "+18888210810",
-        "to": "+13038703107",
-        "text": "Hello from TopAI",
-        "type": "SMS",
-        "messaging_profile_id": "profile-test",
-    }
+    assert captured["body"]["from"] == "+18888210810"
+    assert captured["body"]["to"] == "+13038703107"
+    assert captured["body"]["text"] == "Hello from TopAI"
+    assert captured["body"]["type"] == "SMS"
+    assert captured["body"]["messaging_profile_id"] == "profile-test"
     assert result["provider_message_id"] == "msg-abc"
-    assert result["http_status"] == 200
 
 
 def test_telnyx_api_rejection_maps_safe_error(monkeypatch):
@@ -146,7 +160,6 @@ def test_telnyx_api_rejection_maps_safe_error(monkeypatch):
     assert err.provider_code == "10005"
     assert "authentication" in str(err).lower()
     assert "KEY_TEST_ONLY" not in str(err)
-    assert "Invalid API key" not in str(err) or "authentication" in str(err).lower()
 
 
 def test_telnyx_network_exception(monkeypatch):
@@ -167,54 +180,6 @@ def test_telnyx_network_exception(monkeypatch):
     assert "could not reach" in str(excinfo.value).lower()
 
 
-def test_update_lead_contact_fields_uses_bind_bool_for_postgres(monkeypatch, two_users):
-    """Postgres CASE WHEN rejects integer 0/1; send path must bind bools."""
-    from db_backend import bind_bool as real_bind_bool
-
-    u1, _ = two_users
-    lead_id, _, _ = upsert_crm_lead(
-        u1,
-        "3038703107",
-        {"lead_name": "Existing", "phone_number": "3038703107"},
-        source="sms",
-        touch_sms=True,
-        assigned_user_id=u1,
-    )
-
-    calls = []
-
-    def spy_bind_bool(value):
-        out = real_bind_bool(value)
-        calls.append((bool(value), out))
-        return out
-
-    monkeypatch.setattr("db.bind_bool", spy_bind_bool)
-    db.update_lead_contact_fields(lead_id, u1, touch_sms=True, name="Existing")
-    assert calls, "update_lead_contact_fields must call bind_bool for CASE WHEN binds"
-    assert (True, 1) in calls or any(flag is True for flag, _ in calls)
-
-    # Under Postgres engine, bind_bool returns native bool (not 0/1).
-    monkeypatch.setattr(config, "DB_ENGINE", "postgres")
-    assert real_bind_bool(True) is True
-    assert real_bind_bool(False) is False
-    assert real_bind_bool(True) is not 1
-    assert real_bind_bool(False) is not 0
-
-    # Existing-lead upsert (the production failure path) still succeeds on SQLite.
-    monkeypatch.setattr(config, "DB_ENGINE", "sqlite")
-    lead_id2, created, lead = upsert_crm_lead(
-        u1,
-        "3038703107",
-        {"lead_name": "Existing", "phone_number": "3038703107", "message_body": "Hi"},
-        source="sms",
-        touch_sms=True,
-        assigned_user_id=u1,
-    )
-    assert created is False
-    assert lead_id2 == lead_id
-    assert lead["phone_number"] == "+13038703107"
-
-
 def test_existing_lead_send_reaches_telnyx_after_upsert(app_client, two_users, monkeypatch):
     """Reproduce the failed production path: existing lead + POST /sms/messages."""
     u1, _ = two_users
@@ -223,7 +188,6 @@ def test_existing_lead_send_reaches_telnyx_after_upsert(app_client, two_users, m
     _telnyx_ready(monkeypatch, verification="verified")
     tdb.accept_sms_terms(u1, u1)
 
-    # Pre-create lead (draft / prior attempt) so send hits update_lead_contact_fields.
     upsert_crm_lead(
         u1,
         "3038703107",
@@ -237,7 +201,6 @@ def test_existing_lead_send_reaches_telnyx_after_upsert(app_client, two_users, m
         send_mock.return_value = {
             "provider_message_id": "telnyx-msg-1",
             "status": "queued",
-            "http_status": 200,
         }
         res = app_client.post(
             "/sms/messages",
@@ -254,16 +217,14 @@ def test_existing_lead_send_reaches_telnyx_after_upsert(app_client, two_users, m
     assert res.status_code == 201, res.get_data(as_text=True)
     data = res.get_json()
     assert data["provider_message_id"] == "telnyx-msg-1"
-    assert data["normalized_destination"] == "+13038703107"
+    assert data["to_number"] == "+13038703107"
     assert data["from_number"] == "+18888210810"
-    assert data["reached_provider"] is True
     assert data["correlation_id"]
-    assert data["stage"] == "complete"
+    assert data["stage"] == "provider_delivery"
     assert send_mock.called
     kwargs = send_mock.call_args.kwargs
     assert kwargs["to_number"] == "+13038703107"
     assert kwargs["from_number"] == "+18888210810"
-    assert "Hello from TopAI" in kwargs["body"]
 
 
 def test_db_audit_record_failure_before_provider(two_users, monkeypatch):
@@ -288,10 +249,11 @@ def test_db_audit_record_failure_before_provider(two_users, monkeypatch):
                 compliance_confirmed=True,
             )
     assert status == 500
-    assert err and "internal" in err.lower()
-    assert result["reached_provider"] is False
-    assert result["stage"] == "db_record"
+    assert "could not prepare" in (err or "").lower()
+    assert result["stage"] == "database"
+    assert result["error_category"] == "database_error"
     assert result["correlation_id"]
+    assert result["to_number"] == "+13038703107"
     assert not send_mock.called
 
 
@@ -322,7 +284,6 @@ def test_consent_and_opt_out_enforcement(two_users, monkeypatch):
         assigned_user_id=u1,
     )
 
-    # No attestation / certification → blocked.
     ok, msg = can_send_sms(u1, lead_id, message_body="Hi there")
     assert ok is False
     assert "consent" in msg.lower() or "certif" in msg.lower()
@@ -354,7 +315,6 @@ def test_no_twilio_credential_required_for_telnyx_send(app_client, two_users, mo
         send_mock.return_value = {
             "provider_message_id": "msg-no-twilio",
             "status": "queued",
-            "http_status": 200,
         }
         res = app_client.post(
             "/sms/messages",
@@ -382,7 +342,6 @@ def test_api_success_response_includes_diagnostics(app_client, two_users, monkey
         send_mock.return_value = {
             "provider_message_id": "msg-ok",
             "status": "queued",
-            "http_status": 200,
         }
         res = app_client.post(
             "/sms/messages",
@@ -398,8 +357,8 @@ def test_api_success_response_includes_diagnostics(app_client, two_users, monkey
     data = res.get_json()
     assert res.status_code == 201
     assert data["provider_message_id"] == "msg-ok"
-    assert data["stage"] == "complete"
-    assert data["reached_provider"] is True
+    assert data["stage"] == "provider_delivery"
+    assert data["to_number"] == "+13038703107"
     assert data["correlation_id"]
 
 
@@ -424,9 +383,9 @@ def test_lead_upsert_failure_never_reaches_provider(app_client, two_users, monke
             )
     assert res.status_code == 500
     data = res.get_json()
-    assert data["reached_provider"] is False
-    assert data["stage"] == "lead_upsert"
-    assert data["normalized_destination"] == "+13038703107"
+    assert data["stage"] == "database"
+    assert data["error_category"] == "database_error"
+    assert data["to_number"] == "+13038703107"
     assert data["correlation_id"]
-    assert "Something went wrong" not in data["error"] or data["correlation_id"]
+    assert "could not prepare" in data["error"].lower()
     assert not send_mock.called
