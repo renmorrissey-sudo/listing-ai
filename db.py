@@ -666,6 +666,9 @@ def update_lead_contact_fields(
         # integers (1/0) raises: "argument of CASE/WHEN must be type boolean".
         touch_contact = bind_bool(touch_call or touch_sms)
         touch_call_flag = bind_bool(touch_call)
+        # CAST notes binds as TEXT: Postgres cannot infer the type of a bare
+        # NULL parameter in `? IS NOT NULL` (IndeterminateDatatype). SQLite
+        # accepts either form; SMS upsert often passes notes=NULL.
         conn.execute(
             """
             UPDATE leads
@@ -673,7 +676,8 @@ def update_lead_contact_fields(
                 lead_type = COALESCE(?, lead_type),
                 property_interest = COALESCE(?, property_interest),
                 notes = CASE
-                    WHEN ? IS NOT NULL AND (notes IS NULL OR notes = '') THEN ?
+                    WHEN CAST(? AS TEXT) IS NOT NULL
+                         AND (notes IS NULL OR notes = '') THEN CAST(? AS TEXT)
                     ELSE notes
                 END,
                 status = ?,
