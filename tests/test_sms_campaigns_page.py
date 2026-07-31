@@ -173,3 +173,179 @@ def test_secrets_never_appear_on_campaigns_page(app_client, two_users, monkeypat
     body = app_client.get("/crm/sms-campaigns").get_data(as_text=True)
     assert "SUPER_SECRET_KEY_VALUE" not in body
     assert "SUPER_SECRET_PUBLIC" not in body
+
+
+def test_new_campaign_unauthenticated_redirects_to_login(app_client):
+    res = app_client.get("/crm/sms-campaigns/new", follow_redirects=False)
+    assert res.status_code in {302, 303}
+    loc = res.headers.get("Location") or ""
+    assert "/login" in loc
+    assert "next=" in loc
+    assert "sms-campaigns/new" in loc
+
+
+def test_new_campaign_get_returns_200_html_when_pending(app_client, two_users, monkeypatch):
+    u1, _ = two_users
+    db.update_user_subscription(u1, "active")
+    _login(app_client, u1)
+    _telnyx(monkeypatch, verification="pending", worker=False)
+    res = app_client.get("/crm/sms-campaigns/new")
+    assert res.status_code == 200
+    assert "text/html" in (res.headers.get("Content-Type") or "")
+    html = res.get_data(as_text=True)
+    assert "Create campaign" in html
+    assert "Provider: Telnyx" in html
+    assert "Toll-free verification: pending" in html
+    assert "Telnyx SMS is configured. Bulk sending will become available after toll-free verification is approved." in html
+    assert "Launch controls: disabled" in html
+    assert "Bulk sending enabled: no" in html
+    assert "Save draft" in html
+    assert "Traceback" not in html
+    assert "SUPER_SECRET" not in html
+
+
+def test_new_campaign_missing_worker_and_sender_do_not_crash(
+    app_client, two_users, monkeypatch
+):
+    u1, _ = two_users
+    db.update_user_subscription(u1, "active")
+    _login(app_client, u1)
+    _telnyx(monkeypatch, verification="pending", worker=False)
+    monkeypatch.setattr(config, "TELNYX_API_KEY", "")
+    monkeypatch.setattr(config, "TELNYX_PHONE_NUMBER", "")
+    monkeypatch.setattr(config, "TELNYX_MESSAGING_PROFILE_ID", "")
+    monkeypatch.setattr(config, "SMS_CAMPAIGN_WORKER_AVAILABLE", "")
+    with patch("tenant_sms_db.get_campaign_worker_health", return_value={
+        "state": "unknown",
+        "last_seen_at": None,
+        "worker_id": None,
+        "message": "Campaign processing worker is currently unavailable.",
+    }):
+        res = app_client.get("/crm/sms-campaigns/new")
+    assert res.status_code == 200
+    html = res.get_data(as_text=True)
+    assert "Campaign processing worker is currently unavailable." in html
+    assert "Create campaign" in html
+
+
+def test_new_campaign_terms_blocker_visible(app_client, two_users, monkeypatch):
+    u1, _ = two_users
+    db.update_user_subscription(u1, "active")
+    _login(app_client, u1)
+    _telnyx(monkeypatch, verification="pending", worker=True)
+    assert not tdb.has_accepted_sms_terms(u1)
+    html = app_client.get("/crm/sms-campaigns/new").get_data(as_text=True)
+    assert "Accept" in html and "SMS terms" in html
+    assert "SMS terms: not accepted" in html
+
+
+def test_new_campaign_post_creates_draft_without_sending(
+    app_client, two_users, monkeypatch
+):
+    u1, u2 = two_users
+    db.update_user_subscription(u1, "active")
+    _login(app_client, u1)
+    _telnyx(monkeypatch, verification="pending", worker=False)
+    before = tdb.list_campaigns(u1)
+    res = app_client.post(
+        "/crm/sms-campaigns/new",
+        data={"title": "Draft only", "campaign_purpose": "real_estate_follow_up"},
+        follow_redirects=False,
+    )
+    assert res.status_code in {302, 303}
+    loc = res.headers.get("Location") or ""
+    assert "/crm/sms-campaigns/" in loc
+    campaigns = tdb.list_campaigns(u1)
+    assert len(campaigns) == len(before) + 1
+    created = campaigns[0]
+    assert created["title"] == "Draft only"
+    assert created["status"] == "draft"
+    # Tenant isolation: other user cannot see it
+    assert tdb.get_campaign(created["id"], u2) is None
+    assert tdb.list_campaigns(u2) == []
+
+
+def test_new_campaign_zero_prior_campaigns_empty_state_ok(
+    app_client, two_users, monkeypatch
+):
+    u1, _ = two_users
+    db.update_user_subscription(u1, "active")
+    _login(app_client, u1)
+    _telnyx(monkeypatch, verification="pending")
+    assert tdb.list_campaigns(u1) == []
+    res = app_client.get("/crm/sms-campaigns/new")
+    assert res.status_code == 200
+    assert "Create campaign" in res.get_data(as_text=True)
+
+
+def test_create_campaign_uses_bind_bool_for_postgres(monkeypatch, two_users):
+    """Regression for prod e522df439886: Postgres BOOLEAN rejects smallint 0/1."""
+    from db_backend import bind_bool
+
+    u1, _ = two_users
+    monkeypatch.setattr(config, "DB_ENGINE", "postgres")
+    assert bind_bool(False) is False
+    assert bind_bool(True) is True
+    # Exercise the same conversion create_campaign uses for test_mode.
+    assert bind_bool(None) is False
+    with patch("tenant_sms_db.get_db") as mock_get_db:
+        conn = mock_get_db.return_value.__enter__.return_value
+        cur = conn.execute.return_value
+        cur.lastrowid = 99
+        cid = tdb.create_campaign(u1, "PG bool")
+        assert cid == 99
+        args = conn.execute.call_args[0]
+        params = args[1]
+        # test_mode is the 10th bound value in the INSERT tuple
+        assert params[9] is False
+
+
+def test_new_campaign_create_failure_returns_html_not_json(
+    app_client, two_users, monkeypatch
+):
+    u1, _ = two_users
+    db.update_user_subscription(u1, "active")
+    _login(app_client, u1)
+    _telnyx(monkeypatch, verification="pending")
+    with patch("tenant_sms_db.create_campaign", side_effect=RuntimeError("db down")):
+        res = app_client.post(
+            "/crm/sms-campaigns/new",
+            data={"title": "Boom", "campaign_purpose": "real_estate_follow_up"},
+        )
+    assert res.status_code == 200
+    body = res.get_data(as_text=True)
+    assert "text/html" in (res.headers.get("Content-Type") or "")
+    assert "Could not create the campaign draft" in body
+    assert "Traceback" not in body
+    assert "db down" not in body
+    assert tdb.list_campaigns(u1) == []
+
+
+def test_new_campaign_pending_does_not_launch_or_send(
+    app_client, two_users, monkeypatch
+):
+    u1, _ = two_users
+    db.update_user_subscription(u1, "active")
+    _login(app_client, u1)
+    _telnyx(monkeypatch, verification="pending", worker=True)
+    tdb.accept_sms_terms(u1, u1)
+    res = app_client.post(
+        "/crm/sms-campaigns/new",
+        data={"title": "No send", "campaign_purpose": "real_estate_follow_up"},
+        follow_redirects=True,
+    )
+    assert res.status_code == 200
+    html = res.get_data(as_text=True)
+    assert "disabled" in html.lower()
+    campaigns = tdb.list_campaigns(u1)
+    assert campaigns and campaigns[0]["status"] == "draft"
+    # Attempt launch on detail — must remain blocked
+    cid = campaigns[0]["id"]
+    launch = app_client.post(
+        f"/crm/sms-campaigns/{cid}",
+        data={"action": "launch"},
+        follow_redirects=True,
+    )
+    body = launch.get_data(as_text=True)
+    assert "toll-free" in body.lower()
+    assert tdb.get_campaign(cid, u1)["status"] == "draft"

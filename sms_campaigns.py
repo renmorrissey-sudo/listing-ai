@@ -71,7 +71,11 @@ def _nav(user, active_nav="sms-campaigns"):
 
 
 def _bulk_status_context(user_id=None):
-    """Non-secret provider / verification / worker status for Bulk SMS pages."""
+    """Non-secret provider / verification / worker status for Bulk SMS pages.
+
+    Must never raise: missing worker heartbeat, sender, or terms rows are
+    expected empty states and must still allow the page to render.
+    """
     from sms_authorization import (
         TELNYX_CONFIGURED_PENDING_MSG,
         telnyx_configuration_complete,
@@ -80,21 +84,38 @@ def _bulk_status_context(user_id=None):
     provider = (config.SMS_PROVIDER or "telnyx").lower().strip()
     verification = get_telnyx_toll_free_verification_status() or "unknown"
     toll_ok, _toll_err = check_telnyx_toll_free_send_allowed()
-    worker_health = tdb.get_campaign_worker_health(stale_seconds=120)
+    try:
+        worker_health = tdb.get_campaign_worker_health(stale_seconds=120) or {}
+    except Exception:
+        logger.exception("campaign worker health lookup failed")
+        worker_health = {
+            "state": "unknown",
+            "message": WORKER_UNAVAILABLE_BANNER,
+        }
     worker_ok = worker_health.get("state") == "running"
-    terms_ok = tdb.has_accepted_sms_terms(user_id) if user_id else True
-    telnyx_ready = provider != "telnyx" or telnyx_configuration_complete()
+    terms_ok = True
+    if user_id:
+        try:
+            terms_ok = tdb.has_accepted_sms_terms(user_id)
+        except Exception:
+            logger.exception("sms terms lookup failed user_id=%s", user_id)
+            terms_ok = False
+    try:
+        telnyx_ready = provider != "telnyx" or telnyx_configuration_complete()
+    except Exception:
+        logger.exception("telnyx configuration check failed")
+        telnyx_ready = False
     sending_enabled = bool(
         is_sms_sending_enabled() and toll_ok and worker_ok and terms_ok and telnyx_ready
     )
     verification_message = None
-    if provider == "telnyx" and telnyx_configuration_complete() and not toll_ok:
+    if provider == "telnyx" and telnyx_ready and not toll_ok:
         verification_message = TELNYX_CONFIGURED_PENDING_MSG
     elif provider == "telnyx" and not toll_ok:
         verification_message = BULK_VERIFICATION_BANNER
     return {
         "sms_provider": provider,
-        "telnyx_configured": telnyx_configuration_complete() if provider == "telnyx" else None,
+        "telnyx_configured": telnyx_ready if provider == "telnyx" else None,
         "toll_free_number_display": getattr(config, "SMS_SUPPORT_DISPLAY", None)
         or "(888) 821-0810",
         "toll_free_verification_status": verification if provider == "telnyx" else None,
@@ -157,15 +178,38 @@ def campaign_new():
     user, gate = _auth_gate()
     if gate:
         return gate
+    sender, sender_err = _safe_require_sender(user["id"])
+    status = _bulk_status_context(user["id"])
+    form_title = (request.form.get("title") or "").strip()[:200]
+    form_purpose = (request.form.get("campaign_purpose") or "real_estate_follow_up").strip()
+    error = None
+
     if request.method == "POST":
-        title = (request.form.get("title") or "Untitled campaign").strip()[:200]
-        purpose = (request.form.get("campaign_purpose") or "real_estate_follow_up").strip()
-        cid = tdb.create_campaign(user["id"], title, campaign_purpose=purpose)
-        tdb.append_sms_audit(user["id"], "campaign_created", actor_user_id=user["id"], campaign_id=cid)
-        return redirect(url_for("sms_campaigns.campaign_detail", campaign_id=cid))
+        title = form_title or "Untitled campaign"
+        purpose = form_purpose or "real_estate_follow_up"
+        try:
+            # Draft create is allowed while send/launch is blocked (e.g. pending
+            # toll-free verification). Launch remains gated on the detail page.
+            cid = tdb.create_campaign(user["id"], title, campaign_purpose=purpose)
+            tdb.append_sms_audit(
+                user["id"], "campaign_created", actor_user_id=user["id"], campaign_id=cid
+            )
+            return redirect(url_for("sms_campaigns.campaign_detail", campaign_id=cid))
+        except Exception:
+            logger.exception("create_campaign failed user_id=%s", user["id"])
+            error = (
+                "Could not create the campaign draft. Please try again. "
+                "Sending remains blocked until compliance checks pass."
+            )
+
     return render_template(
         "crm_sms_campaign_new.html",
-        **_bulk_status_context(user["id"]),
+        error=error,
+        form_title=form_title,
+        form_purpose=form_purpose,
+        sender=sender,
+        sender_err=sender_err,
+        **status,
         **_nav(user),
     )
 

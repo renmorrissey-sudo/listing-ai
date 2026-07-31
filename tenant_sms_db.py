@@ -439,7 +439,8 @@ def create_campaign(user_id, title, **fields):
                 fields.get("scheduled_at"),
                 fields.get("content_fingerprint"),
                 fields.get("audience_snapshot_id") or str(uuid.uuid4()),
-                1 if fields.get("test_mode") else 0,
+                # Postgres BOOLEAN rejects smallint 0/1; bind_bool is portable.
+                bind_bool(fields.get("test_mode")),
                 json.dumps(fields.get("limits") or {}),
                 json.dumps({}),
                 now,

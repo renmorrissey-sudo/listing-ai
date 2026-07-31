@@ -14,11 +14,55 @@
   <main>
     <p class="muted"><a href="/crm/sms-campaigns">← Campaigns</a></p>
     <h1>Create campaign</h1>
+    <p class="muted">Save a draft to continue with audience, message, and launch controls. Launch stays disabled until sending is allowed.</p>
+
+    {% if verification_block_message %}
+    <div class="flash err" style="display:block;">{{ verification_block_message }}</div>
+    {% endif %}
+    {% if worker_block_message %}
+    <div class="flash err" style="display:block;">{{ worker_block_message }}</div>
+    {% endif %}
+    {% if sender_err %}<div class="flash err" style="display:block;">{{ sender_err }}</div>{% endif %}
+    {% if not terms_ok %}
+    <div class="flash err" style="display:block;">
+      Accept <a href="/crm/sms-diagnostics">SMS terms</a> before sending.
+    </div>
+    {% endif %}
+    {% if error %}<div class="flash err" style="display:block;">{{ error }}</div>{% endif %}
+
+    <div class="card">
+      <ul class="muted" style="margin:0;padding-left:18px;line-height:1.6;">
+        <li>Provider: {{ sms_provider|capitalize if sms_provider else 'Unknown' }}</li>
+        {% if sms_provider == 'telnyx' %}
+        <li>Telnyx configured: {{ 'yes' if telnyx_configured else 'no' }}</li>
+        <li>Toll-free verification: {{ toll_free_verification_status or 'unknown' }}</li>
+        {% endif %}
+        <li>Toll-free number: +1 {{ toll_free_number_display or '(888) 821-0810' }}</li>
+        {% if sender and sender.sender_number %}
+        <li>Assigned sender: {{ sender.sender_number }}</li>
+        {% else %}
+        <li>Assigned sender: not configured</li>
+        {% endif %}
+        <li>Campaign worker: {{ worker_health_state or ('available' if worker_available else 'unavailable') }}</li>
+        <li>SMS terms: {{ 'accepted' if terms_ok else 'not accepted' }}</li>
+        <li>Bulk sending enabled: {{ 'yes' if bulk_sending_enabled else 'no' }}</li>
+        <li>Launch controls: {{ 'enabled' if launch_controls_enabled else 'disabled' }}</li>
+      </ul>
+    </div>
+
     <div class="card">
       <form method="post">
-        <label>Title <input name="title" required placeholder="Open house follow-up" /></label>
-        <label>Purpose <input name="campaign_purpose" value="real_estate_follow_up" /></label>
-        <button class="btn" type="submit">Continue</button>
+        <label>Campaign name
+          <input name="title" required placeholder="Open house follow-up" value="{{ form_title or '' }}" />
+        </label>
+        <label>Internal notes / purpose
+          <input name="campaign_purpose" value="{{ form_purpose or 'real_estate_follow_up' }}" />
+        </label>
+        <p class="muted">Next steps after saving the draft: choose recipients (CSV or eligible leads), edit the message, review consent eligibility, then launch only when sending is enabled.</p>
+        {% if not launch_controls_enabled %}
+        <p class="muted">You can save a draft now. Launch / send remains disabled until toll-free verification and other compliance checks pass.</p>
+        {% endif %}
+        <button class="btn" type="submit">Save draft &amp; continue</button>
       </form>
     </div>
   </main>
