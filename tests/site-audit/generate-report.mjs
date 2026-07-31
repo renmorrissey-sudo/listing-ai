@@ -43,26 +43,57 @@ export function generateReports() {
   const state = loadState();
   fs.mkdirSync(path.join(RESULTS_DIR, "screenshots"), { recursive: true });
 
-  const critical = bySeverity(state.findings, "Critical");
-  const high = bySeverity(state.findings, "High");
-  const medium = bySeverity(state.findings, "Medium");
-  const low = bySeverity(state.findings, "Low");
+  function redactOrigins(value) {
+    const origin = String(state.baseUrl || "").replace(/\/$/, "");
+    let host = "";
+    try {
+      host = origin ? new URL(origin).host : "";
+    } catch {
+      host = "";
+    }
+    const scrub = (s) => {
+      let out = String(s);
+      if (origin) out = out.split(origin).join("https://PRODUCTION_ORIGIN");
+      if (host) out = out.split(host).join("PRODUCTION_ORIGIN");
+      return out;
+    };
+    const walk = (v) => {
+      if (Array.isArray(v)) return v.map(walk);
+      if (v && typeof v === "object") {
+        const o = {};
+        for (const [k, val] of Object.entries(v)) o[k] = walk(val);
+        return o;
+      }
+      if (typeof v === "string") return scrub(v);
+      return v;
+    };
+    return walk(value);
+  }
+
+  const redactedState = redactOrigins({
+    ...state,
+    baseUrl: "https://PRODUCTION_ORIGIN",
+  });
+  const critical = bySeverity(redactedState.findings, "Critical");
+  const high = bySeverity(redactedState.findings, "High");
+  const medium = bySeverity(redactedState.findings, "Medium");
+  const low = bySeverity(redactedState.findings, "Low");
   const external = [
-    ...bySeverity(state.findings, "External Dependency"),
-    ...bySeverity(state.findings, "Manual Action Required"),
+    ...bySeverity(redactedState.findings, "External Dependency"),
+    ...bySeverity(redactedState.findings, "Manual Action Required"),
   ];
 
   const passedClean = critical.length + high.length + medium.length === 0;
 
   const summary = {
-    ...state,
+    ...redactedState,
     counts: {
       critical: critical.length,
       high: high.length,
       medium: medium.length,
       low: low.length,
       externalOrManual: external.length,
-      totalFindings: state.findings.length,
+      totalFindings: redactedState.findings.length,
     },
     verdict: passedClean
       ? "TopAI production audit passed with no Critical, High, or Medium findings."
@@ -81,19 +112,20 @@ export function generateReports() {
   const lines = [];
   lines.push("# TopAI Real Estate Tools — Production Site Audit");
   lines.push("");
-  lines.push(`- **Started:** ${state.startedAt}`);
-  lines.push(`- **Completed:** ${state.completedAt || "n/a"}`);
-  lines.push(`- **Base URL:** ${state.baseUrl}`);
+  lines.push(`- **Started:** ${redactedState.startedAt}`);
+  lines.push(`- **Completed:** ${redactedState.completedAt || "n/a"}`);
+  // Never embed the raw TOPAI_AUDIT_BASE_URL value (secret-scanner collision).
+  lines.push("- **Base URL host:** PRODUCTION_ORIGIN");
   lines.push(
     `- **Login succeeded:** ${
-      state.loginSucceeded === null ? "n/a" : state.loginSucceeded
+      redactedState.loginSucceeded === null ? "n/a" : redactedState.loginSucceeded
     }`
   );
   lines.push(
-    `- **Tests:** passed=${state.testsPassed} failed=${state.testsFailed} skipped=${state.testsSkipped}`
+    `- **Tests:** passed=${redactedState.testsPassed} failed=${redactedState.testsFailed} skipped=${redactedState.testsSkipped}`
   );
   lines.push(
-    `- **Env presence:** ${JSON.stringify(state.envPresence || {})}`
+    `- **Env presence:** ${JSON.stringify(redactedState.envPresence || {})}`
   );
   lines.push("");
   lines.push(`## Verdict`);
@@ -103,13 +135,13 @@ export function generateReports() {
   lines.push("## Routes tested");
   lines.push("");
   lines.push("### Public");
-  for (const r of state.publicRoutesTested || []) lines.push(`- \`${r}\``);
+  for (const r of redactedState.publicRoutesTested || []) lines.push(`- \`${r}\``);
   lines.push("");
   lines.push("### Authenticated");
-  if ((state.authenticatedRoutesTested || []).length === 0) {
+  if ((redactedState.authenticatedRoutesTested || []).length === 0) {
     lines.push("- _(none — login unavailable or skipped)_");
   } else {
-    for (const r of state.authenticatedRoutesTested) lines.push(`- \`${r}\``);
+    for (const r of redactedState.authenticatedRoutesTested) lines.push(`- \`${r}\``);
   }
   lines.push("");
 
