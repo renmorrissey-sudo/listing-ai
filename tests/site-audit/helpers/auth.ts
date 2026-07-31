@@ -1,0 +1,156 @@
+import type { Page } from "@playwright/test";
+import { readAuditEnv } from "./env";
+import { updateState } from "./findings";
+import { attachCollectors, recordIssue } from "./page-checks";
+
+/**
+ * Read-only login for the audit subscriber account.
+ * Does not create accounts, reset passwords, or mutate billing.
+ */
+export async function loginAsAuditUser(
+  page: Page,
+  viewport: string
+): Promise<boolean> {
+  const env = readAuditEnv();
+  if (!env.hasAuthCredentials) {
+    updateState((s) => {
+      s.loginSucceeded = false;
+      if (
+        !s.notes.some((n) =>
+          n.includes("Authenticated audit skipped: TOPAI_AUDIT_EMAIL")
+        )
+      ) {
+        s.notes.push(
+          "Authenticated audit skipped: TOPAI_AUDIT_EMAIL and/or TOPAI_AUDIT_PASSWORD missing"
+        );
+      }
+    });
+    // Record once (desktop) to avoid duplicate Manual Action findings per viewport.
+    if (viewport === "desktop-1440" || viewport === "unknown") {
+      await recordIssue(page, {
+        title: "Audit credentials not configured",
+        severity: "Manual Action Required",
+        route: "/login",
+        viewport: "all",
+        authState: "logged-out",
+        reproductionSteps: [
+          "Inspect Cursor automation / cloud environment secrets",
+          "Confirm TOPAI_AUDIT_EMAIL and TOPAI_AUDIT_PASSWORD are injected for the auditor run",
+        ],
+        expected:
+          "TOPAI_AUDIT_BASE_URL, TOPAI_AUDIT_EMAIL, and TOPAI_AUDIT_PASSWORD are present",
+        actual: `Missing: ${env.missingVars
+          .filter((v) => v !== "TOPAI_AUDIT_BASE_URL")
+          .join(", ") || "auth credentials"}`,
+        recommendedFix:
+          "Add TOPAI_AUDIT_* secrets to the Cursor automation environment (never commit them)",
+        recommendedRegressionTest:
+          "run-audit.mjs should fail fast with Manual Action Required when auth env is absent",
+        screenshot: false,
+        classification: "Manual Action Required",
+      });
+    }
+    return false;
+  }
+
+  const collectors = attachCollectors(page);
+  const response = await page.goto("/login", { waitUntil: "domcontentloaded" });
+  await page.fill("#email", env.email!);
+  await page.fill("#password", env.password!);
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => null),
+    page.click('button[type="submit"]'),
+  ]);
+
+  const url = page.url();
+  let urlPath = url;
+  try {
+    urlPath = new URL(url).pathname + (new URL(url).search || "");
+  } catch {
+    /* keep full url string only if unparsable */
+  }
+  const flashText = (
+    await page
+      .locator('.flash, .error, [role="alert"], .alert')
+      .allInnerTexts()
+      .catch(() => [] as string[])
+  )
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  const invalidCredentials = flashText.some((t) =>
+    /invalid email or password/i.test(t)
+  );
+  const loggedIn =
+    /\/(app|dashboard|crm)\b/.test(url) ||
+    (await page
+      .locator("text=/Log out|Open Tools|Dashboard/i")
+      .first()
+      .isVisible()
+      .catch(() => false));
+
+  updateState((s) => {
+    s.loginSucceeded = loggedIn;
+  });
+
+  if (!loggedIn) {
+    await recordIssue(page, {
+      title: "Authenticated login failed",
+      severity: "High",
+      route: "/login",
+      viewport,
+      authState: "logged-out",
+      reproductionSteps: [
+        "Open /login",
+        "Submit the configured audit subscriber credentials",
+        "Observe final URL and page content",
+      ],
+      expected: "User reaches /app or authenticated CRM/tools with Log out visible",
+      actual: `Final path: ${urlPath}; status=${response?.status() ?? "n/a"}; flash=${flashText.join(" | ") || "none"}; console=${collectors.consoleErrors.slice(0, 3).join(" | ") || "none"}`,
+      httpStatus: response?.status() ?? null,
+      consoleEvidence: collectors.consoleErrors.slice(0, 10),
+      networkEvidence: collectors.httpErrors.slice(0, 10),
+      suspectedCodeLocation: "app.py:/login, auth.py",
+      recommendedFix: invalidCredentials
+        ? "Refresh TOPAI_AUDIT_EMAIL / TOPAI_AUDIT_PASSWORD in the automation environment to a valid active subscriber (do not commit secrets)"
+        : "Verify audit account exists with active subscription; inspect login error handling",
+      recommendedRegressionTest: "tests/site-audit/auth.spec.ts login flow",
+      ...(invalidCredentials
+        ? { classification: "Manual Action Required" }
+        : {}),
+    });
+
+    // Record once for credential refresh when production rejects the configured account.
+    if (
+      invalidCredentials &&
+      (viewport === "desktop-1440" || viewport === "unknown")
+    ) {
+      await recordIssue(page, {
+        title: "Audit subscriber credentials rejected by production",
+        severity: "Manual Action Required",
+        route: "/login",
+        viewport: "all",
+        authState: "logged-out",
+        reproductionSteps: [
+          "Confirm TOPAI_AUDIT_EMAIL and TOPAI_AUDIT_PASSWORD are present (presence only)",
+          "POST /login with those credentials",
+          "Observe flash: Invalid email or password",
+        ],
+        expected:
+          "Configured audit subscriber can sign in and reach /app",
+        actual:
+          "Production returned Invalid email or password; authenticated CRM suites could not run",
+        httpStatus: response?.status() ?? null,
+        suspectedCodeLocation: "Cursor automation secrets / production user store",
+        recommendedFix:
+          "Create or reset a dedicated active-subscriber audit account and update TOPAI_AUDIT_* secrets (never commit them)",
+        recommendedRegressionTest:
+          "Authenticated site-audit project should pass login before CRM route coverage",
+        screenshot: false,
+        classification: "Manual Action Required",
+      });
+    }
+  }
+
+  return loggedIn;
+}

@@ -1,0 +1,14 @@
+{
+  "name": "listing-ai-site-audit",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Read-only Playwright production site audit for TopAI Real Estate Tools",
+  "scripts": {
+    "audit": "node tests/site-audit/run-audit.mjs",
+    "audit:raw": "playwright test --config=playwright.config.ts",
+    "audit:report": "node tests/site-audit/generate-report.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.1"
+  }
+}

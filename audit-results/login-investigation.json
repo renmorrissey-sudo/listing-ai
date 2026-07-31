@@ -1,0 +1,8 @@
+{
+  "finalUrlPath": "/login",
+  "flashMessages": [
+    "Invalid email or password."
+  ],
+  "hasInvalidCredsCopy": true,
+  "passwordNotInPage": true
+}
