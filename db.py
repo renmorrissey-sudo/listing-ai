@@ -1354,38 +1354,183 @@ def update_sms_compliance(message_id, user_id, consent_status=None, opt_out_stat
         )
 
 
-def update_sms_message_send_result(message_id, provider_message_id=None, status="sent", error_message=None):
-    sent_at = datetime.now(timezone.utc).isoformat() if status in ("sent", "delivered", "queued") else None
+def update_sms_message_send_result(
+    message_id,
+    provider_message_id=None,
+    status="sent",
+    error_message=None,
+    *,
+    from_number=None,
+    to_number=None,
+    segments=None,
+    failure_code=None,
+    correlation_id=None,
+    raw_provider_status=None,
+    provider_cost=None,
+):
+    """Persist outbound send / delivery result fields (no secrets)."""
+    now = datetime.now(timezone.utc).isoformat()
+    status_l = (status or "").strip().lower() or "sent"
+    # preparing = local attempt started; submitted_at only after provider accepts.
+    submitted_at = now if status_l in ("queued", "sent", "delivered", "submitted") else None
+    sent_at = now if status_l in ("sent", "delivered", "queued", "submitted") else None
+    delivered_at = now if status_l == "delivered" else None
+    failed_at = (
+        now
+        if status_l
+        in (
+            "failed",
+            "delivery_failed",
+            "rejected",
+            "provider_error",
+            "database_error",
+            "expired",
+        )
+        else None
+    )
+    # Preserve prior error_message on non-failure updates unless explicitly provided.
+    clear_error = status_l in (
+        "queued",
+        "sent",
+        "delivered",
+        "submitted",
+        "preparing",
+    )
+    err_value = error_message
+    if err_value is None and not clear_error:
+        # Leave existing error_message untouched for ambiguous updates.
+        err_sql = "error_message = COALESCE(?, error_message)"
+    else:
+        err_sql = "error_message = ?"
+        if clear_error and error_message is None:
+            err_value = None
     with get_db() as conn:
         conn.execute(
-            """
+            f"""
             UPDATE sms_messages
             SET provider_message_id = COALESCE(?, provider_message_id),
                 status = ?,
-                error_message = ?,
-                sent_at = COALESCE(?, sent_at)
+                {err_sql},
+                sent_at = COALESCE(?, sent_at),
+                submitted_at = COALESCE(?, submitted_at),
+                delivered_at = COALESCE(?, delivered_at),
+                failed_at = COALESCE(?, failed_at),
+                from_number = COALESCE(?, from_number),
+                to_number = COALESCE(?, to_number),
+                segments = COALESCE(?, segments),
+                failure_code = COALESCE(?, failure_code),
+                correlation_id = COALESCE(?, correlation_id),
+                raw_provider_status = COALESCE(?, raw_provider_status),
+                provider_cost = COALESCE(?, provider_cost)
             WHERE id = ?
             """,
-            (provider_message_id, status, error_message, sent_at, message_id),
+            (
+                provider_message_id,
+                status_l,
+                err_value,
+                sent_at,
+                submitted_at,
+                delivered_at,
+                failed_at,
+                from_number,
+                to_number,
+                segments,
+                str(failure_code) if failure_code is not None else None,
+                correlation_id,
+                raw_provider_status,
+                str(provider_cost) if provider_cost is not None else None,
+                message_id,
+            ),
         )
 
 
-def update_sms_message_by_provider_id(provider_message_id, status=None, error_message=None):
+def update_sms_message_by_provider_id(
+    provider_message_id,
+    status=None,
+    error_message=None,
+    *,
+    failure_code=None,
+    raw_provider_status=None,
+):
     if not provider_message_id:
         return 0
-    sent_at = datetime.now(timezone.utc).isoformat() if status in ("sent", "delivered") else None
+    now = datetime.now(timezone.utc).isoformat()
+    status_l = (status or "").strip().lower() if status else None
+    sent_at = now if status_l in ("sent", "delivered", "queued", "submitted") else None
+    submitted_at = now if status_l in ("queued", "sent", "delivered", "submitted") else None
+    delivered_at = now if status_l == "delivered" else None
+    failed_at = (
+        now
+        if status_l
+        in (
+            "failed",
+            "delivery_failed",
+            "rejected",
+            "provider_error",
+            "database_error",
+            "expired",
+        )
+        else None
+    )
     with get_db() as conn:
         cur = conn.execute(
             """
             UPDATE sms_messages
             SET status = COALESCE(?, status),
                 error_message = COALESCE(?, error_message),
-                sent_at = COALESCE(?, sent_at)
+                sent_at = COALESCE(?, sent_at),
+                submitted_at = COALESCE(?, submitted_at),
+                delivered_at = COALESCE(?, delivered_at),
+                failed_at = COALESCE(?, failed_at),
+                failure_code = COALESCE(?, failure_code),
+                raw_provider_status = COALESCE(?, raw_provider_status)
             WHERE provider_message_id = ?
             """,
-            (status, error_message, sent_at, provider_message_id),
+            (
+                status_l,
+                error_message,
+                sent_at,
+                submitted_at,
+                delivered_at,
+                failed_at,
+                str(failure_code) if failure_code is not None else None,
+                raw_provider_status,
+                provider_message_id,
+            ),
         )
         return cur.rowcount
+
+
+def get_latest_outbound_sms(user_id, *, lead_id=None, phone_number=None):
+    """Latest outbound SMS attempt for the authenticated tenant (never cross-tenant)."""
+    if not user_id:
+        return None
+    clauses = [
+        "user_id = ?",
+        "COALESCE(direction, 'outbound') = 'outbound'",
+        # Exclude drafts / inbox helpers — only real send attempts and outcomes.
+        "status NOT IN ('received', 'suggested', 'cancelled', 'draft')",
+    ]
+    params = [user_id]
+    if lead_id is not None:
+        clauses.append("lead_id = ?")
+        params.append(lead_id)
+    if phone_number:
+        clauses.append("(phone_number = ? OR to_number = ?)")
+        params.extend([phone_number, phone_number])
+    where = " AND ".join(clauses)
+    with get_db() as conn:
+        row = conn.execute(
+            f"""
+            SELECT *
+            FROM sms_messages
+            WHERE {where}
+            ORDER BY COALESCE(submitted_at, sent_at, created_at) DESC, id DESC
+            LIMIT 1
+            """,
+            tuple(params),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def find_sms_user_by_phone(phone_number):

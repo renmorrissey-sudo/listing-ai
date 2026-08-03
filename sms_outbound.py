@@ -17,6 +17,14 @@ from sms_authorization import (
 )
 from sms_provider import sms_status_callback_url
 from sms_providers import SmsProviderError, get_sms_provider
+from sms_status_model import (
+    STATUS_PREPARING,
+    STATUS_PROVIDER_ERROR,
+    STATUS_QUEUED,
+    format_phone_display,
+    normalize_provider_status,
+    success_notice_copy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -262,12 +270,25 @@ def send_authorized_sms(
                     "property_interest": lead.get("property_interest"),
                     "message_body": message_body,
                 },
-                status="draft",
+                status=STATUS_PREPARING,
                 lead_id=lead_id,
                 direction="outbound",
                 consent_status="confirmed",
                 opt_out_status=lead.get("opt_out_status") or "active",
             )
+            try:
+                db.update_sms_message_send_result(
+                    message_id,
+                    status=STATUS_PREPARING,
+                    from_number=from_number or None,
+                    to_number=to_number,
+                    correlation_id=correlation_id,
+                )
+            except Exception:
+                logger.exception(
+                    "failed to stamp preparing metadata correlation_id=%s",
+                    correlation_id,
+                )
     except Exception:
         logger.exception(
             "SMS pre-provider failure correlation_id=%s user_id=%s lead_id=%s",
@@ -398,13 +419,24 @@ def send_authorized_sms(
             provider_name=provider_name,
         )
 
-    send_status = result.get("status") or "queued"
+    raw_status = result.get("status") or result.get("raw_status") or "queued"
+    # Never claim delivered solely because Telnyx accepted the API request.
+    send_status = normalize_provider_status(raw_status)
+    if send_status == "delivered":
+        send_status = STATUS_QUEUED
     provider_message_id = result.get("provider_message_id")
+    segments = result.get("segments")
     try:
         db.update_sms_message_send_result(
             message_id,
             provider_message_id=provider_message_id,
             status=send_status,
+            from_number=from_number or result.get("from"),
+            to_number=to_number or result.get("to"),
+            segments=segments,
+            correlation_id=correlation_id,
+            raw_provider_status=str(raw_status)[:80] if raw_status else None,
+            provider_cost=result.get("cost"),
         )
         db.set_lead_consent(lead_id, user_id, "confirmed")
         db.touch_lead_outbound(lead_id, user_id)
@@ -430,6 +462,11 @@ def send_authorized_sms(
                 "provider": provider_name,
             },
         )
+        notice = success_notice_copy(
+            send_status,
+            to_display=format_phone_display(to_number),
+            message_id=provider_message_id,
+        )
         return {
             "id": message_id,
             "lead_id": lead_id,
@@ -438,6 +475,7 @@ def send_authorized_sms(
             "message_body": message_body,
             "from_number": from_number,
             "to_number": to_number,
+            "to_number_display": format_phone_display(to_number),
             "correlation_id": correlation_id,
             "stage": STAGE_PROVIDER_DELIVERY,
             "warning": (
@@ -445,6 +483,8 @@ def send_authorized_sms(
                 f"save the send record. Reference: {correlation_id}."
             ),
             "attestation_id": att_id,
+            "send_status": send_status,
+            "success_notice": notice,
         }, None, 201
 
     _safe_audit(
@@ -464,6 +504,11 @@ def send_authorized_sms(
             "compliance_confirmed": True,
         },
     )
+    notice = success_notice_copy(
+        send_status,
+        to_display=format_phone_display(to_number),
+        message_id=provider_message_id,
+    )
     return {
         "id": message_id,
         "lead_id": lead_id,
@@ -472,10 +517,13 @@ def send_authorized_sms(
         "message_body": message_body,
         "from_number": from_number,
         "to_number": to_number,
+        "to_number_display": format_phone_display(to_number),
         "attestation_id": att_id,
         "correlation_id": correlation_id,
         "stage": STAGE_PROVIDER_DELIVERY,
         "send_status": send_status,
+        "segments": segments,
+        "success_notice": notice,
     }, None, 201
 
 
@@ -491,24 +539,12 @@ def _provider_error_result(
     provider_name,
 ):
     safe = str(exc)
-    try:
-        db.update_sms_message_send_result(
-            message_id, status="failed", error_message=safe[:500]
-        )
-    except Exception:
-        logger.exception(
-            "failed to persist provider error correlation_id=%s", correlation_id
-        )
-    stage = (
-        STAGE_PROVIDER_REQUEST
-        if getattr(exc, "status_code", None) in {None, 0}
-        or (getattr(exc, "status_code", None) or 0) >= 500
-        else STAGE_PROVIDER_REQUEST
-    )
+    provider_code = getattr(exc, "provider_code", None)
     # 4xx = Telnyx rejected; connection/5xx = could not submit cleanly
     if getattr(exc, "status_code", None) and 400 <= int(exc.status_code) < 500:
         error = safe
         category = "provider_rejected"
+        app_status = "rejected"
     else:
         error = (
             f"TopAI could not submit the message to Telnyx. Reference: {correlation_id}."
@@ -516,7 +552,23 @@ def _provider_error_result(
             else f"TopAI could not submit the message to the SMS provider. Reference: {correlation_id}."
         )
         category = "provider_request_failed"
-        stage = STAGE_PROVIDER_REQUEST
+        app_status = STATUS_PROVIDER_ERROR
+    stage = STAGE_PROVIDER_REQUEST
+    try:
+        db.update_sms_message_send_result(
+            message_id,
+            status=app_status,
+            error_message=safe[:500],
+            from_number=from_number,
+            to_number=to_number,
+            failure_code=provider_code,
+            correlation_id=correlation_id,
+            raw_provider_status=str(provider_code or app_status)[:80],
+        )
+    except Exception:
+        logger.exception(
+            "failed to persist provider error correlation_id=%s", correlation_id
+        )
     payload, status = _error_payload(
         error=error,
         stage=stage,
@@ -529,8 +581,8 @@ def _provider_error_result(
         to_number=to_number,
         provider=provider_name,
         provider_http_status=getattr(exc, "status_code", None),
-        provider_code=getattr(exc, "provider_code", None),
-        send_status="failed",
+        provider_code=provider_code,
+        send_status=app_status,
         extra=exc.to_public_dict() if hasattr(exc, "to_public_dict") else None,
     )
     # Prefer the safer stage-specific message over raw provider dict error for non-4xx.
@@ -572,7 +624,12 @@ def _network_error_result(
     )
     try:
         db.update_sms_message_send_result(
-            message_id, status="failed", error_message=error[:500]
+            message_id,
+            status=STATUS_PROVIDER_ERROR,
+            error_message=error[:500],
+            from_number=from_number,
+            to_number=to_number,
+            correlation_id=correlation_id,
         )
     except Exception:
         logger.exception(
@@ -589,7 +646,7 @@ def _network_error_result(
         from_number=from_number,
         to_number=to_number,
         provider=provider_name,
-        send_status="failed",
+        send_status=STATUS_PROVIDER_ERROR,
     )
     _safe_audit(
         user_id,
