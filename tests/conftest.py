@@ -17,6 +17,9 @@ os.environ["SUBSCRIPTION_REQUIRED"] = "false"
 os.environ["ALLOW_DESTRUCTIVE_DB_RESET"] = "false"
 os.environ["ALLOW_SQLITE_TABLE_REBUILD"] = "false"
 os.environ["RUN_DEMO_SEED_ON_STARTUP"] = "false"
+# Keep normal signup/checkout tests open unless a test closes the gate.
+os.environ["REGISTRATION_ENABLED"] = "true"
+os.environ.pop("REGISTRATION_ALLOWLIST", None)
 
 
 @pytest.fixture(scope="session", autouse=True)

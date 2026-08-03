@@ -194,10 +194,13 @@
         <li><strong>Support:</strong> <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></li>
         <li><strong>Legal:</strong> <a href="/terms">Terms</a>, <a href="/privacy">Privacy</a>, <a href="/refund-policy">Refund Policy</a>, <a href="/sms-consent">SMS Consent</a></li>
       </ul>
-      {% if not (current_user and user_subscribed) %}
-      <a class="cta" href="/subscribe">Get 50% off your first month</a>
-      {% else %}
+      {% if current_user and user_subscribed %}
       <a class="cta" href="/app">Open Tools</a>
+      {% else %}
+      <a class="cta" href="{{ registration_cta_href }}">{{ registration_promo_label }}</a>
+      {% if not registration_can_signup %}
+      <p class="muted" style="margin-top:12px;">{{ private_beta_supporting }}</p>
+      {% endif %}
       {% endif %}
       <a class="cta secondary" href="/sms-consent">SMS consent &amp; inquiry form</a>
     </section>

@@ -213,10 +213,13 @@
         <li><strong>Support:</strong> <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></li>
       </ul>
       <p class="muted">Generated content is a draft for convenience. Customers should review all AI output before publishing, sending, or using it with prospects.</p>
-      {% if not (current_user and user_subscribed) %}
-      <a class="cta" href="/subscribe">Get 50% off your first month</a>
-      {% else %}
+      {% if current_user and user_subscribed %}
       <a class="cta" href="/app">Open Tools</a>
+      {% else %}
+      <a class="cta" href="{{ registration_cta_href }}">{{ registration_promo_label }}</a>
+      {% if not registration_can_signup %}
+      <p class="muted" style="margin-top:12px;">{{ private_beta_supporting }}</p>
+      {% endif %}
       {% endif %}
     </section>
   </main>

@@ -102,6 +102,12 @@ def _email_list(name):
 
 FREE_ACCESS_EMAILS = _email_list("FREE_ACCESS_EMAILS")
 
+# Public registration / new Checkout gate (Railway env).
+# Missing or any value other than true/1/yes/on => closed (safe default).
+REGISTRATION_ENABLED = _env_bool("REGISTRATION_ENABLED", False)
+# Optional comma-separated emails that may still register/checkout while closed.
+REGISTRATION_ALLOWLIST = _email_list("REGISTRATION_ALLOWLIST")
+
 VOICE_PROVIDER = _env("VOICE_PROVIDER", "vapi").lower()
 VOICE_PROVIDER_API_KEY = _env("VOICE_PROVIDER_API_KEY")
 VOICE_PROVIDER_WEBHOOK_SECRET = _env("VOICE_PROVIDER_WEBHOOK_SECRET")

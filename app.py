@@ -41,6 +41,7 @@ from lead_service import (
     record_voice_call_started,
     upsert_crm_lead,
 )
+import registration_gate
 import seo
 from voice_provider import (
     VoiceProviderError,
@@ -86,6 +87,7 @@ limiter = Limiter(
 def inject_business_context():
     path = request.path or "/"
     user = auth.get_current_user()
+    can_signup = registration_gate.registration_allowed_for_user(user)
     return {
         "business_name": config.BUSINESS_NAME,
         "product_name": config.PRODUCT_NAME,
@@ -98,6 +100,14 @@ def inject_business_context():
         "is_public_marketing_page": seo.is_public_marketing_path(path),
         "current_user": user,
         "user_subscribed": bool(user and auth.user_has_active_subscription(user)),
+        "registration_enabled": registration_gate.registration_is_open(),
+        "registration_can_signup": can_signup,
+        "registration_cta_href": "/subscribe" if can_signup else "/private-beta",
+        "registration_cta_label": "Subscribe" if can_signup else "Private beta",
+        "registration_promo_label": (
+            "Get 50% off your first month" if can_signup else "Private beta"
+        ),
+        "private_beta_supporting": registration_gate.PRIVATE_BETA_SUPPORTING,
     }
 
 
@@ -376,6 +386,13 @@ def login():
                 )
             )
         error = "Invalid email or password."
+    if registration_gate.registration_is_open():
+        footer_text = 'No account? <a href="/subscribe">Create account</a>'
+    else:
+        footer_text = (
+            'New registrations are in private beta. '
+            '<a href="/private-beta">Private beta</a>'
+        )
     return render_template(
         "auth_form.html",
         title="Sign in",
@@ -388,7 +405,7 @@ def login():
             if password_updated
             else None
         ),
-        footer_text='No account? <a href="/subscribe">Create one</a>',
+        footer_text=footer_text,
         error=error,
     )
 
@@ -457,9 +474,21 @@ def password_updated():
 
 
 @app.route("/register", methods=["GET", "POST"])
+@limiter.limit("20 per minute")
 def register():
-    """Legacy signup URL — account creation is on /subscribe."""
-    return redirect(url_for("subscribe"), code=302)
+    """Legacy signup URL — account creation is on /subscribe when registration is open."""
+    user = auth.get_current_user()
+    if registration_gate.registration_allowed_for_user(user):
+        return redirect(url_for("subscribe"), code=302)
+    if registration_gate.wants_json_response():
+        return registration_gate.registration_closed_response()
+    return redirect(url_for("private_beta"), code=302)
+
+
+@app.route("/private-beta")
+def private_beta():
+    """Friendly closed-registration page (not a generic error)."""
+    return render_template("private_beta.html")
 
 
 def _subscribe_page(
@@ -470,10 +499,12 @@ def _subscribe_page(
     status=200,
     gate=None,
     email_locked=False,
+    registration_closed=False,
 ):
     user = auth.get_current_user()
     need_password = not user
     gate = gate or {"can_checkout": True, "state": "none"}
+    show_checkout = bool(gate.get("can_checkout", True)) and not registration_closed
     return (
         render_template(
             "subscribe.html",
@@ -486,7 +517,8 @@ def _subscribe_page(
             notice=notice,
             billing_frequency=config.BILLING_FREQUENCY,
             gate=gate,
-            show_checkout_form=bool(gate.get("can_checkout", True)),
+            show_checkout_form=show_checkout,
+            registration_closed=registration_closed,
         ),
         status,
     )
@@ -529,6 +561,34 @@ def subscribe():
             status=block_status,
         )
 
+    # Block public registration / new Checkout before any user or Stripe mutation.
+    if user and not registration_gate.registration_allowed_for_user(user):
+        if registration_gate.wants_json_response():
+            return registration_gate.registration_closed_response()
+        return _subscribe_page(
+            notice=registration_gate.PRIVATE_BETA_SUPPORTING,
+            gate={
+                **gate,
+                "can_checkout": False,
+                "state": "registration_closed",
+                "message": registration_gate.PRIVATE_BETA_SUPPORTING,
+                "show_manage_billing": bool(user.get("stripe_customer_id")),
+                "show_open_tools": False,
+            },
+            form_email=(user.get("email") or ""),
+            email_locked=True,
+            registration_closed=True,
+            status=403 if request.method == "POST" else 200,
+        )
+
+    if not user and not registration_gate.registration_is_open():
+        # Anonymous visitors: allowlist is enforced on POST after email is known.
+        if request.method == "GET":
+            return registration_gate.registration_closed_get_response()
+        email_probe = _normalize_email(request.form.get("email"))
+        if not registration_gate.email_is_allowlisted(email_probe):
+            return registration_gate.registration_closed_response()
+
     cancelled = request.args.get("cancelled") == "1"
     notice = "Checkout was cancelled. You can try again whenever you are ready." if cancelled else None
 
@@ -562,6 +622,10 @@ def subscribe():
     if user:
         # Authenticated unpaid user: reuse account email (immutable), skip password.
         email = _normalize_email(user.get("email"))
+        try:
+            registration_gate.assert_registration_allowed(email)
+        except registration_gate.RegistrationClosedError:
+            return registration_gate.registration_closed_response()
         # Re-check Stripe/local gate immediately before Checkout (tabs / races).
         gate = _resolve_subscribe_gate(user)
         if gate.get("redirect") == "subscriber_app":
@@ -577,6 +641,10 @@ def subscribe():
     else:
         if not email or "@" not in email:
             return _subscribe_page(error="Enter a valid email address.", form_email=email, status=400)
+        try:
+            registration_gate.assert_registration_allowed(email)
+        except registration_gate.RegistrationClosedError:
+            return registration_gate.registration_closed_response()
         existing = db.get_user_by_email(email)
         if existing:
             # Never create a duplicate user/customer for an existing email.
@@ -629,6 +697,8 @@ def subscribe():
             cancel_url=f"{config.APP_URL}/subscribe?cancelled=1",
             idempotency_key=_checkout_idempotency_key(user["id"]),
         )
+    except registration_gate.RegistrationClosedError:
+        return registration_gate.registration_closed_response()
     except stripe.StripeError:
         logger.exception("Stripe checkout session creation failed for user_id=%s", user.get("id"))
         return _subscribe_page(
