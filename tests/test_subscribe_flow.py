@@ -51,7 +51,7 @@ def test_get_subscribe_returns_200_html(app_client):
 def test_login_create_one_links_to_subscribe(app_client):
     html = app_client.get("/login").get_data(as_text=True)
     assert 'href="/subscribe"' in html
-    assert "Create one" in html
+    assert "Create account" in html
 
 
 def test_register_redirects_to_subscribe(app_client):

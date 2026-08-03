@@ -377,6 +377,8 @@ def sync_user_from_stripe(user, email):
 
 def ensure_stripe_customer(user):
     """Return Stripe customer id for user, creating or reusing by email."""
+    import registration_gate
+
     customer_id = user.get("stripe_customer_id")
     if customer_id:
         return customer_id
@@ -384,6 +386,8 @@ def ensure_stripe_customer(user):
     if existing:
         db.set_stripe_customer(user["id"], existing.id)
         return existing.id
+    # Creating a new Stripe Customer is part of signup/checkout — gate first.
+    registration_gate.assert_registration_allowed(user.get("email"))
     customer = stripe.Customer.create(
         email=normalize_email(user["email"]),
         metadata={"user_id": str(user["id"])},
@@ -408,6 +412,10 @@ def create_subscription_checkout_session(
     idempotency_key: str | None = None,
 ):
     """Create a Stripe Checkout Session for subscription. Does not charge until paid."""
+    import registration_gate
+
+    # Enforce before any Stripe Customer or Checkout Session mutation.
+    registration_gate.assert_registration_allowed((user or {}).get("email"))
     if not billing_is_configured():
         raise RuntimeError(f"Billing not configured: {billing_config_error()}")
     customer_id = ensure_stripe_customer(user)

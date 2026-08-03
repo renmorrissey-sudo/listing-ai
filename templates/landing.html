@@ -51,15 +51,18 @@
         <a class="cta" href="/app" id="access-tools-cta">Open Tools</a>
         <a class="cta secondary" href="/pricing" id="hero-view-pricing">View pricing</a>
         {% elif current_user %}
-        <a class="cta" href="/subscribe" id="hero-start-trial">Subscribe</a>
+        <a class="cta" href="{{ registration_cta_href }}" id="hero-start-trial">{{ registration_cta_label }}</a>
         <a class="cta secondary" href="/pricing" id="hero-view-pricing">View pricing</a>
         <a class="cta ghost" href="/app" id="access-tools-cta">Open Tools</a>
         {% else %}
-        <a class="cta" href="/subscribe" id="hero-start-trial">Subscribe</a>
+        <a class="cta" href="{{ registration_cta_href }}" id="hero-start-trial">{{ registration_cta_label }}</a>
         <a class="cta secondary" href="/pricing" id="hero-view-pricing">View pricing</a>
         <a class="cta ghost" href="/login" id="access-tools-cta">Sign in</a>
         {% endif %}
       </div>
+      {% if not registration_can_signup and not (current_user and user_subscribed) %}
+      <p class="muted" style="margin-top:14px;">{{ private_beta_supporting }}</p>
+      {% endif %}
       <video
         id="landing-video"
         controls

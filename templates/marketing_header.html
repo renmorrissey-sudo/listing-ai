@@ -75,7 +75,7 @@
     {% elif current_user %}
     <a href="/pricing">Pricing</a>
     <a href="/app">Open Tools</a>
-    <a href="/subscribe">Subscribe</a>
+    <a href="{{ registration_cta_href }}"{% if not registration_can_signup %} id="mkt-private-beta"{% endif %}>{{ registration_cta_label }}</a>
     <a href="/logout">Log out</a>
     {% else %}
     <a href="/pricing">Pricing</a>
@@ -83,7 +83,7 @@
     <a href="/privacy">Privacy</a>
     <a href="/contact">Contact</a>
     <a href="/login" id="mkt-sign-in">Sign in</a>
-    <a href="/subscribe" id="mkt-start-trial">Subscribe</a>
+    <a href="{{ registration_cta_href }}" id="mkt-start-trial">{{ registration_cta_label }}</a>
     {% endif %}
   </nav>
 </header>

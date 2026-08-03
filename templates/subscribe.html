@@ -107,11 +107,21 @@
         </div>
       </section>
 
-      <section class="panel" aria-label="{% if show_checkout_form %}Create account{% else %}Subscription status{% endif %}">
+      <section class="panel" aria-label="{% if registration_closed %}Private beta{% elif show_checkout_form %}Create account{% else %}Subscription status{% endif %}">
         {% if notice %}<div class="notice" role="status">{{ notice }}</div>{% endif %}
         {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
 
-        {% if not show_checkout_form %}
+        {% if registration_closed %}
+        <h2 style="font-size:18px;margin-bottom:10px;">Private beta</h2>
+        <p class="muted" style="margin-bottom:14px;">{{ private_beta_supporting }}</p>
+        <a class="btn" href="/login">Sign in</a>
+        <a class="btn secondary" href="mailto:{{ contact_email }}">Contact support</a>
+        {% if gate and gate.show_manage_billing %}
+        <a class="btn secondary" href="/billing/portal">Manage Billing</a>
+        {% endif %}
+        <p class="footer"><a href="/private-beta">Private beta details</a> · <a href="/pricing">View pricing</a>{% if current_user %} · <a href="/logout">Log out</a>{% endif %}</p>
+
+        {% elif not show_checkout_form %}
         <h2 style="font-size:18px;margin-bottom:10px;">Subscription status</h2>
         {% if gate and gate.message and gate.message != notice %}
         <p class="muted" style="margin-bottom:14px;">{{ gate.message }}</p>
