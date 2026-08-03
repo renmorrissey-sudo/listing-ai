@@ -306,7 +306,7 @@ def health():
         "twilio_configured": twilio.is_configured(),
         "active_provider_configured": provider.is_configured(),
         "toll_free_verification_status": (
-            get_telnyx_toll_free_verification_status() or "unknown"
+            (get_telnyx_toll_free_verification_status() or "unknown")
             if active == "telnyx"
             else None
         ),

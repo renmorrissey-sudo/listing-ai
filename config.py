@@ -160,6 +160,9 @@ TELNYX_API_BASE = _env_strip("TELNYX_API_BASE") or "https://api.telnyx.com/v2"
 TELNYX_WEBHOOK_TOLERANCE_SECONDS = int(_env("TELNYX_WEBHOOK_TOLERANCE_SECONDS", "300"))
 # Customer-facing toll-free verification badge for diagnostics (pending|verified|unknown).
 # Source of truth for outbound eligibility when SMS_PROVIDER=telnyx — only "verified" allows sends.
+# Import-time snapshot; runtime reads should use
+# sms_authorization.get_telnyx_toll_free_verification_status() which re-checks os.environ.
+# Railway Variable updates require redeploy/restart of web and worker.
 TELNYX_TOLL_FREE_VERIFICATION_STATUS = (
     (_env_strip("TELNYX_TOLL_FREE_VERIFICATION_STATUS") or "").strip().lower()
 )

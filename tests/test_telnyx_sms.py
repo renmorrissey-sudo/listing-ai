@@ -78,6 +78,7 @@ def test_can_send_enforces_trial(two_users, monkeypatch):
     monkeypatch.setattr(config, "TELNYX_VERIFIED_TEST_NUMBER", "+15551239999")
     monkeypatch.setattr(config, "SMS_QUIET_HOURS_START", 0)
     monkeypatch.setattr(config, "SMS_QUIET_HOURS_END", 0)
+    monkeypatch.setenv("TELNYX_TOLL_FREE_VERIFICATION_STATUS", "verified")
     monkeypatch.setattr(config, "TELNYX_TOLL_FREE_VERIFICATION_STATUS", "verified")
     tdb.accept_sms_terms(u1, u1)
     lead_id, _ = _lead(u1, "+15551230001")

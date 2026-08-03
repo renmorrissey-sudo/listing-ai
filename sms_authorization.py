@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 
 import config
@@ -83,9 +84,24 @@ def _normalize_digits(phone):
 
 
 def get_telnyx_toll_free_verification_status():
-    """Normalized TELNYX_TOLL_FREE_VERIFICATION_STATUS (trim + lowercase)."""
-    raw = getattr(config, "TELNYX_TOLL_FREE_VERIFICATION_STATUS", None)
-    return (str(raw or "").strip().lower())
+    """Normalized TELNYX_TOLL_FREE_VERIFICATION_STATUS (trim + lowercase).
+
+    Reads the process environment on every call so the status panel and send
+    gates track the running service's Variables (not a stale import-time copy).
+
+    Railway still injects Variables only at container start — changing a Variable
+    requires redeploy/restart of web and worker. Missing/blank is not treated as
+    verified; only the exact value ``verified`` enables outbound Telnyx SMS.
+    """
+    if "TELNYX_TOLL_FREE_VERIFICATION_STATUS" in os.environ:
+        raw = os.environ.get("TELNYX_TOLL_FREE_VERIFICATION_STATUS")
+    else:
+        # Test monkeypatches typically set the config attribute without setenv.
+        raw = getattr(config, "TELNYX_TOLL_FREE_VERIFICATION_STATUS", None)
+    normalized = (str(raw or "").strip().lower())
+    # Keep config aligned for any direct readers after an in-process env change.
+    config.TELNYX_TOLL_FREE_VERIFICATION_STATUS = normalized
+    return normalized
 
 
 def is_telnyx_toll_free_verified():

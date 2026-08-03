@@ -26,6 +26,7 @@ def test_sms_provider_telnyx_status_endpoint(app_client, two_users, monkeypatch)
     monkeypatch.setattr(config, "TELNYX_PUBLIC_KEY", "pk-test")
     monkeypatch.setattr(config, "TELNYX_TRIAL_MODE", True)
     monkeypatch.setattr(config, "APP_URL", "https://topairealestatetools.com")
+    monkeypatch.setenv("TELNYX_TOLL_FREE_VERIFICATION_STATUS", "pending")
     monkeypatch.setattr(config, "TELNYX_TOLL_FREE_VERIFICATION_STATUS", "pending")
     res = app_client.get("/sms/status")
     assert res.status_code == 200
@@ -56,6 +57,7 @@ def test_sms_messages_returns_provider_status_not_twilio_for_telnyx(
     monkeypatch.setattr(config, "TELNYX_API_KEY", "KEY")
     monkeypatch.setattr(config, "TELNYX_PHONE_NUMBER", "+18888210810")
     monkeypatch.setattr(config, "APP_URL", "https://topairealestatetools.com")
+    monkeypatch.setenv("TELNYX_TOLL_FREE_VERIFICATION_STATUS", "pending")
     monkeypatch.setattr(config, "TELNYX_TOLL_FREE_VERIFICATION_STATUS", "pending")
     res = app_client.get("/sms/messages")
     assert res.status_code == 200
@@ -150,6 +152,7 @@ def _telnyx_ready(monkeypatch, *, verification="verified", trial=False):
     monkeypatch.setattr(config, "TELNYX_PHONE_NUMBER", "+18888210810")
     monkeypatch.setattr(config, "TELNYX_PUBLIC_KEY", "pk-test")
     monkeypatch.setattr(config, "TELNYX_TRIAL_MODE", trial)
+    monkeypatch.setenv("TELNYX_TOLL_FREE_VERIFICATION_STATUS", verification)
     monkeypatch.setattr(config, "TELNYX_TOLL_FREE_VERIFICATION_STATUS", verification)
     monkeypatch.setattr(config, "SMS_QUIET_HOURS_START", 0)
     monkeypatch.setattr(config, "SMS_QUIET_HOURS_END", 0)
