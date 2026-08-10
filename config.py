@@ -182,6 +182,12 @@ SMS_MAX_RETRIES = int(_env("SMS_MAX_RETRIES", "5"))
 SMS_QUIET_HOURS_START = int(_env("SMS_QUIET_HOURS_START", "21"))
 SMS_QUIET_HOURS_END = int(_env("SMS_QUIET_HOURS_END", "8"))
 SMS_TERMS_VERSION = _env_strip("SMS_TERMS_VERSION") or "sms_terms_v1_2026_07"
+# AI SMS Agent auto-reply to inbound lead messages (Telnyx two-way conversations).
+SMS_AI_AUTO_REPLY_ENABLED = _env_bool("SMS_AI_AUTO_REPLY_ENABLED", True)
+# Loop / abuse guard: max automated replies per contact per rolling day.
+SMS_AI_MAX_REPLIES_PER_CONTACT_PER_DAY = int(
+    _env("SMS_AI_MAX_REPLIES_PER_CONTACT_PER_DAY", "20")
+)
 SMS_CERT_TEXT_VERSION_ONE_TO_ONE = "one_to_one_cert_v1"
 SMS_CERT_TEXT_VERSION_CAMPAIGN = "campaign_cert_v1"
 SMS_IMPORT_UPLOAD_DIR = _env_strip("SMS_IMPORT_UPLOAD_DIR") or os.path.join(

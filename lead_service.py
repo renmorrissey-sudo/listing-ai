@@ -67,7 +67,9 @@ def upsert_crm_lead(
     status = normalize_lead_status(initial_status) if initial_status else None
     assignee = assigned_user_id if assigned_user_id is not None else user_id
 
-    existing = db.get_lead_by_phone(user_id, phone)
+    # Formatting-tolerant match so "(303) 555-1212" and "+13035551212" never
+    # create duplicate leads for the same contact.
+    existing = db.find_lead_by_phone_normalized(user_id, phone)
     if existing:
         lead_id = existing["id"]
         db.update_lead_contact_fields(

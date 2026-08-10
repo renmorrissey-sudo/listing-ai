@@ -351,10 +351,16 @@ def _schedule_coach(app, user_id, lead_id, inbound_id, body, opted_out=False):
 
 
 def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_out=False):
-    """Claude coaching. Stores recommendations + draft only — never auto-sends."""
+    """
+    Claude coaching. Stores recommendations + a draft reply — never sends anything
+    itself. Returns {"analysis", "insight_id", "suggested_id", "error"} so callers
+    (e.g. the Telnyx AI auto-reply path) can reuse the single Claude call.
+    """
+    result = {"analysis": None, "insight_id": None, "suggested_id": None, "error": None}
     lead = db.get_lead(lead_id, user_id)
     if not lead:
-        return
+        result["error"] = "lead_missing"
+        return result
 
     conversation = db.list_lead_messages(user_id, lead_id)
     if opted_out:
@@ -382,7 +388,9 @@ def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_
             {"requires_manual_review": True, "needs_attention_reasons": ["opt_out"]},
             insight_id=insight_id,
         )
-        return
+        result["insight_id"] = insight_id
+        result["error"] = "opted_out"
+        return result
 
     if not sms_coach.is_configured():
         insight_id = db.create_lead_insight(
@@ -406,7 +414,9 @@ def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_
         crm_db.apply_coach_queue_flags(
             user_id, lead_id, {"requires_manual_review": True}, insight_id=insight_id
         )
-        return
+        result["insight_id"] = insight_id
+        result["error"] = "not_configured"
+        return result
 
     try:
         analysis = sms_coach.analyze_inbound_reply(
@@ -435,7 +445,9 @@ def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_
         crm_db.apply_coach_queue_flags(
             user_id, lead_id, {"requires_manual_review": True}, insight_id=insight_id
         )
-        return
+        result["insight_id"] = insight_id
+        result["error"] = "coach_failed"
+        return result
 
     note_bits = [
         analysis.get("summary"),
@@ -496,3 +508,7 @@ def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_
     )
     crm_db.apply_coach_queue_flags(user_id, lead_id, analysis, insight_id=insight_id)
     db.record_tool_usage(user_id, "ai_sms", "inbound_analyzed")
+    result["analysis"] = analysis
+    result["insight_id"] = insight_id
+    result["suggested_id"] = suggested_id
+    return result

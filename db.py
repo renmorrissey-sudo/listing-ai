@@ -2,7 +2,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import config
-from db_backend import bind_bool, connect as backend_connect
+from db_backend import bind_bool, connect as backend_connect, sql_is_true
 
 
 def _connect():
@@ -780,6 +780,61 @@ def get_lead_by_phone(user_id, phone_number):
         return dict(row) if row else None
 
 
+def _phone_digits(phone_number):
+    return "".join(c for c in str(phone_number or "") if c.isdigit())
+
+
+def find_lead_by_phone_normalized(user_id, phone_number):
+    """
+    Tenant-scoped lead lookup tolerant of phone formatting differences.
+    "+13035551212", "(303) 555-1212", and "3035551212" all match the same lead.
+    Exact match wins; otherwise compares the last 10 digits (US national number).
+    """
+    exact = get_lead_by_phone(user_id, phone_number)
+    if exact:
+        return exact
+    target = _phone_digits(phone_number)
+    if len(target) < 10:
+        return None
+    target10 = target[-10:]
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM leads WHERE user_id = ? AND phone_number IS NOT NULL "
+            "ORDER BY updated_at DESC",
+            (user_id,),
+        ).fetchall()
+    for row in rows:
+        digits = _phone_digits(row["phone_number"])
+        if len(digits) >= 10 and digits[-10:] == target10:
+            return dict(row)
+    return None
+
+
+def find_lead_owner_by_phone(phone_number):
+    """
+    user_id of the most recently active lead matching this phone across all tenants.
+    Used ONLY to route inbound SMS on the shared platform Telnyx number to the
+    subscriber that actually owns the conversation.
+    """
+    target = _phone_digits(phone_number)
+    if len(target) < 10:
+        return None
+    target10 = target[-10:]
+    with get_db() as conn:
+        # Trailing digits are contiguous in every common format; prefilter with them.
+        rows = conn.execute(
+            "SELECT user_id, phone_number FROM leads "
+            "WHERE phone_number IS NOT NULL AND phone_number LIKE '%' || ? "
+            "ORDER BY updated_at DESC",
+            (target10[-4:],),
+        ).fetchall()
+    for row in rows:
+        digits = _phone_digits(row["phone_number"])
+        if len(digits) >= 10 and digits[-10:] == target10:
+            return row["user_id"]
+    return None
+
+
 def list_leads(user_id, limit=50):
     with get_db() as conn:
         rows = conn.execute(
@@ -1368,6 +1423,135 @@ def update_sms_message_send_result(message_id, provider_message_id=None, status=
             """,
             (provider_message_id, status, error_message, sent_at, message_id),
         )
+
+
+_DELIVERY_FINAL_FAILURE_STATUSES = {"failed", "delivery_failed", "rejected", "expired"}
+_DELIVERY_PROGRESS_ORDER = {
+    "queued": 1,
+    "sending": 2,
+    "submitted": 2,
+    "sent": 3,
+    "delivered": 4,
+}
+
+
+def apply_sms_delivery_update(message_id, status, *, error_message=None, failure_code=None):
+    """
+    Apply a provider delivery-status webhook to an existing outbound message.
+    Idempotent and monotonic: never regresses 'delivered', keeps first
+    delivered_at/failed_at, and updates the SAME row (no new timeline items).
+    Returns the applied status (or the retained one when regression is blocked).
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    status_l = (status or "unknown").lower()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT status, delivered_at, failed_at FROM sms_messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+        if not row:
+            return None
+        prior = (row["status"] or "").lower()
+        # Late/out-of-order webhook (e.g. message.sent after message.finalized).
+        if prior == "delivered" and _DELIVERY_PROGRESS_ORDER.get(status_l, 99) < 4:
+            return "delivered"
+        delivered_at = row["delivered_at"]
+        failed_at = row["failed_at"]
+        if status_l == "delivered" and not delivered_at:
+            delivered_at = now
+        if status_l in _DELIVERY_FINAL_FAILURE_STATUSES and not failed_at:
+            failed_at = now
+        err = None
+        code = None
+        if status_l in _DELIVERY_FINAL_FAILURE_STATUSES:
+            err = (error_message or "SMS could not be delivered.")[:500]
+            code = str(failure_code)[:80] if failure_code not in (None, "") else None
+        conn.execute(
+            """
+            UPDATE sms_messages
+            SET status = ?,
+                error_message = ?,
+                failure_code = ?,
+                sent_at = COALESCE(sent_at, ?),
+                delivered_at = ?,
+                failed_at = ?
+            WHERE id = ?
+            """,
+            (
+                status_l,
+                err,
+                code,
+                now if status_l in ("sent", "delivered") else None,
+                delivered_at,
+                failed_at,
+                message_id,
+            ),
+        )
+    return status_l
+
+
+def create_ai_reply_message(
+    user_id,
+    lead_id,
+    reply_to_message_id,
+    *,
+    phone_number,
+    message_body,
+    provider,
+    lead_name=None,
+):
+    """
+    Claim the single automated-reply slot for an inbound message.
+    The partial UNIQUE index on reply_to_message_id makes this exactly-once across
+    processes: returns the new outbound message id, or None if already claimed.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        with get_db() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO sms_messages
+                    (user_id, persona_id, lead_id, provider, direction, lead_name,
+                     phone_number, message_body, status, consent_status, opt_out_status,
+                     created_at, reply_to_message_id, ai_generated)
+                VALUES (?, NULL, ?, ?, 'outbound', ?, ?, ?, 'sending', 'confirmed', 'active', ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    lead_id,
+                    provider,
+                    lead_name,
+                    phone_number,
+                    message_body,
+                    now,
+                    reply_to_message_id,
+                    bind_bool(True),
+                ),
+            )
+            return cur.lastrowid
+    except Exception:
+        # Unique violation: another worker/retry already claimed this reply.
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT id FROM sms_messages WHERE reply_to_message_id = ? LIMIT 1",
+                (reply_to_message_id,),
+            ).fetchone()
+        if row:
+            return None
+        raise
+
+
+def count_ai_replies_to_contact_since(user_id, phone_number, since_iso):
+    with get_db() as conn:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS count FROM sms_messages
+            WHERE user_id = ? AND phone_number = ? AND {sql_is_true("ai_generated")}
+              AND created_at >= ?
+            """,
+            (user_id, phone_number, since_iso),
+        ).fetchone()
+        return int(row["count"] if row else 0)
 
 
 def update_sms_message_by_provider_id(provider_message_id, status=None, error_message=None):
