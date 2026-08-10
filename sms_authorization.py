@@ -200,9 +200,12 @@ def _provider_credentials_ok():
     return False
 
 
-def _in_quiet_hours(user_id):
-    # Approximate using UTC hour vs configured quiet window (tenant TZ refinement later).
-    hour = datetime.now(timezone.utc).hour
+def _in_quiet_hours(user_id, now=None):
+    """Quiet hours evaluated on the account's local wall clock, never server/UTC time."""
+    from crm_time import resolve_zone
+
+    tz = resolve_zone(db.get_user_timezone(user_id))
+    hour = (now or datetime.now(timezone.utc)).astimezone(tz).hour
     start = config.SMS_QUIET_HOURS_START
     end = config.SMS_QUIET_HOURS_END
     if start == end:
