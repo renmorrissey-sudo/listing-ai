@@ -1641,17 +1641,21 @@ def telnyx_messaging_webhook():
     from sms_providers.telnyx import TelnyxSMSProvider
     import telnyx_webhooks as txwh
 
+    logger.info("TELNYX_WEBHOOK_RECEIVED path=%s", request.path)
     provider = TelnyxSMSProvider()
     if not provider.validate_webhook(request):
+        logger.warning("TELNYX_WEBHOOK_REJECTED reason=invalid_signature")
         return jsonify({"ok": False, "error": "Invalid webhook signature"}), 401
+    logger.info("TELNYX_WEBHOOK_VERIFIED path=%s", request.path)
     payload = request.get_json(silent=True) or {}
     try:
         result, status = txwh.handle_messaging_webhook(payload, app=app)
         return jsonify(result), status
     except Exception:
         logger.exception("Telnyx webhook failed")
-        # Ack to avoid infinite retries on unexpected bugs after persistence attempt
-        return jsonify({"ok": False}), 200
+        # The webhook event was marked 'failed' and stays reprocessable, so a
+        # 5xx makes Telnyx retry instead of silently dropping the message.
+        return jsonify({"ok": False, "error": "processing_failed"}), 500
 
 
 @app.route("/webhooks/simpletexting/inbound", methods=["POST"])

@@ -221,8 +221,11 @@ class TelnyxSMSProvider(BaseSMSProvider):
             # Attach profile when using from number so profile webhooks apply
             payload["messaging_profile_id"] = self.messaging_profile_id
         if status_callback:
+            # use_profile_webhooks must be False or Telnyx ignores the per-message
+            # webhook_url and delivery receipts depend on the Messaging Profile
+            # webhook being configured correctly in Mission Control.
             payload["webhook_url"] = status_callback
-            payload["use_profile_webhooks"] = True
+            payload["use_profile_webhooks"] = False
 
         logger.info(
             "Telnyx outbound request endpoint=%s/messages from=%s to=%s has_profile=%s",

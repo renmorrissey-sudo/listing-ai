@@ -41,17 +41,38 @@ def get_active_sender(user_id):
         return _row(row)
 
 
-def get_sender_by_number(sender_number):
-    digits = "".join(c for c in (sender_number or "") if c.isdigit())
+def _phone_digits(value):
+    return "".join(c for c in str(value or "") if c.isdigit())
+
+
+def _same_number(a_digits, b_digits):
+    """Strict phone equality: full digits equal, or same last-10 (US national)."""
+    if not a_digits or not b_digits:
+        return False
+    if a_digits == b_digits:
+        return True
+    return (
+        len(a_digits) >= 10
+        and len(b_digits) >= 10
+        and a_digits[-10:] == b_digits[-10:]
+    )
+
+
+def list_senders_by_number(sender_number):
+    """All enabled tenant sender rows whose number matches (platform numbers are shared)."""
+    digits = _phone_digits(sender_number)
+    if not digits:
+        return []
     with get_db() as conn:
         rows = conn.execute(
-            f"SELECT * FROM tenant_sms_senders WHERE {sql_is_true('sms_enabled')}"
+            f"SELECT * FROM tenant_sms_senders WHERE {sql_is_true('sms_enabled')} ORDER BY id"
         ).fetchall()
-    for row in rows:
-        sn = "".join(c for c in (row["sender_number"] or "") if c.isdigit())
-        if sn and (sn == digits or sn.endswith(digits) or digits.endswith(sn)):
-            return dict(row)
-    return None
+    return [dict(r) for r in rows if _same_number(_phone_digits(r["sender_number"]), digits)]
+
+
+def get_sender_by_number(sender_number):
+    matches = list_senders_by_number(sender_number)
+    return matches[0] if matches else None
 
 
 def upsert_tenant_sender(
@@ -805,6 +826,72 @@ def record_webhook_event(
         except Exception:
             # Unique constraint / table missing during partial migrate
             return None
+
+
+def claim_webhook_event(
+    *,
+    provider,
+    provider_event_id,
+    event_type,
+    provider_message_id=None,
+    safe_metadata=None,
+    inflight_seconds=300,
+):
+    """
+    Durable, multi-process webhook dedup keyed on the provider event id.
+
+    Returns one of:
+      "claimed"   — first delivery; caller must process it.
+      "duplicate" — already processed (or currently in flight elsewhere); ack and skip.
+      "retry"     — a previous attempt failed; caller should reprocess.
+
+    Backed by the UNIQUE (provider, provider_event_id) constraint on
+    sms_webhook_events, so concurrent gunicorn workers cannot both claim.
+    """
+    if not provider_event_id:
+        return "claimed"  # No event id — fall back to message-level dedup downstream.
+    now = _now()
+    meta = json.dumps(safe_metadata) if isinstance(safe_metadata, dict) else safe_metadata
+    try:
+        with get_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO sms_webhook_events
+                    (provider, provider_event_id, event_type, provider_message_id,
+                     processing_status, received_at, safe_metadata)
+                VALUES (?, ?, ?, ?, 'received', ?, ?)
+                """,
+                (provider, str(provider_event_id), event_type, provider_message_id, now, meta),
+            )
+        return "claimed"
+    except Exception:
+        pass  # Unique violation (or table race) — inspect the existing row.
+
+    existing = get_webhook_event_by_provider_id(provider, str(provider_event_id))
+    if not existing:
+        # Insert failed for a reason other than uniqueness; process anyway —
+        # message-level idempotency still protects against duplicates.
+        return "claimed"
+    status = (existing.get("processing_status") or "").lower()
+    if status == "failed":
+        mark_webhook_processed(provider, str(provider_event_id), "received")
+        return "retry"
+    if status == "received":
+        # Possibly in flight in another worker. Only reprocess when stale.
+        try:
+            received = datetime.fromisoformat(
+                str(existing.get("received_at") or "").replace("Z", "+00:00")
+            )
+            if received.tzinfo is None:
+                received = received.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - received).total_seconds()
+        except Exception:
+            age = 0
+        if age > inflight_seconds:
+            mark_webhook_processed(provider, str(provider_event_id), "received")
+            return "retry"
+        return "duplicate"
+    return "duplicate"
 
 
 def get_webhook_event_by_provider_id(provider, provider_event_id):

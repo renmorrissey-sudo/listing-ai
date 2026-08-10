@@ -1,9 +1,21 @@
-"""Telnyx Messaging Profile webhook — Ed25519 verified, fast ack, async coach."""
+"""Telnyx Messaging Profile webhook — Ed25519 verified, fast ack, async AI reply.
+
+Event routing (Telnyx Messaging API V2 envelopes: {"data": {"event_type", "id",
+"payload": {...}}}):
+  message.received        → persist inbound, update CRM, schedule AI SMS Agent reply
+  message.sent            → outbound delivery-status update only (never AI)
+  message.finalized       → final delivery-status update only (never AI)
+  message.delivery_failed → failure status update + needs-attention (never AI)
+
+Idempotency: data.id is claimed in sms_webhook_events (UNIQUE constraint) before
+processing; payload.id (the Telnyx message id) dedupes the message row itself; and
+the AI reply slot is unique per inbound message. A retried or duplicated webhook can
+therefore never double-store a message or double-send an AI reply.
+"""
 
 from __future__ import annotations
 
 import logging
-import threading
 
 import crm_db
 import db
@@ -37,64 +49,137 @@ def _event_type(payload):
 def handle_messaging_webhook(payload: dict, *, app=None):
     """
     Process Telnyx Messaging API V2 webhook payload.
-    Returns (result_dict, http_status).
+    Returns (result_dict, http_status). Raises on unexpected processing errors after
+    marking the webhook event 'failed' so a Telnyx retry can reprocess it.
     """
     event_type = _event_type(payload)
     data = (payload or {}).get("data") or {}
     event_id = data.get("id")
+    telnyx_message_id = (data.get("payload") or {}).get("id")
 
-    if event_id and tdb.get_webhook_event_by_provider_id("telnyx", str(event_id)):
-        return {"ok": True, "duplicate": True}, 200
-
-    tdb.record_webhook_event(
+    claim = tdb.claim_webhook_event(
         provider="telnyx",
         provider_event_id=str(event_id) if event_id else None,
         event_type=event_type or "unknown",
-        provider_message_id=((data.get("payload") or {}).get("id")),
+        provider_message_id=str(telnyx_message_id) if telnyx_message_id else None,
         safe_metadata={"event_type": event_type},
     )
+    if claim == "duplicate":
+        logger.info(
+            "TELNYX_EVENT_DUPLICATE webhookEventId=%s event_type=%s",
+            event_id,
+            event_type,
+        )
+        return {"ok": True, "duplicate": True}, 200
 
-    if event_type == "message.received":
-        return _handle_received(payload, app=app)
-    if event_type in {
-        "message.sent",
-        "message.finalized",
-        "message.delivery_failed",
-    }:
-        return _handle_delivery(payload)
-    # Unknown — ack so Telnyx does not retry forever
-    logger.info("Telnyx webhook ignored event_type=%s", event_type or "none")
-    return {"ok": True, "ignored": True}, 200
+    try:
+        if event_type == "message.received":
+            result, status = _handle_received(payload, app=app)
+        elif event_type in {
+            "message.sent",
+            "message.finalized",
+            "message.delivery_failed",
+        }:
+            result, status = _handle_delivery(payload)
+        else:
+            # Unknown — ack so Telnyx does not retry forever
+            logger.info(
+                "Telnyx webhook ignored event_type=%s webhookEventId=%s",
+                event_type or "none",
+                event_id,
+            )
+            result, status = {"ok": True, "ignored": True}, 200
+    except Exception:
+        # Leave the event reprocessable: Telnyx retries after our 5xx.
+        tdb.mark_webhook_processed("telnyx", str(event_id or ""), "failed")
+        logger.exception(
+            "SMS_PROCESSING_ERROR stage=webhook webhookEventId=%s event_type=%s",
+            event_id,
+            event_type,
+        )
+        raise
+
+    if event_id:
+        tdb.mark_webhook_processed("telnyx", str(event_id), "processed")
+    return result, status
+
+
+def _resolve_tenant_sender(account_phone, contact_phone):
+    """
+    Identify the tenant that owns this inbound SMS.
+
+    Deterministic rules, in order:
+      1. A tenant sender row matching the receiving number whose tenant already
+         has a lead/conversation with the sending phone number.
+      2. When the receiving number is the shared platform TELNYX_PHONE_NUMBER
+         (sender rows are unique per number, but every subscriber sends from it),
+         the tenant that owns the most recently active matching lead.
+      3. The sender row that owns the receiving number.
+      4. For the platform number only: any active Telnyx sender.
+    """
+    import config
+
+    candidates = tdb.list_senders_by_number(account_phone)
+    if contact_phone:
+        for sender in candidates:
+            if db.find_lead_by_phone_normalized(sender["user_id"], contact_phone):
+                return sender
+
+    platform = (config.TELNYX_PHONE_NUMBER or "").strip()
+    is_platform = bool(platform) and _normalize_phone(account_phone) == _normalize_phone(platform)
+    if is_platform and contact_phone:
+        owner_id = db.find_lead_owner_by_phone(contact_phone)
+        if owner_id:
+            return {
+                "user_id": owner_id,
+                "sender_number": platform,
+                "sms_provider": "telnyx",
+                "platform_sender": True,
+            }
+    if candidates:
+        return candidates[0]
+    if is_platform:
+        return tdb.get_any_telnyx_sender()
+    return None
 
 
 def _handle_received(payload, *, app=None):
+    from sms_inbound import classify_compliance_keyword
+
     provider = TelnyxSMSProvider()
     event = provider.normalize_inbound_webhook(payload)
+    event_id = event.get("event_id")
     pmid = event.get("provider_message_id")
+    logger.info(
+        "TELNYX_INBOUND_MESSAGE webhookEventId=%s telnyxMessageId=%s", event_id, pmid
+    )
     if pmid and db.get_sms_message_by_provider_id(str(pmid)):
+        logger.info(
+            "TELNYX_EVENT_DUPLICATE telnyxMessageId=%s (message already stored)", pmid
+        )
         return {"ok": True, "duplicate": True}, 200
 
     account_phone = event.get("account_phone")
-    sender = tdb.get_sender_by_number(account_phone)
-    if not sender:
-        # Trial: match global TELNYX_PHONE_NUMBER
-        import config
-
-        if config.TELNYX_PHONE_NUMBER and _normalize_phone(account_phone) == _normalize_phone(
-            config.TELNYX_PHONE_NUMBER
-        ):
-            # Route to first active telnyx sender or leave unmatched for review
-            sender = tdb.get_any_telnyx_sender()
-        if not sender:
-            logger.info("Telnyx inbound ignored — unknown destination")
-            return {"ok": False, "error": "unknown_destination"}, 404
-
-    user_id = sender["user_id"]
     contact = _normalize_phone(event.get("contact_phone"))
     if not contact:
+        logger.warning(
+            "SMS_PROCESSING_ERROR stage=inbound_parse webhookEventId=%s error=invalid_contact",
+            event_id,
+        )
         return {"ok": False, "error": "invalid_contact"}, 400
 
-    lead = db.get_lead_by_phone(user_id, contact)
+    sender = _resolve_tenant_sender(account_phone, contact)
+    if not sender:
+        # Deterministic + safe: ack so Telnyx stops retrying a number we do not own.
+        logger.warning(
+            "SMS_PROCESSING_ERROR stage=tenant_match webhookEventId=%s error=unknown_destination",
+            event_id,
+        )
+        return {"ok": True, "ignored": "unknown_destination"}, 200
+
+    user_id = sender["user_id"]
+
+    lead = db.find_lead_by_phone_normalized(user_id, contact)
     if not lead:
         from lead_service import upsert_crm_lead
 
@@ -106,18 +191,31 @@ def _handle_received(payload, *, app=None):
             touch_sms=True,
             assigned_user_id=user_id,
         )
+        logger.info(
+            "SMS_LEAD_MATCHED leadId=%s tenant=%s created=1 webhookEventId=%s",
+            lead_id,
+            user_id,
+            event_id,
+        )
     else:
         lead_id = lead["id"]
+        logger.info(
+            "SMS_LEAD_MATCHED leadId=%s tenant=%s created=0 webhookEventId=%s",
+            lead_id,
+            user_id,
+            event_id,
+        )
+    logger.info(
+        "SMS_CONVERSATION_MATCHED leadId=%s tenant=%s telnyxMessageId=%s",
+        lead_id,
+        user_id,
+        pmid,
+    )
 
-    text = (event.get("text") or "").strip()
-    upper = text.upper().strip()
-    keyword = None
-    if upper in {"STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"}:
-        keyword = "opt_out"
-    elif upper in {"START", "UNSTOP", "YES"}:
-        keyword = "opt_in"
-    elif upper == "HELP":
-        keyword = "help"
+    text = (event.get("text") or "").strip()[:1500]
+    if not text and event.get("media_items"):
+        text = "[media message]"
+    keyword = classify_compliance_keyword(text)
 
     message_id = db.create_sms_message(
         user_id=user_id,
@@ -136,6 +234,13 @@ def _handle_received(payload, *, app=None):
     )
     if pmid:
         db.update_sms_message_send_result(message_id, provider_message_id=str(pmid), status="received")
+    logger.info(
+        "SMS_INBOUND_PERSISTED messageId=%s telnyxMessageId=%s leadId=%s tenant=%s",
+        message_id,
+        pmid,
+        lead_id,
+        user_id,
+    )
 
     crm_db.add_lead_activity(
         lead_id,
@@ -152,6 +257,7 @@ def _handle_received(payload, *, app=None):
         source_ref_type="sms",
         source_ref_id=message_id,
     )
+    _touch_inbound_lead_state(user_id, lead_id, lead, keyword)
 
     if keyword == "opt_out":
         _apply_opt_out(user_id, lead_id, contact, source="telnyx_inbound")
@@ -174,19 +280,45 @@ def _handle_received(payload, *, app=None):
         user_id,
         "reply_received",
         lead_id=lead_id,
-        metadata={"message_id": message_id, "event_id": event.get("event_id")},
+        metadata={"message_id": message_id, "event_id": event_id},
     )
-    tdb.mark_webhook_processed("telnyx", str(event.get("event_id") or ""), "processed")
 
     if keyword is None and app is not None:
         try:
-            from sms_inbound import _schedule_coach
+            from sms_ai_agent import schedule_inbound_ai
 
-            _schedule_coach(app, user_id, lead_id, message_id, text)
+            schedule_inbound_ai(
+                app,
+                user_id,
+                lead_id,
+                message_id,
+                text,
+                _normalize_phone(account_phone) or (sender.get("sender_number") or None),
+            )
         except Exception:
-            logger.exception("Failed to schedule coach for Telnyx inbound")
+            logger.exception(
+                "SMS_PROCESSING_ERROR stage=ai_schedule messageId=%s leadId=%s",
+                message_id,
+                lead_id,
+            )
 
     return {"ok": True, "lead_id": lead_id, "message_id": message_id}, 200
+
+
+def _touch_inbound_lead_state(user_id, lead_id, lead, keyword):
+    """Last-activity + pipeline status parity with the Twilio inbound path."""
+    from datetime import datetime, timezone
+
+    try:
+        db.update_lead_from_analysis(
+            lead_id, user_id, last_inbound_at=datetime.now(timezone.utc).isoformat()
+        )
+        if keyword != "opt_out" and (lead or {}).get("opt_out_status") != "opted_out":
+            crm_db.set_lead_status(user_id, lead_id, "contacted", from_automation=True)
+    except Exception:
+        logger.exception(
+            "Failed to update lead activity state lead_id=%s tenant=%s", lead_id, user_id
+        )
 
 
 def _handle_delivery(payload):
@@ -197,6 +329,9 @@ def _handle_delivery(payload):
         return {"ok": False, "error": "missing_message_id"}, 400
     row = db.get_sms_message_by_provider_id(str(pmid))
     if not row:
+        return {"ok": True, "ignored": True}, 200
+    if (row.get("direction") or "outbound") == "inbound":
+        # Never let a delivery receipt touch an inbound message row.
         return {"ok": True, "ignored": True}, 200
 
     status = (event.get("status") or "unknown").lower()
@@ -211,7 +346,27 @@ def _handle_delivery(payload):
         "expired": "expired",
         "rejected": "rejected",
     }.get(status, status)
-    db.update_sms_message_send_result(row["id"], status=mapped)
+
+    error_message = None
+    if mapped in {"failed", "delivery_failed", "rejected", "expired"}:
+        code = event.get("error_code")
+        error_message = (
+            f"Telnyx delivery error {code}" if code else "SMS could not be delivered."
+        )
+    applied = db.apply_sms_delivery_update(
+        row["id"],
+        mapped,
+        error_message=error_message,
+        failure_code=event.get("error_code"),
+    )
+    logger.info(
+        "SMS_DELIVERY_UPDATE messageId=%s telnyxMessageId=%s status=%s applied=%s tenant=%s",
+        row["id"],
+        pmid,
+        mapped,
+        applied,
+        row.get("user_id"),
+    )
     if mapped in {"failed", "delivery_failed", "rejected", "expired"} and row.get("lead_id"):
         crm_db.upsert_needs_attention(
             row["user_id"],
@@ -234,9 +389,7 @@ def _handle_delivery(payload):
             lead_id=row.get("lead_id"),
             metadata={"provider_message_id": pmid},
         )
-    if event.get("event_id"):
-        tdb.mark_webhook_processed("telnyx", str(event["event_id"]), "processed")
-    return {"ok": True, "status": mapped}, 200
+    return {"ok": True, "status": applied or mapped}, 200
 
 
 def _send_help_reply(provider, user_id, lead_id, contact_phone, from_number):
