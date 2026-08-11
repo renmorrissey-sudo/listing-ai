@@ -74,7 +74,8 @@ TRIAL_BLOCK_MSG = (
 )
 TOLL_FREE_VERIFICATION_BLOCK_MSG = "Toll-free messaging verification is not complete."
 TOLL_FREE_VERIFICATION_UI_MSG = (
-    "SMS sending is unavailable until Telnyx completes toll-free verification."
+    "SMS sending isn't available yet while your number completes toll-free "
+    "verification. Contact support if this is taking longer than expected."
 )
 
 

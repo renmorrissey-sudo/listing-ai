@@ -63,6 +63,9 @@
     .notice { background: #fff8e6; border: 1.5px solid #f0d98c; color: #7a5c00; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.45; margin-bottom: 14px; }
     .checkbox-row { display: flex; gap: 9px; align-items: flex-start; margin: 12px 0; font-size: 13px; color: #556; line-height: 1.45; }
     .checkbox-row input { width: auto; margin-top: 3px; }
+    .field-section-label { font-size: 11px; font-weight: 800; color: #8899aa; text-transform: uppercase; letter-spacing: 0.6px; margin: 20px 0 10px; padding-top: 16px; border-top: 1px solid #eef2f7; }
+    .field-section-label:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+    .success-msg { background: #f0fdf4; border: 1.5px solid #86efac; color: #15803d; border-radius: 8px; padding: 12px 16px; font-size: 13px; margin-top: 12px; display: none; }
     .call-history { display: flex; flex-direction: column; gap: 12px; max-height: 560px; overflow-y: auto; }
     .call-item { background: #f8fafc; border: 1.5px solid #e0e4ed; border-radius: 8px; padding: 14px; font-size: 13px; line-height: 1.5; }
     .call-item strong { color: #1a1a2e; }
@@ -338,41 +341,52 @@
     <div class="card">
       <h2>AI SMS Assistant</h2>
       <div class="notice">
-        Use consent-based one-to-one SMS only. You are responsible for TCPA, DNC, carrier rules, brokerage policy, and local regulations. Include opt-out language where required. Nothing is sent until you review the draft and click Send.
+        AI-drafted, one-to-one SMS. Review and edit the message before it sends — nothing goes out automatically.
       </div>
       <form id="sms-form">
         <div class="form-group"><label>Persona</label><select name="persona_id" id="sms-persona" required><option value="">Loading personas...</option></select></div>
-        <div class="form-row">
-          <div class="form-group"><label>Lead Name</label><input type="text" name="lead_name" placeholder="e.g. Sarah Johnson" maxlength="120" /></div>
-          <div class="form-group"><label>Phone Number *</label><input type="tel" name="phone_number" placeholder="e.g. (555) 123-4567" maxlength="32" required /></div>
+
+        <div class="field-section-label">Lead</div>
+        <div class="form-group">
+          <label>Select existing lead</label>
+          <select id="sms-compose-lead-select"><option value="">Enter lead details manually...</option></select>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>Your Name</label><input type="text" name="agent_name" placeholder="Your name" maxlength="120" />
-          <div class="form-group"><label>Lead Type</label><input type="text" name="lead_type" placeholder="e.g. buyer lead, open house visitor" maxlength="80" /></div>
+          <div class="form-group"><label>Lead Name</label><input type="text" name="lead_name" id="sms-lead-name" placeholder="e.g. Sarah Johnson" maxlength="120" /></div>
+          <div class="form-group"><label>Phone Number *</label><input type="tel" name="phone_number" id="sms-phone-number" placeholder="e.g. (555) 123-4567" maxlength="32" required /></div>
         </div>
-        <div class="form-group"><label>Property Interest</label><textarea name="property_interest" maxlength="500" placeholder="e.g. Looking at 3-bedroom homes near downtown under $500k"></textarea></div>
+
+        <div class="field-section-label">Agent / Context</div>
+        <div class="form-row">
+          <div class="form-group"><label>Your Name</label><input type="text" name="agent_name" placeholder="Your name" maxlength="120" /></div>
+          <div class="form-group"><label>Lead Type</label><input type="text" name="lead_type" id="sms-lead-type" placeholder="e.g. buyer lead, open house visitor" maxlength="80" /></div>
+        </div>
+        <div class="form-group"><label>Property Interest</label><textarea name="property_interest" id="sms-property-interest" maxlength="500" placeholder="e.g. Looking at 3-bedroom homes near downtown under $500k"></textarea></div>
         <div class="form-group"><label>Desired Outcome</label><input type="text" name="desired_outcome" maxlength="300" placeholder="e.g. get a reply and book a showing" /></div>
-        <div class="form-group"><label>Agent Notes</label><textarea name="notes" maxlength="1500" placeholder="Any context the AI should use in the text"></textarea></div>
+        <div class="form-group"><label>Agent Notes</label><textarea name="notes" id="sms-notes" maxlength="1500" placeholder="Any context the AI should use in the text"></textarea></div>
+
+        <div class="field-section-label">Message</div>
         <div class="form-group">
           <label>SMS Message</label>
           <textarea name="message_body" id="sms-message-body" maxlength="480" placeholder="Click Generate SMS to draft a message, then edit before sending."></textarea>
           <div class="muted" id="sms-char-count" style="font-size:12px;margin-top:6px;">0 / 480 characters</div>
         </div>
-        <p class="muted" style="font-size:12px;margin:8px 0;">Warning: TopAI does not independently verify supporting consent records. You are solely responsible for TCPA, DNC, brokerage, and carrier compliance. Bulk sends require a certified campaign.</p>
+        <button type="button" class="btn-generate" id="sms-generate-btn"><div class="spinner" id="sms-generate-spinner"></div><span id="sms-generate-label">Generate SMS</span></button>
+
+        <div class="field-section-label">SMS Consent</div>
         <label class="checkbox-row">
           <input type="checkbox" name="compliance_confirmed" id="sms-compliance-confirmed" value="true" required />
-          <span>I confirm that this contact has consented to receive SMS messages from me or my business for this purpose. I maintain the supporting consent records and am responsible for TCPA, DNC, carrier, brokerage, privacy, opt-out, and local-law compliance.</span>
+          <span>I confirm this contact has consented to receive SMS from me or my business, and I maintain the supporting consent record.</span>
         </label>
-        <div class="error-msg" id="sms-error"></div>
-        <div id="sms-provider-status" class="notice" style="margin-top:12px;font-size:12px;display:none;" aria-live="polite"></div>
-        <div id="sms-trial-banner" class="notice" style="margin-top:12px;font-size:12px;display:none;border-color:#c45c26;color:#7a3410;" aria-live="polite"></div>
-        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
-          <button type="button" class="btn-generate" id="sms-generate-btn" style="flex:1;"><div class="spinner" id="sms-generate-spinner"></div><span id="sms-generate-label">Generate SMS</span></button>
-          <button type="submit" class="btn-generate" id="sms-send-btn" style="flex:1;" disabled><div class="spinner" id="sms-send-spinner"></div><span id="sms-send-label">Send SMS</span></button>
-        </div>
-        <p class="muted" id="sms-verification-block" style="font-size:12px;margin-top:8px;display:none;color:#7a3410;" aria-live="polite"></p>
-        <p class="muted" id="sms-config-note" style="font-size:12px;margin-top:10px;"></p>
+        <p class="muted" style="font-size:12px;">You're responsible for applicable TCPA, DNC, carrier, brokerage, privacy, opt-out, and local requirements.</p>
+
+        <div id="sms-trial-banner" class="notice" style="margin-top:4px;font-size:12px;display:none;border-color:#c45c26;color:#7a3410;" aria-live="polite"></div>
+        <p class="muted" id="sms-verification-block" style="font-size:12px;margin-top:4px;display:none;color:#7a3410;" aria-live="polite"></p>
+        <button type="submit" class="btn-generate" id="sms-send-btn" style="margin-top:14px;" disabled><div class="spinner" id="sms-send-spinner"></div><span id="sms-send-label">Send SMS</span></button>
+        <div class="error-msg" id="sms-error" aria-live="polite"></div>
+        <div class="success-msg" id="sms-success" aria-live="polite"></div>
       </form>
+      <p class="muted" style="font-size:12px;margin-top:14px;"><a href="/crm/sms-diagnostics" class="call-link">Troubleshoot SMS setup &amp; delivery status &rarr;</a></p>
     </div>
     <div class="card results-panel">
       <h2>Needs your review</h2>
@@ -486,56 +500,18 @@
     return data;
   }
 
-  function renderProviderStatus(status) {
-    const panel = document.getElementById('sms-provider-status') || document.getElementById('sms-twilio-status');
+  function updateSmsTrialBanner(status) {
+    // Detailed provider/config diagnostics live on the SMS Diagnostics admin
+    // page (/crm/sms-diagnostics); this banner only surfaces the one state
+    // that changes what an agent should expect when sending.
     const trial = document.getElementById('sms-trial-banner');
-    if (trial) {
-      if (status && status.trial_mode && status.trial_message) {
-        trial.textContent = status.trial_message;
-        trial.style.display = 'block';
-      } else if (status && status.trial_mode) {
-        trial.textContent = 'Telnyx trial mode is enabled. Outbound SMS is limited to the verified test number.';
-        trial.style.display = 'block';
-      } else {
-        trial.style.display = 'none';
-      }
+    if (!trial) return;
+    if (status && status.trial_mode) {
+      trial.textContent = 'Your account can currently only send SMS to a verified test number while setup is finishing.';
+      trial.style.display = 'block';
+    } else {
+      trial.style.display = 'none';
     }
-    if (!panel || !status) return;
-    const yesNo = (v) => (v ? 'yes' : 'no');
-    const provider = (status.provider || status.sms_provider || '').toLowerCase();
-    if (provider === 'telnyx') {
-      const tollDisplay = status.toll_free_number_display || '(888) 821-0810';
-      const rows = [
-        `SMS provider: Telnyx`,
-        `Telnyx API key configured: ${yesNo(status.api_key_configured)}`,
-        `Telnyx messaging profile configured: ${yesNo(status.messaging_profile_configured)}`,
-        `Telnyx phone number configured: ${yesNo(status.phone_number_configured)}`,
-        `Telnyx public key configured: ${yesNo(status.public_key_configured)}`,
-        `Webhook endpoint configured: ${yesNo(status.webhook_endpoint_configured)}`,
-        `Webhook API version: ${status.webhook_api_version || 'V2'}`,
-        `Toll-free number: +1 ${tollDisplay}`,
-        `Toll-free verification status: ${status.toll_free_verification_status || 'unknown'}`,
-        `Trial mode: ${status.trial_mode ? 'enabled' : 'disabled'}`,
-        `SMS sending enabled: ${yesNo(status.sms_sending_enabled)}`,
-        `Latest Telnyx send status: ${status.latest_send_status || 'none'}`,
-        `Latest Telnyx error code: ${status.latest_telnyx_error_code != null ? status.latest_telnyx_error_code : (status.latest_error_code != null ? status.latest_error_code : 'none')}`,
-      ];
-      const errMsg = status.latest_telnyx_error_message || status.latest_error_message;
-      if (errMsg) rows.push(`Latest Telnyx error: ${errMsg}`);
-      panel.innerHTML = `<strong>Telnyx status</strong><br/>${rows.map(escapeHtml).join('<br/>')}`;
-      panel.style.display = 'block';
-      return;
-    }
-    // Non-Telnyx rollback providers (Twilio / SimpleTexting) — only shown when active.
-    const rows = [
-      `SMS provider: ${provider || 'unknown'}`,
-      `Provider configured: ${yesNo(status.send_configured || status.configured || status.credentials_configured)}`,
-    ];
-    if (status.latest_error_message || status.latest_twilio_error_message) {
-      rows.push(`Latest error: ${status.latest_error_message || status.latest_twilio_error_message}`);
-    }
-    panel.innerHTML = `<strong>SMS provider status</strong><br/>${rows.map(escapeHtml).join('<br/>')}`;
-    panel.style.display = 'block';
   }
 
   function escapeHtml(value) {
@@ -709,7 +685,7 @@
   }
 
   async function loadSmsData() {
-    await Promise.all([loadVoicePersonas(), loadSmsMessages(), loadSmsInbox(), loadSmsLeads()]);
+    await Promise.all([loadVoicePersonas(), loadSmsMessages(), loadSmsInbox(), loadSmsLeads(), loadSmsComposeLeads()]);
   }
 
   function updateSmsCharCount() {
@@ -721,12 +697,11 @@
 
   let smsSendConfigured = false;
   let smsTollFreeVerified = false;
-  let smsVerificationBlockMessage = 'SMS sending is unavailable until Telnyx completes toll-free verification.';
+  let smsVerificationBlockMessage = "SMS sending isn't available yet while your number completes toll-free verification. Contact support if this is taking longer than expected.";
 
   async function loadSmsMessages() {
     const history = document.getElementById('sms-history');
     const placeholder = document.getElementById('sms-placeholder');
-    const note = document.getElementById('sms-config-note');
     const verifyNote = document.getElementById('sms-verification-block');
     if (!history || !placeholder) return;
     try {
@@ -744,32 +719,19 @@
       }
       if (typeof syncSmsSendEnabled === 'function') syncSmsSendEnabled();
       if (verifyNote) {
-        if ((data.sms_provider || '').toLowerCase() === 'telnyx' && !smsTollFreeVerified) {
+        const provider = (data.sms_provider || '').toLowerCase();
+        if (provider === 'telnyx' && !smsTollFreeVerified) {
           verifyNote.textContent = smsVerificationBlockMessage;
+          verifyNote.style.display = 'block';
+        } else if (!smsSendConfigured) {
+          verifyNote.textContent = 'SMS sending is temporarily unavailable. You can still generate and save drafts.';
           verifyNote.style.display = 'block';
         } else {
           verifyNote.textContent = '';
           verifyNote.style.display = 'none';
         }
       }
-      if (note) {
-        const provider = (data.sms_provider || (data.provider_status && data.provider_status.provider) || '').toLowerCase();
-        let sendNote;
-        if (provider === 'telnyx' && !smsTollFreeVerified) {
-          sendNote = smsVerificationBlockMessage;
-        } else if (smsSendConfigured && provider === 'telnyx') {
-          sendNote = 'SMS sending is configured through Telnyx. TopAI drafts the message using Claude. You review and approve the message before it is sent.';
-        } else if (smsSendConfigured) {
-          sendNote = 'SMS sending is configured for the active provider. TopAI drafts the message using Claude. You review and approve the message before it is sent.';
-        } else {
-          sendNote = 'SMS sending is not fully configured yet. You can still generate and save SMS drafts.';
-        }
-        const coachNote = data.coach_configured
-          ? ' Claude inbound coaching is enabled.'
-          : ' Add ANTHROPIC_API_KEY in Railway to enable Claude inbound coaching.';
-        note.textContent = sendNote + coachNote;
-      }
-      if (statusPayload && Object.keys(statusPayload).length) renderProviderStatus(statusPayload);
+      updateSmsTrialBanner(statusPayload);
       if (!data.messages.length) {
         history.style.display = 'none';
         placeholder.style.display = 'flex';
@@ -899,6 +861,48 @@
     } catch (err) {
       select.innerHTML = '<option value="">Leads unavailable</option>';
     }
+  }
+
+  let smsComposeLeadsById = {};
+
+  async function loadSmsComposeLeads() {
+    const select = document.getElementById('sms-compose-lead-select');
+    if (!select) return;
+    try {
+      const data = await fetchJson('/sms/leads', {cache: 'no-store'});
+      if (!data) return;
+      smsComposeLeadsById = {};
+      (data.leads || []).forEach(lead => { smsComposeLeadsById[String(lead.id)] = lead; });
+      const current = select.value;
+      if (!data.leads.length) {
+        select.innerHTML = '<option value="">Enter lead details manually...</option>';
+        return;
+      }
+      select.innerHTML = '<option value="">Enter lead details manually...</option>' + data.leads.map(lead =>
+        `<option value="${lead.id}">${escapeHtml(lead.name || 'Lead')} · ${escapeHtml(lead.phone_number || '')}</option>`
+      ).join('');
+      if (current) select.value = current;
+    } catch (err) {
+      select.innerHTML = '<option value="">Enter lead details manually...</option>';
+    }
+  }
+
+  const smsComposeLeadSelect = document.getElementById('sms-compose-lead-select');
+  if (smsComposeLeadSelect) {
+    smsComposeLeadSelect.addEventListener('change', () => {
+      const lead = smsComposeLeadsById[smsComposeLeadSelect.value];
+      if (!lead) return;
+      const nameEl = document.getElementById('sms-lead-name');
+      const phoneEl = document.getElementById('sms-phone-number');
+      const typeEl = document.getElementById('sms-lead-type');
+      const interestEl = document.getElementById('sms-property-interest');
+      const notesEl = document.getElementById('sms-notes');
+      if (nameEl) nameEl.value = lead.name || '';
+      if (phoneEl) phoneEl.value = lead.phone_number || '';
+      if (typeEl) typeEl.value = lead.lead_type || '';
+      if (interestEl) interestEl.value = lead.property_interest || '';
+      if (notesEl && !notesEl.value) notesEl.value = lead.next_action || '';
+    });
   }
 
   async function openSmsLead(leadId) {
@@ -1253,8 +1257,10 @@
     const spinner = document.getElementById('sms-generate-spinner');
     const label = document.getElementById('sms-generate-label');
     const errEl = document.getElementById('sms-error');
+    const successEl = document.getElementById('sms-success');
     const form = document.getElementById('sms-form');
     errEl.style.display = 'none';
+    if (successEl) successEl.style.display = 'none';
     btn.disabled = true; spinner.style.display = 'block'; label.textContent = 'Generating...';
     const data = Object.fromEntries(new FormData(form).entries());
     try {
@@ -1292,8 +1298,10 @@
     const spinner = document.getElementById('sms-send-spinner');
     const label = document.getElementById('sms-send-label');
     const errEl = document.getElementById('sms-error');
+    const successEl = document.getElementById('sms-success');
     const compliance = document.getElementById('sms-compliance-confirmed');
     errEl.style.display = 'none';
+    if (successEl) successEl.style.display = 'none';
     if (!compliance || !compliance.checked) {
       errEl.textContent = 'Certify contact SMS consent before sending.';
       errEl.style.display = 'block';
@@ -1313,6 +1321,10 @@
         errEl.textContent = result.warning;
         errEl.style.display = 'block';
       } else {
+        if (successEl) {
+          successEl.textContent = 'SMS sent.';
+          successEl.style.display = 'block';
+        }
         e.target.reset();
         updateSmsCharCount();
       }
@@ -1322,7 +1334,7 @@
       errEl.style.display = 'block';
       try {
         const status = await fetchJson('/sms/status', {cache: 'no-store'});
-        if (status) renderProviderStatus(status);
+        if (status) updateSmsTrialBanner(status);
       } catch (_ignore) {}
     }
     spinner.style.display = 'none'; label.textContent = 'Send SMS';
