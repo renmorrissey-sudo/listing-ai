@@ -31,6 +31,7 @@ from crm_constants import (
     EXTERNAL_SOURCE_CATEGORIES,
     POND_STATUSES,
     VERBAL_CONSENT_SCRIPT,
+    sms_consent_label,
     status_label,
 )
 from external_leads.consent_workflow import (
@@ -571,6 +572,7 @@ def lead_consent_page(lead_id):
         attestation=CONSENT_CONFIRMATION_STATEMENT,
         verbal_script=VERBAL_CONSENT_SCRIPT,
         status_label=status_label,
+        sms_consent_label=sms_consent_label,
         **_nav(user, "leads"),
     )
 

@@ -25,11 +25,13 @@ from crm_constants import (
     cancel_reason_label,
     outcome_label,
     normalize_lead_status,
+    sms_consent_is_certified,
+    sms_consent_label,
     status_label,
 )
 
 PIPELINE_STAGE_IDS = {stage_id for stage_id, _label, _members in PIPELINE_STAGES}
-ALLOWED_SMS_CONSENT = {"unverified", "verified", "opted_out", "not_permitted"}
+ALLOWED_SMS_CONSENT = {"unverified", "verified", "user_certified", "opted_out", "not_permitted"}
 ALLOWED_POND = {"claimable", "claimed", "assigned", "unassigned"}
 ALLOWED_FOLLOW_UP_RANGES = {
     "today": "today",
@@ -360,6 +362,8 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
         "cancel_reason_label": cancel_reason_label,
         "user_timezone": db.get_user_timezone(user["id"]),
         "status_label": status_label,
+        "sms_consent_label": sms_consent_label,
+        "sms_consent_is_certified": sms_consent_is_certified,
         "outcome_label": outcome_label,
         "flash_message": flash_message,
         "flash_error": flash_error,
@@ -471,6 +475,7 @@ def crm_leads_page():
         active_filter=active_filter,
         result_count=len(leads),
         status_label=status_label,
+        sms_consent_label=sms_consent_label,
         has_active_filters=bool(active_filter),
         **_nav_context(user, "leads"),
     )

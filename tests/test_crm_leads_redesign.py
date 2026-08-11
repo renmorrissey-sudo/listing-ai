@@ -8,6 +8,7 @@ unchanged — these tests confirm the new thin UI/API surface reuses it correctl
 import db
 import external_leads_db as xdb
 from external_leads.ingest import ingest_external_lead
+from sms_authorization import record_one_to_one_attestation
 
 
 def _login(client, user_id):
@@ -202,6 +203,31 @@ def test_lead_source_manage_page_and_secret_rotation(app_client, two_users):
     )
     assert rotate.status_code == 200
     assert b"New webhook secret" in rotate.data
+
+
+def test_lead_detail_shows_certified_consent_not_unverified(app_client, two_users):
+    """A certified lead must never be mislabeled Unverified or warned as unsendable."""
+    u1, _ = two_users
+    _login(app_client, u1)
+    result = ingest_external_lead(
+        u1, {"full_name": "Certified Carla", "phone": "+15551239009"}, method="manual"
+    )
+    lead_id = result["lead_id"]
+    _att_id, err = record_one_to_one_attestation(
+        u1, lead_id, message_body="Hi Carla, following up", source_page="test"
+    )
+    assert err is None
+    lead = db.get_lead(lead_id, u1)
+    assert lead["sms_consent_status"] == "user_certified"
+    assert int(lead["sms_sending_blocked"]) == 0
+
+    html = app_client.get(f"/crm/leads/{lead_id}").get_data(as_text=True)
+    assert "Certified" in html
+    assert "Unverified" not in html
+    assert "SMS cannot be sent until consent is verified" not in html
+
+    list_html = app_client.get("/crm/leads").get_data(as_text=True)
+    assert "Certified Carla" in list_html
 
 
 def test_lead_source_manage_page_enforces_tenant_isolation(app_client, two_users):
