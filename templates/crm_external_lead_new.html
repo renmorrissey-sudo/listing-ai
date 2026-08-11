@@ -3,18 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Add external lead - {{ product_name }}</title>
+  <title>New Lead - {{ product_name }}</title>
   <meta name="robots" content="noindex" />
   {% include 'crm_base_styles.html' %}
 </head>
 <body>
-  {% set page_tagline = 'External lead' %}
+  {% set page_tagline = 'New lead' %}
   {% include 'subscriber_header.html' %}
   {% include 'subscriber_tool_nav.html' %}
   <main>
-    <p class="muted"><a href="/crm/leads">← Leads</a> · <a href="/crm/external-sources">Sources</a></p>
-    <h1>Add external lead</h1>
-    <p class="muted">Creates the lead as Unverified + SMS Blocked. Imported consent claims become pending evidence only.</p>
+    <p class="muted"><a href="/crm/leads">← Leads</a> · <a href="/crm/external-sources">Lead Sources</a></p>
+    <h1>New Lead</h1>
+    <p class="muted">Creates the lead as Unverified + SMS Blocked. Imported consent claims become pending evidence only. Prefer the quick <a href="/crm/leads">+ New Lead</a> drawer on the Leads page for a faster flow — this full-page form is kept for detailed external-lead metadata.</p>
     {% if error %}<div class="flash err" style="display:block;">{{ error }}</div>{% endif %}
     <div class="card">
       <form method="post">
@@ -49,7 +49,7 @@
           <label>Consent date <input name="original_consent_date" type="datetime-local" /></label>
           <label>Consent text <textarea name="original_consent_text" rows="2"></textarea></label>
         </fieldset>
-        <button class="btn" type="submit" style="margin-top:12px;">Save external lead</button>
+        <button class="btn" type="submit" style="margin-top:12px;">Save Lead</button>
       </form>
     </div>
   </main>

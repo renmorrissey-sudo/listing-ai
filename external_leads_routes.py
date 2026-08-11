@@ -47,8 +47,26 @@ from external_leads.csv_import import (
     suggest_mapping,
     validate_csv_filename,
 )
+from external_leads.duplicates import find_duplicate
 from external_leads.ingest import ingest_external_lead
 from external_leads.webhook import generate_webhook_secret, hash_webhook_secret
+from lead_service import normalize_phone_e164
+
+# Popular real-estate lead providers with zero direct API/OAuth/webhook-vendor
+# integration in this codebase today (see external_leads/adapters.py stubs).
+# Shown as disabled "Coming soon" cards — never represented as connectable.
+POPULAR_LEAD_PROVIDERS = [
+    {"key": "zillow", "name": "Zillow Premier Agent"},
+    {"key": "realtor_com", "name": "Realtor.com / ReadyConnect"},
+    {"key": "homes_com", "name": "Homes.com"},
+    {"key": "cinc", "name": "CINC"},
+    {"key": "real_geeks", "name": "Real Geeks"},
+    {"key": "market_leader", "name": "Market Leader"},
+    {"key": "smartzip", "name": "SmartZip"},
+    {"key": "redx", "name": "REDX"},
+    {"key": "meta_lead_ads", "name": "Meta / Facebook Lead Ads"},
+    {"key": "google_lead_forms", "name": "Google Lead Forms"},
+]
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +113,15 @@ def _wants_json():
     )
 
 
+def _last_lead_received_at(user_id, source_id):
+    with db.get_db() as conn:
+        row = conn.execute(
+            "SELECT MAX(created_at) AS last_at FROM leads WHERE user_id = ? AND external_source_id = ?",
+            (user_id, source_id),
+        ).fetchone()
+        return (row or {}).get("last_at") if row else None
+
+
 @external_leads_bp.route("/crm/external-sources", methods=["GET", "POST"])
 def external_sources_page():
     user = _user_or_redirect()
@@ -102,6 +129,10 @@ def external_sources_page():
         return _unauth_redirect()
     error = None
     created_secret = None
+    prefill_name = request.args.get("name") or ""
+    prefill_provider_key = request.args.get("provider_key") or ""
+    prefill_category = request.args.get("category") or ""
+    prefill_method = request.args.get("import_method") or ""
     if request.method == "POST":
         name = (request.form.get("name") or "").strip()
         category = (request.form.get("category") or "other").strip()
@@ -134,14 +165,140 @@ def external_sources_page():
             if not created_secret:
                 return redirect(url_for("external_leads.external_sources_page"))
     sources = xdb.list_external_lead_sources(user["id"])
+    connected_sources = []
+    for source in sources:
+        item = dict(source)
+        item["last_lead_received_at"] = _last_lead_received_at(user["id"], source["id"])
+        connected_sources.append(item)
     return render_template(
         "crm_external_sources.html",
-        sources=sources,
+        sources=connected_sources,
         categories=EXTERNAL_SOURCE_CATEGORIES,
         pond_statuses=POND_STATUSES,
+        popular_providers=POPULAR_LEAD_PROVIDERS,
         error=error,
         created_secret=created_secret,
+        prefill_name=prefill_name,
+        prefill_provider_key=prefill_provider_key,
+        prefill_category=prefill_category,
+        prefill_method=prefill_method,
         **_nav(user, "leads"),
+    )
+
+
+@external_leads_bp.route("/crm/external-sources/<int:source_id>", methods=["GET", "POST"])
+def external_source_detail(source_id):
+    """Manage a single lead source: view config, rotate webhook secret."""
+    user = _user_or_redirect()
+    if not user:
+        return _unauth_redirect()
+    source = xdb.get_external_lead_source(source_id, user["id"])
+    if not source:
+        flash("Source not found.", "error")
+        return redirect(url_for("external_leads.external_sources_page"))
+    rotated_secret = None
+    error = None
+    if request.method == "POST":
+        action = (request.form.get("action") or "").strip()
+        if action == "rotate_secret":
+            if source.get("import_method") not in {"webhook", "api"}:
+                error = "Only webhook/API sources have a secret to rotate."
+            else:
+                raw_secret = generate_webhook_secret()
+                xdb.update_source_webhook_secret(source_id, user["id"], hash_webhook_secret(raw_secret))
+                rotated_secret = raw_secret
+                flash("Webhook secret rotated. Copy it now — it will not be shown again.")
+                source = xdb.get_external_lead_source(source_id, user["id"])
+        else:
+            error = "Unknown action."
+    return render_template(
+        "crm_external_source_detail.html",
+        source=source,
+        rotated_secret=rotated_secret,
+        error=error,
+        last_lead_received_at=_last_lead_received_at(user["id"], source_id),
+        **_nav(user, "leads"),
+    )
+
+
+@external_leads_bp.route("/api/crm/leads", methods=["POST"])
+def api_create_lead():
+    """JSON create/find-or-update endpoint for the New Lead drawer.
+
+    Thin wrapper around ingest_external_lead — same tenant-scoped duplicate
+    detection, safe consent defaults, and source attribution as CSV/webhook.
+    """
+    user = _user_or_redirect()
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+
+    source_id = data.get("external_source_id")
+    source_row = None
+    if source_id:
+        try:
+            source_row = xdb.get_external_lead_source(int(source_id), user["id"])
+        except (TypeError, ValueError):
+            source_row = None
+
+    payload = {
+        "first_name": data.get("first_name"),
+        "last_name": data.get("last_name"),
+        "phone": data.get("phone"),
+        "email": data.get("email"),
+        "notes": data.get("notes"),
+        "lead_type": data.get("lead_type"),
+        "status": data.get("status"),
+        "pond_status": "claimable",
+    }
+    result = ingest_external_lead(
+        user["id"],
+        payload,
+        source_row=source_row,
+        method="manual",
+        actor_user_id=user["id"],
+    )
+    if result.get("error"):
+        return jsonify({"error": result["error"]}), 400
+
+    lead_id = result["lead_id"]
+    return (
+        jsonify(
+            {
+                "ok": True,
+                "lead_id": lead_id,
+                "created": result.get("action") == "created",
+                "duplicate": result.get("action") in {"updated", "skipped_opted_out"},
+                "duplicate_match": result.get("duplicate_match"),
+                "redirect_url": url_for("crm.crm_lead_detail_page", lead_id=lead_id),
+            }
+        ),
+        201 if result.get("action") == "created" else 200,
+    )
+
+
+@external_leads_bp.route("/api/crm/leads/check-duplicate", methods=["GET"])
+def api_check_duplicate_lead():
+    """Tenant-scoped pre-check so the New Lead drawer can warn before submit."""
+    user = _user_or_redirect()
+    if not user:
+        return jsonify({"error": "Unauthorized"}), 401
+    phone_raw = request.args.get("phone") or ""
+    phone = normalize_phone_e164(phone_raw)
+    if not phone:
+        return jsonify({"duplicate": False})
+    existing, match = find_duplicate(user["id"], phone=phone)
+    if not existing:
+        return jsonify({"duplicate": False})
+    return jsonify(
+        {
+            "duplicate": True,
+            "match": match,
+            "lead_id": existing["id"],
+            "name": existing.get("name") or "Lead",
+            "phone_number": existing.get("phone_number"),
+            "url": url_for("crm.crm_lead_detail_page", lead_id=existing["id"]),
+        }
     )
 
 
@@ -187,7 +344,7 @@ def external_lead_new():
             error = result["error"]
         else:
             flash(
-                "External lead saved as Unverified + SMS Blocked. "
+                "Lead saved as Unverified + SMS Blocked. "
                 "Confirm consent evidence before texting."
             )
             return redirect(url_for("crm.crm_lead_detail_page", lead_id=result["lead_id"]))
