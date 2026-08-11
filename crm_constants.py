@@ -276,6 +276,39 @@ SMS_CONSENT_STATUSES = (
     "not_permitted",
 )
 
+# Statuses that mean "an agent/carrier has established valid consent" — SMS is
+# allowed for these (subject to sms_sending_blocked / other checks), so the UI
+# must never label them "Unverified". "verified" is the legacy/carrier-verified
+# value; "user_certified" is the current agent-self-certification value set by
+# external_leads/consent_workflow.py::confirm_qualifying_consent and
+# sms_authorization.py::record_one_to_one_attestation.
+SMS_CONSENT_CERTIFIED_STATUSES = {"verified", "user_certified"}
+
+SMS_CONSENT_STATUS_LABELS = {
+    "verified": "Verified",
+    "user_certified": "Certified",
+    "opted_out": "Opted out",
+    "revoked": "Revoked",
+    "not_permitted": "Not permitted",
+    "suppressed": "Suppressed",
+    "invalid_number": "Invalid number",
+    "not_certified": "Unverified",
+    "unverified": "Unverified",
+}
+
+
+def sms_consent_is_certified(sms_consent_status):
+    """True when SMS consent has been established (verified or user-certified)."""
+    return (sms_consent_status or "").strip().lower() in SMS_CONSENT_CERTIFIED_STATUSES
+
+
+def sms_consent_label(sms_consent_status):
+    """Human-friendly SMS consent status label — never mislabels certified consent as Unverified."""
+    key = (sms_consent_status or "").strip().lower()
+    if key in SMS_CONSENT_STATUS_LABELS:
+        return SMS_CONSENT_STATUS_LABELS[key]
+    return key.replace("_", " ").title() if key else "Unverified"
+
 CONSENT_METHODS = (
     "direct_web_form",
     "verbal",

@@ -88,6 +88,7 @@
               <select name="consent" id="consent-select">
                 <option value="">All consent</option>
                 <option value="unverified" {% if sms_consent_filter == 'unverified' %}selected{% endif %}>Unverified</option>
+                <option value="user_certified" {% if sms_consent_filter == 'user_certified' %}selected{% endif %}>Certified</option>
                 <option value="verified" {% if sms_consent_filter == 'verified' %}selected{% endif %}>Verified</option>
                 <option value="opted_out" {% if sms_consent_filter == 'opted_out' %}selected{% endif %}>Opted out</option>
                 <option value="not_permitted" {% if sms_consent_filter == 'not_permitted' %}selected{% endif %}>Not permitted</option>
@@ -156,7 +157,7 @@
           </div>
           <div class="lead-row-meta">
             <span class="pill">{{ status_label(lead.status) }}</span>
-            <span class="pill {% if lead.sms_sending_blocked %}danger{% endif %}">{{ lead.sms_consent_status or 'unverified' }}</span>
+            <span class="pill {% if lead.sms_sending_blocked %}danger{% endif %}">{{ sms_consent_label(lead.sms_consent_status) }}</span>
             {% if lead.sms_sending_blocked %}<span class="pill danger">SMS blocked</span>{% endif %}
           </div>
           <a class="lead-row-open" href="/crm/leads/{{ lead.id }}" aria-label="Open lead {{ lead.name or 'Lead' }}">Open &rarr;</a>
