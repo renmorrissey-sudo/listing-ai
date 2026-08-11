@@ -397,6 +397,27 @@ def test_shared_platform_number_routes_to_conversation_owner(two_users, monkeypa
     assert db.get_sms_message(result["message_id"], u2) is not None
 
 
+# Shared platform number: when BOTH the sender-row owner and another tenant have
+# a lead for the contact, the reply must follow the most recent conversation —
+# not the sender-row owner's stale lead. (Production regression: replies were
+# filed under the account holding the platform sender row.)
+def test_shared_platform_number_prefers_most_recent_conversation(two_users, monkeypatch):
+    u1, u2 = two_users
+    shared = _unique_e164("884")
+    monkeypatch.setattr(config, "TELNYX_PHONE_NUMBER", shared)
+    tdb.upsert_tenant_sender(u1, sender_number=shared, sms_provider="telnyx", sms_enabled=True, registration_status="verified")
+    contact = _unique_e164("696")
+    stale_lead_id, _ = _lead(u1, contact, name="Old Import")  # sender-row owner's stale lead
+    active_lead_id, _ = _lead(u2, contact, name="Sarah Johnson")
+    db.touch_lead_outbound(active_lead_id, u2)  # u2 messaged the contact most recently
+
+    result, status = txwh.handle_messaging_webhook(_inbound_payload(contact, account=shared))
+    assert status == 200
+    assert result["lead_id"] == active_lead_id
+    assert db.get_sms_message(result["message_id"], u2) is not None
+    assert db.get_sms_message(result["message_id"], u1) is None
+
+
 # 16: AI failure preserves the inbound message and flags the conversation.
 def test_ai_failure_preserves_inbound_and_flags_attention(two_users, monkeypatch):
     u1, _ = two_users

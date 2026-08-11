@@ -109,24 +109,24 @@ def _resolve_tenant_sender(account_phone, contact_phone):
     Identify the tenant that owns this inbound SMS.
 
     Deterministic rules, in order:
-      1. A tenant sender row matching the receiving number whose tenant already
-         has a lead/conversation with the sending phone number.
-      2. When the receiving number is the shared platform TELNYX_PHONE_NUMBER
+      1. When the receiving number is the shared platform TELNYX_PHONE_NUMBER
          (sender rows are unique per number, but every subscriber sends from it),
-         the tenant that owns the most recently active matching lead.
+         the tenant with the most recently active matching lead — i.e. whoever
+         actually owns the live conversation, since outbound sends bump the
+         lead's updated_at. The sender row's owner gets no special priority on
+         the shared number; that would misroute replies to a tenant holding a
+         stale lead for the same contact.
+      2. For dedicated numbers: the sender row matching the receiving number
+         whose tenant already has a lead/conversation with the sending phone.
       3. The sender row that owns the receiving number.
       4. For the platform number only: any active Telnyx sender.
     """
     import config
 
     candidates = tdb.list_senders_by_number(account_phone)
-    if contact_phone:
-        for sender in candidates:
-            if db.find_lead_by_phone_normalized(sender["user_id"], contact_phone):
-                return sender
-
     platform = (config.TELNYX_PHONE_NUMBER or "").strip()
     is_platform = bool(platform) and _normalize_phone(account_phone) == _normalize_phone(platform)
+
     if is_platform and contact_phone:
         owner_id = db.find_lead_owner_by_phone(contact_phone)
         if owner_id:
@@ -136,6 +136,11 @@ def _resolve_tenant_sender(account_phone, contact_phone):
                 "sms_provider": "telnyx",
                 "platform_sender": True,
             }
+
+    if contact_phone:
+        for sender in candidates:
+            if db.find_lead_by_phone_normalized(sender["user_id"], contact_phone):
+                return sender
     if candidates:
         return candidates[0]
     if is_platform:
