@@ -141,6 +141,17 @@ def test_follow_ups_appear_on_lead_detail_and_calendar(app_client, two_users):
     assert any(i["lead_id"] == lead_id for i in body["follow_ups"])
 
 
+def test_follow_ups_page_copy_has_no_database_table_name(app_client, two_users):
+    u1, _ = two_users
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+    page = app_client.get("/crm/follow-ups")
+    assert page.status_code == 200
+    html = page.get_data(as_text=True)
+    assert "lead_follow_ups" not in html
+    assert "not from the activity timeline" not in html
+
+
 def test_timezone_local_date_bucketing(two_users):
     u1, _ = two_users
     db.update_business_profile(u1, timezone="America/Denver")

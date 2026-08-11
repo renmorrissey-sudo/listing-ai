@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 import config
 import crm_db
+import crm_time
 import db
 import sms_coach
 from lead_service import SMS_SOURCE, upsert_crm_lead
@@ -350,6 +351,40 @@ def _schedule_coach(app, user_id, lead_id, inbound_id, body, opted_out=False):
     threading.Thread(target=run, name=f"sms-coach-{inbound_id}", daemon=True).start()
 
 
+def _ensure_sms_follow_up(user_id, lead_id, analysis):
+    """Persist a real lead_follow_ups record when Claude determined a concrete
+    future action, mirroring the voice-call path (lead_service.ensure_lead_follow_through).
+
+    Without this, `leads.next_action` is only freeform text with no scheduling
+    record behind it, so it never shows up on /crm/follow-ups, the Leads
+    Calendar's follow-up bucket, or Needs Attention overdue checks.
+    """
+    follow_up_at = analysis.get("suggested_follow_up_at")
+    due = crm_time.parse_iso_dt(follow_up_at)
+    if not due:
+        return None
+    due_at = crm_time.to_utc_iso(due)
+    reason = (
+        analysis.get("suggested_follow_up_reason")
+        or analysis.get("recommended_next_action")
+        or analysis.get("recommended_action")
+        or "Follow up with lead"
+    )
+    priority = "high" if analysis.get("appointment_requested") else "normal"
+    result, error = crm_db.set_lead_follow_up(
+        user_id,
+        lead_id,
+        due_at,
+        reason,
+        priority=priority,
+    )
+    if error:
+        logger.warning(
+            "Could not schedule SMS follow-up lead_id=%s error=%s", lead_id, error
+        )
+    return result
+
+
 def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_out=False):
     """
     Claude coaching. Stores recommendations + a draft reply — never sends anything
@@ -464,6 +499,7 @@ def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_
         or analysis.get("next_best_step"),
         last_inbound_at=datetime.now(timezone.utc).isoformat(),
     )
+    _ensure_sms_follow_up(user_id, lead_id, analysis)
 
     suggested_id = None
     draft = analysis.get("draft_reply") or analysis.get("suggested_reply")
