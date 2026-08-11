@@ -44,7 +44,7 @@
         <li>Tenant sender: {% if sender %}{{ sender.sender_number }} ({{ sender.registration_status }}){% else %}{{ sender_error }}{% endif %}</li>
         <li>SMS terms ({{ terms_version }}): {{ 'accepted' if terms_ok else 'not accepted' }}</li>
         <li>Queue backlog (pending/claimed jobs): {{ queue_backlog }}</li>
-        <li>Last outbound: {% if last_outbound %}#{{ last_outbound.id }} {{ last_outbound.status }}{% else %}none{% endif %}</li>
+        <li>Last outbound: {% if last_outbound %}#{{ last_outbound.id }} {{ last_outbound.status }}{% if last_outbound.error_message %} — {{ last_outbound.error_message }}{% endif %}{% else %}none{% endif %}</li>
         <li>Last inbound: {% if last_inbound %}#{{ last_inbound.id }} {{ last_inbound.status }}{% else %}none{% endif %}</li>
       </ul>
       {% if not terms_ok %}

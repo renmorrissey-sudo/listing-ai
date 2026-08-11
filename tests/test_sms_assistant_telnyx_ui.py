@@ -6,6 +6,7 @@ import pytest
 
 import config
 import db
+from sms_authorization import TOLL_FREE_VERIFICATION_UI_MSG
 from sms_providers.factory import get_sms_provider
 from sms_providers.telnyx import TelnyxSMSProvider
 
@@ -66,25 +67,94 @@ def test_sms_messages_returns_provider_status_not_twilio_for_telnyx(
     assert data["sms_sending_enabled"] is False
     assert data["toll_free_verification_blocked"] is True
     assert data["twilio_status"] is None
-    assert "SMS sending is unavailable until Telnyx completes toll-free verification." in (
-        data.get("verification_block_message") or ""
-    )
+    assert TOLL_FREE_VERIFICATION_UI_MSG in (data.get("verification_block_message") or "")
 
 
-def test_app_page_has_telnyx_status_js_not_twilio_labels(app_client, two_users, monkeypatch):
+def test_app_page_hides_provider_diagnostics_from_normal_sms_ui(
+    app_client, two_users, monkeypatch
+):
+    """The customer-facing AI SMS Assistant must not show internal Telnyx/Twilio
+    configuration diagnostics. That detail now lives only on the authenticated
+    /crm/sms-diagnostics page (see test_sms_campaigns_page.py)."""
     u1, _ = two_users
     db.update_user_subscription(u1, "active")
     _login(app_client, u1)
     monkeypatch.setattr(config, "SMS_PROVIDER", "telnyx")
     html = app_client.get("/app").get_data(as_text=True)
-    assert "sms-provider-status" in html
-    assert "renderProviderStatus" in html
-    assert "Telnyx status" in html
-    assert "SMS sending is configured through Telnyx" in html
+    assert "Telnyx status" not in html
+    assert "Telnyx API key configured" not in html
+    assert "Telnyx messaging profile configured" not in html
+    assert "Webhook API version" not in html
+    assert "SMS sending is configured through Telnyx" not in html
+    assert "Claude inbound coaching is enabled" not in html
     assert "Twilio status" not in html
     assert "Messaging Service SID configured" not in html
     assert "A2P readiness" not in html
     assert "Twilio Console" not in html
+    # The core compose/consent/send workflow must still be present.
+    assert "Generate SMS" in html
+    assert "Send SMS" in html
+    assert 'id="sms-compliance-confirmed"' in html
+    assert "/crm/sms-diagnostics" in html
+    # Simplified consent copy per the redesigned SMS Consent section.
+    assert "I confirm this contact has consented to receive SMS from me or my business" in html
+    assert "responsible for applicable TCPA, DNC, carrier, brokerage, privacy, opt-out" in html
+    # Optional UX improvement: selecting an existing CRM lead can prefill compose fields.
+    assert 'id="sms-compose-lead-select"' in html
+    assert 'id="sms-success"' in html
+
+
+def test_sms_diagnostics_shows_last_outbound_error_when_present(
+    app_client, two_users, monkeypatch
+):
+    u1, _ = two_users
+    db.update_user_subscription(u1, "active")
+    _login(app_client, u1)
+    monkeypatch.setattr(config, "SMS_PROVIDER", "telnyx")
+    monkeypatch.setattr(config, "TELNYX_API_KEY", "KEY")
+    # Use a sender number distinct from other tests' shared "+18888210810" —
+    # tenant_sms_senders.sender_number is globally unique, so reusing that
+    # value here would race with other tests for ownership of the row.
+    monkeypatch.setattr(config, "TELNYX_PHONE_NUMBER", "+18885551001")
+    msg_id = db.create_sms_message(
+        u1,
+        persona_id=None,
+        provider="telnyx",
+        data={"phone_number": "+17202891700", "message_body": "Hello"},
+        status="draft",
+        direction="outbound",
+    )
+    db.update_sms_message_send_result(
+        msg_id, status="failed", error_message="Carrier rejected message"
+    )
+    html = app_client.get("/crm/sms-diagnostics").get_data(as_text=True)
+    assert "Carrier rejected message" in html
+
+
+def test_sms_diagnostics_page_still_shows_telnyx_config_for_support(
+    app_client, two_users, monkeypatch
+):
+    """The detailed provider/config info removed from the AI SMS Assistant page
+    must remain available on the authenticated SMS Diagnostics page."""
+    u1, _ = two_users
+    db.update_user_subscription(u1, "active")
+    _login(app_client, u1)
+    monkeypatch.setattr(config, "SMS_PROVIDER", "telnyx")
+    monkeypatch.setattr(config, "TELNYX_API_KEY", "SUPER_SECRET_KEY")
+    monkeypatch.setattr(config, "TELNYX_PUBLIC_KEY", "SUPER_SECRET_PUBLIC")
+    monkeypatch.setattr(config, "TELNYX_MESSAGING_PROFILE_ID", "profile-1")
+    monkeypatch.setattr(config, "TELNYX_PHONE_NUMBER", "+18885551002")
+    monkeypatch.setattr(config, "TELNYX_TOLL_FREE_VERIFICATION_STATUS", "pending")
+    res = app_client.get("/crm/sms-diagnostics")
+    assert res.status_code == 200
+    html = res.get_data(as_text=True)
+    assert "Active provider" in html
+    assert "Messaging Profile configured" in html
+    assert "Platform sender number configured" in html
+    assert "Toll-free verification" in html
+    assert "Webhook route" in html
+    assert "SUPER_SECRET_KEY" not in html
+    assert "SUPER_SECRET_PUBLIC" not in html
 
 
 def test_send_sms_routes_through_telnyx(app_client, two_users, monkeypatch):
@@ -165,7 +235,7 @@ def test_pending_status_keeps_sending_disabled(app_client, two_users, monkeypatc
     assert data["provider_status"]["sms_sending_enabled"] is False
     assert data["provider_status"]["toll_free_verification_status"] == "pending"
     html = app_client.get("/app").get_data(as_text=True)
-    assert "SMS sending is unavailable until Telnyx completes toll-free verification." in html
+    assert TOLL_FREE_VERIFICATION_UI_MSG in html
     assert "smsSendConfigured" in html
     assert "smsTollFreeVerified" in html
 
