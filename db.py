@@ -822,11 +822,13 @@ def find_lead_owner_by_phone(phone_number):
     target10 = target[-10:]
     with get_db() as conn:
         # Trailing digits are contiguous in every common format; prefilter with them.
+        # Keep the % wildcard inside the bound value: a literal % in the SQL text
+        # breaks psycopg's placeholder parsing on Postgres.
         rows = conn.execute(
             "SELECT user_id, phone_number FROM leads "
-            "WHERE phone_number IS NOT NULL AND phone_number LIKE '%' || ? "
+            "WHERE phone_number IS NOT NULL AND phone_number LIKE ? "
             "ORDER BY updated_at DESC",
-            (target10[-4:],),
+            (f"%{target10[-4:]}",),
         ).fetchall()
     for row in rows:
         digits = _phone_digits(row["phone_number"])

@@ -2840,7 +2840,9 @@ def filter_leads(
             sql += " AND l.pond_status = ?"
             params.append(pond_status)
         if external_only in (True, 1, "1", "true", "yes"):
-            sql += " AND (l.external_source_id IS NOT NULL OR l.source LIKE 'external:%')"
+            # Wildcard must be a bound value: literal % breaks psycopg on Postgres.
+            sql += " AND (l.external_source_id IS NOT NULL OR l.source LIKE ?)"
+            params.append("external:%")
         if import_batch_id:
             sql += " AND l.import_batch_id = ?"
             params.append(import_batch_id)
