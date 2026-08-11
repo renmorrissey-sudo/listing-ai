@@ -2790,6 +2790,7 @@ def filter_leads(
     external_only=None,
     import_batch_id=None,
     consent_review_required=None,
+    search=None,
 ):
     """List leads for this tenant. scope=active / stage=* match dashboard Pipeline cards."""
     from crm_constants import normalize_lead_status as norm
@@ -2802,6 +2803,15 @@ def filter_leads(
             WHERE l.user_id = ?
         """
         params = [user_id]
+        search_term = (search or "").strip()
+        if search_term:
+            # Wildcards must be bound values: a literal % in the SQL text breaks
+            # psycopg's placeholder conversion on Postgres (see db_backend.py).
+            like_term = f"%{search_term}%"
+            sql += (
+                " AND (l.name LIKE ? OR l.phone_number LIKE ? OR l.email LIKE ?)"
+            )
+            params.extend([like_term, like_term, like_term])
         if scope == "active":
             sql += (
                 " AND l.status NOT IN ('closed_won', 'closed_lost', 'do_not_contact')"
