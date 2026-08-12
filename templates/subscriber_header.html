@@ -5,9 +5,19 @@
   </div>
   <div class="subscriber-info">
     <span class="subscriber-email">&#10003; {{ email }}</span>
-    {% if has_billing_portal %}
-    <a class="billing-link" href="/billing">Billing</a>
-    {% endif %}
-    <button class="logout-btn" type="button" onclick="doLogout()">Sign out</button>
+    <details class="account-menu" id="account-menu">
+      <summary aria-label="Open account menu">Account <span aria-hidden="true">&#9662;</span></summary>
+      <div class="account-menu-panel" role="menu" aria-label="Account">
+        <a href="/billing" role="menuitem" {% if active_nav == 'billing' %}aria-current="page"{% endif %}>Billing</a>
+        <a href="/social/connections" role="menuitem" {% if active_nav == 'social-connections' %}aria-current="page"{% endif %}>Social Media</a>
+        <a href="/integrations/email-marketing" role="menuitem" {% if active_nav == 'email-marketing' %}aria-current="page"{% endif %}>Email Marketing</a>
+        <a href="/crm/sms-diagnostics" role="menuitem" {% if active_nav == 'sms-diagnostics' %}aria-current="page"{% endif %}>SMS Diagnostics</a>
+        <a href="/tutorial" role="menuitem" {% if active_nav == 'tutorial' %}aria-current="page"{% endif %}>Tutorial</a>
+        <div class="account-menu-divider" aria-hidden="true"></div>
+        <form method="post" action="/logout">
+          <button type="submit" role="menuitem">Sign out</button>
+        </form>
+      </div>
+    </details>
   </div>
 </header>

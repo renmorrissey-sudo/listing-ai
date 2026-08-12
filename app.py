@@ -362,7 +362,13 @@ def subscriber_app():
     notice = None
     if request.args.get("already_subscribed") == "1":
         notice = "Your subscription is already active."
-    return render_template("index.html", subscribe_notice=notice)
+    return render_template(
+        "index.html",
+        subscribe_notice=notice,
+        email=user["email"],
+        has_billing_portal=bool(user.get("stripe_customer_id")),
+        active_nav="listing",
+    )
 
 
 @app.route("/session-status")
@@ -785,6 +791,8 @@ def billing_page():
     return render_template(
         "billing.html",
         email=user["email"],
+        has_billing_portal=bool(user.get("stripe_customer_id")),
+        active_nav="billing",
         summary=summary,
         notice=notice,
         error=error,

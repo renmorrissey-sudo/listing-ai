@@ -10,8 +10,28 @@
   .tagline { font-size: 12px; color: #8899aa; margin-top: 2px; }
   .subscriber-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .subscriber-email { font-size: 12px; color: #22c55e; font-weight: 600; }
-  .billing-link { border: 1.5px solid #4f8ef7; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #dce8ff; text-decoration: none; }
-  .logout-btn { background: none; border: 1.5px solid #445; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #aab; cursor: pointer; }
+  .account-menu { position: relative; }
+  .account-menu summary {
+    list-style: none; border: 1.5px solid #445; border-radius: 7px; padding: 7px 11px;
+    color: #dce3ef; font-size: 12px; font-weight: 700; cursor: pointer; user-select: none;
+  }
+  .account-menu summary::-webkit-details-marker { display: none; }
+  .account-menu summary:hover, .account-menu[open] summary { border-color: #71809a; color: white; }
+  .account-menu summary:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 2px; }
+  .account-menu-panel {
+    position: absolute; right: 0; top: calc(100% + 8px); z-index: 200;
+    min-width: 210px; padding: 7px; background: white; border: 1px solid #dfe5ef;
+    border-radius: 10px; box-shadow: 0 14px 36px rgba(15,23,42,0.24);
+  }
+  .account-menu-panel a, .account-menu-panel button {
+    display: block; width: 100%; padding: 9px 10px; border: 0; border-radius: 7px;
+    background: transparent; color: #334; font: inherit; font-size: 13px; font-weight: 600;
+    text-align: left; text-decoration: none; cursor: pointer;
+  }
+  .account-menu-panel a:hover, .account-menu-panel button:hover { background: #eef5ff; color: #1d4ed8; }
+  .account-menu-panel [aria-current="page"] { background: #eef5ff; color: #1d4ed8; }
+  .account-menu-panel form { margin: 0; }
+  .account-menu-divider { height: 1px; margin: 5px 3px; background: #e8edf4; }
   .tool-nav-bar { background: #232344; padding: 0 32px; }
   .tool-nav-toggle {
     display: none; align-items: center; gap: 8px; width: 100%;
@@ -92,6 +112,7 @@
     .tool-nav a { border-bottom: none; border-left: 3px solid transparent; padding: 10px 8px; }
     .tool-nav a.active { border-left-color: #4f8ef7; }
     .subscriber-footer { flex-direction: column; align-items: flex-start; }
+    .account-menu-panel { min-width: min(280px, calc(100vw - 24px)); }
   }
 
   /* --- Leads page header, toolbar, rows, drawer, sources (shared) --- */
