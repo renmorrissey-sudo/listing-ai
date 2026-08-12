@@ -107,6 +107,7 @@ def inject_business_context():
         "is_public_marketing_page": seo.is_public_marketing_path(path),
         "current_user": user,
         "user_subscribed": bool(user and auth.user_has_active_subscription(user)),
+        "needs_billing_attention": bool(user and auth.user_needs_billing_attention(user)),
         "registration_enabled": registration_gate.registration_is_open(),
         "registration_can_signup": can_signup,
         "registration_cta_href": "/subscribe" if can_signup else "/private-beta",
@@ -279,8 +280,10 @@ from stripe_billing import (
     billing_config_error as _billing_config_error,
     billing_is_configured as _billing_is_configured,
     billing_summary as _billing_summary,
+    build_billing_summary as _build_billing_summary,
     checkout_idempotency_key as _checkout_idempotency_key,
     complete_payment_method_update as _complete_payment_method_update,
+    create_billing_portal_session as _create_billing_portal_session,
     create_payment_method_update_session as _create_payment_method_update_session,
     create_subscription_checkout_session as _create_subscription_checkout_session,
     handle_stripe_webhook_event as _handle_stripe_webhook_event,
@@ -288,7 +291,6 @@ from stripe_billing import (
     resolve_subscribe_gate as _resolve_subscribe_gate,
     stripe_customer_for_email as _stripe_customer_for_email,
     stripe_has_active_subscription as _stripe_has_active_subscription,
-    stripe_status_from_subscription as _stripe_status_from_subscription,
     sync_user_from_stripe as _sync_user_from_stripe,
 )
 
@@ -367,6 +369,7 @@ def subscriber_app():
         subscribe_notice=notice,
         email=user["email"],
         has_billing_portal=bool(user.get("stripe_customer_id")),
+        needs_billing_attention=auth.user_needs_billing_attention(user),
         active_nav="listing",
     )
 
@@ -752,6 +755,45 @@ def logout():
     return jsonify({"ok": True})
 
 
+@app.route("/billing")
+@auth.login_required
+def billing_page():
+    """Customer-facing subscription / payment-method status."""
+    user = auth.get_current_user()
+    billing = _build_billing_summary(user)
+    summary = _billing_summary(user) if config.STRIPE_SECRET_KEY else {
+        "plan_name": billing.get("plan_name") or "TopAI Pro",
+        "price_label": config.SUBSCRIPTION_PRICE,
+        "status_label": billing.get("status_label")
+        or (user.get("subscription_status") or "none").replace("_", " ").title(),
+        "payment_method": {"label": "Unavailable"},
+        "attention_message": billing.get("warning_message"),
+        "show_update_payment_method": (user.get("subscription_status") or "") in (
+            "past_due", "unpaid", "incomplete", "paused"
+        ) or bool(user.get("payment_action_required")),
+        "show_manage_subscription": bool(user.get("stripe_customer_id")),
+        "has_stripe_customer": bool(user.get("stripe_customer_id")),
+        "local_status": user.get("subscription_status") or "none",
+        "needs_payment_method_update": bool(user.get("payment_action_required")),
+    }
+    notice = request.args.get("notice")
+    error = request.args.get("error")
+    return render_template(
+        "billing.html",
+        email=user["email"],
+        has_billing_portal=bool(user.get("stripe_customer_id")),
+        needs_billing_attention=auth.user_needs_billing_attention(user),
+        active_nav="billing",
+        billing=billing,
+        summary=summary,
+        notice=notice,
+        error=error,
+        product_name=config.PRODUCT_NAME,
+        subscription_price=config.SUBSCRIPTION_PRICE,
+        billing_frequency=config.BILLING_FREQUENCY,
+    )
+
+
 @app.route("/billing/success")
 def billing_success():
     """Checkout return URL. Access is granted only by the verified Stripe webhook."""
@@ -766,40 +808,6 @@ def billing_success():
         except stripe.StripeError:
             logger.exception("Failed to retrieve checkout session after success redirect")
     return render_template("billing_success.html")
-
-
-@app.route("/billing")
-@auth.login_required
-def billing_page():
-    """Customer-facing subscription / payment-method status."""
-    user = auth.get_current_user()
-    summary = _billing_summary(user) if config.STRIPE_SECRET_KEY else {
-        "plan_name": "TopAI Pro",
-        "price_label": config.SUBSCRIPTION_PRICE,
-        "status_label": (user.get("subscription_status") or "none").replace("_", " ").title(),
-        "payment_method": {"label": "Unavailable"},
-        "attention_message": None,
-        "show_update_payment_method": (user.get("subscription_status") or "") in (
-            "past_due", "unpaid", "incomplete", "paused"
-        ),
-        "show_manage_subscription": bool(user.get("stripe_customer_id")),
-        "has_stripe_customer": bool(user.get("stripe_customer_id")),
-        "local_status": user.get("subscription_status") or "none",
-    }
-    notice = request.args.get("notice")
-    error = request.args.get("error")
-    return render_template(
-        "billing.html",
-        email=user["email"],
-        has_billing_portal=bool(user.get("stripe_customer_id")),
-        active_nav="billing",
-        summary=summary,
-        notice=notice,
-        error=error,
-        product_name=config.PRODUCT_NAME,
-        subscription_price=config.SUBSCRIPTION_PRICE,
-        billing_frequency=config.BILLING_FREQUENCY,
-    )
 
 
 @app.route("/billing/update-payment-method", methods=["POST", "GET"])
@@ -894,14 +902,43 @@ def billing_payment_method_success():
 @app.route("/billing/portal")
 @auth.login_required
 def billing_portal():
+    """Legacy GET redirect into Stripe Customer Portal (customer ID from session user only)."""
     user = auth.get_current_user()
-    if not user.get("stripe_customer_id") or not config.STRIPE_SECRET_KEY:
-        return redirect(url_for("subscribe"))
-    portal = stripe.billing_portal.Session.create(
-        customer=user["stripe_customer_id"],
-        return_url=f"{config.APP_URL}/billing",
-    )
-    return redirect(portal.url, code=303)
+    url, err, _status = _create_billing_portal_session(user)
+    if err == "no_customer" or err == "not_configured":
+        return redirect(url_for("billing_page"))
+    if err:
+        return redirect(url_for("billing_page"))
+    return redirect(url, code=303)
+
+
+@app.route("/api/billing/create-portal-session", methods=["POST"])
+@auth.login_required
+def create_billing_portal_session_api():
+    """Create a Stripe Billing Portal session for the authenticated user only."""
+    user = auth.get_current_user()
+    # Never accept stripe_customer_id from the client — look it up on the user row.
+    url, err, status = _create_billing_portal_session(user)
+    if err == "no_customer":
+        return jsonify({
+            "error": "no_customer",
+            "message": (
+                "No Stripe billing account is linked to your TopAI login yet. "
+                "Subscribe to create one, then you can manage payment methods and invoices."
+            ),
+            "subscribe_url": "/subscribe",
+        }), 400
+    if err == "not_configured":
+        return jsonify({
+            "error": "not_configured",
+            "message": "Billing is temporarily unavailable. Please try again later.",
+        }), 503
+    if err:
+        return jsonify({
+            "error": "portal_unavailable",
+            "message": "Could not open the billing portal. Please try again.",
+        }), status
+    return jsonify({"url": url}), 200
 
 
 @app.route("/webhook/stripe", methods=["POST"])

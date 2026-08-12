@@ -65,6 +65,7 @@ def _nav(user, active_nav="sms-campaigns"):
     return {
         "email": user["email"],
         "has_billing_portal": bool(user.get("stripe_customer_id")),
+        "needs_billing_attention": auth.user_needs_billing_attention(user),
         "active_nav": active_nav,
         "product_name": "TopAI Real Estate Tools",
     }

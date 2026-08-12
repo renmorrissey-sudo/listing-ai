@@ -17,6 +17,7 @@ import pytest
 
 import config
 from migrations.runner import (
+    MIGRATION_MODULES,
     REQUIRED_BASELINE_TABLES,
     apply_pending_migrations,
     missing_baseline_tables,
@@ -26,6 +27,10 @@ from migrations.runner import (
 _m001 = import_module("migrations.versions.001_baseline")
 POSTGRES_INDEXES = _m001.POSTGRES_INDEXES
 POSTGRES_TABLE_ORDER = _m001.POSTGRES_TABLE_ORDER
+
+
+def _all_migration_versions():
+    return {mod.rsplit(".", 1)[-1] for mod in MIGRATION_MODULES}
 
 
 class _FakeCursor:
@@ -279,15 +284,7 @@ def test_empty_postgres_indexes_created(fake_postgres):
 
 def test_empty_postgres_migration_order_and_ledger(fake_postgres):
     apply_pending_migrations()
-    assert fake_postgres.migrations == {
-        "001_baseline",
-        "002_safe_additive_columns",
-        "003_user_business_profile",
-        "004_voice_call_lead_link",
-        "005_voice_call_recording_fields",
-        "006_cleanup_transient_voice_activities",
-        "007_backfill_lead_follow_through",
-    }
+    assert fake_postgres.migrations == _all_migration_versions()
     create_users_idx = next(
         i for i, (sql, _) in enumerate(fake_postgres.executed)
         if "CREATE TABLE IF NOT EXISTS users" in sql
@@ -341,15 +338,7 @@ def test_empty_postgres_user_lead_task_survive_restart(fake_postgres):
     fake_postgres.row_counts = {"users": 1, "leads": 1, "tasks": 1}
     apply_pending_migrations()
     assert fake_postgres.row_counts["users"] == 1
-    assert fake_postgres.migrations == {
-        "001_baseline",
-        "002_safe_additive_columns",
-        "003_user_business_profile",
-        "004_voice_call_lead_link",
-        "005_voice_call_recording_fields",
-        "006_cleanup_transient_voice_activities",
-        "007_backfill_lead_follow_through",
-    }
+    assert fake_postgres.migrations == _all_migration_versions()
 
 
 def test_false_stamp_repaired_on_empty_postgres(fake_postgres):
@@ -468,12 +457,4 @@ def test_genuine_empty_postgres_database(monkeypatch):
             r["version"]
             for r in conn.execute("SELECT version FROM schema_migrations").fetchall()
         }
-        assert versions == {
-            "001_baseline",
-            "002_safe_additive_columns",
-            "003_user_business_profile",
-            "004_voice_call_lead_link",
-            "005_voice_call_recording_fields",
-            "006_cleanup_transient_voice_activities",
-            "007_backfill_lead_follow_through",
-        }
+        assert versions == _all_migration_versions()

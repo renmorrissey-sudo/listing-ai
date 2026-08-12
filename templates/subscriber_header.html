@@ -21,3 +21,46 @@
     </details>
   </div>
 </header>
+{% if needs_billing_attention %}
+<div class="billing-warning-banner" role="alert">
+  <div class="billing-warning-inner">
+    <p>Your saved payment method needs to be updated. Update your payment method to continue your TopAI subscription.</p>
+    <a class="billing-warning-btn" href="/billing">Update payment method</a>
+  </div>
+</div>
+<style>
+  .billing-warning-banner {
+    background: #fff7ed;
+    border-bottom: 1px solid #fdba74;
+    padding: 12px 20px;
+  }
+  .billing-warning-inner {
+    max-width: 1100px;
+    margin: 0 auto;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 18px;
+    justify-content: space-between;
+  }
+  .billing-warning-banner p {
+    margin: 0;
+    color: #9a3412;
+    font-size: 14px;
+    font-weight: 600;
+    flex: 1 1 240px;
+  }
+  .billing-warning-btn {
+    display: inline-block;
+    background: #c2410c;
+    color: #fff !important;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 8px 14px;
+    border-radius: 8px;
+    white-space: nowrap;
+  }
+  .billing-warning-btn:hover { background: #9a3412; }
+</style>
+{% endif %}

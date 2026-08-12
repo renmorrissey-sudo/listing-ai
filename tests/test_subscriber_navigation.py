@@ -23,6 +23,7 @@ APP_NAV_LINKS = [
     ("AI Calling Assistant", "/app#voice"),
     ("AI SMS Assistant", "/app#sms"),
     ("Bulk SMS", "/crm/sms-campaigns"),
+    ("Billing", "/billing"),
 ]
 
 ACCOUNT_LINKS = [
@@ -90,6 +91,9 @@ def test_all_application_links_in_tool_nav(app_client, two_users):
         assert label in nav_section
         assert href in nav_section or href.replace("&", "&amp;") in nav_section
     for label, href in ACCOUNT_LINKS:
+        # Billing lives in both primary tool nav and the Account menu.
+        if href == "/billing":
+            continue
         assert label not in nav_section
         assert href not in nav_section
 

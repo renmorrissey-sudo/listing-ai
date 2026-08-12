@@ -284,6 +284,7 @@ def _nav_context(user, active):
     return {
         "email": user["email"],
         "has_billing_portal": bool(user.get("stripe_customer_id")),
+        "needs_billing_attention": auth.user_needs_billing_attention(user),
         "active_nav": active,
         "product_name": "TopAI Real Estate Tools",
     }

@@ -58,7 +58,9 @@ def test_invoice_payment_failed_persists_past_due(app_client, two_users, monkeyp
     _billing_ok(monkeypatch)
     u1, _ = two_users
     customer_id = _cid("cus_fail")
-    db.set_stripe_customer(u1, customer_id)
+    db.update_user_subscription(
+        u1, "active", subscription_id="sub_fail_1", stripe_customer_id=customer_id
+    )
     event = {
         "id": f"evt_invoice_failed_{uuid.uuid4().hex[:8]}",
         "type": "invoice.payment_failed",
@@ -77,7 +79,8 @@ def test_invoice_payment_failed_persists_past_due(app_client, two_users, monkeyp
     assert res.status_code == 200
     user = db.get_user_by_id(u1)
     assert user["subscription_status"] == "past_due"
-    assert auth.user_has_active_subscription(user) is False
+    # past_due keeps tool access so payment recovery UI remains reachable.
+    assert auth.user_has_active_subscription(user) is True
 
 
 def test_link_connection_closed_surfaces_update_payment_method_ux(app_client, two_users, monkeypatch):

@@ -8,8 +8,33 @@
   {% include 'crm_base_styles.html' %}
   <style>
     .billing-main { max-width: 760px; }
-    .billing-panel { padding: 24px; }
+    .billing-panel {
+      background: #fff;
+      border: 1px solid #e5ebf5;
+      border-radius: 12px;
+      padding: 22px;
+      box-shadow: 0 1px 5px rgba(0,0,0,0.06);
+    }
     .billing-intro { color: #667; font-size: 14px; margin: 0 0 18px; }
+    .billing-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px 20px;
+      margin: 18px 0 22px;
+    }
+    .billing-field .label {
+      font-size: 11px;
+      font-weight: 700;
+      color: #667;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    .billing-field .value {
+      font-size: 16px;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-top: 4px;
+    }
     .billing-row {
       display: flex; justify-content: space-between; gap: 12px;
       padding: 12px 0; border-bottom: 1px solid #eef1f6; font-size: 14px;
@@ -17,109 +42,229 @@
     .billing-row:last-of-type { border-bottom: none; }
     .billing-label { color: #667; }
     .billing-value { font-weight: 700; text-align: right; }
+    .status-pill {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .status-active, .status-trialing { background: #ecfdf5; color: #065f46; }
+    .status-past_due, .status-unpaid, .status-incomplete { background: #fff7ed; color: #9a3412; }
+    .status-canceled, .status-none, .status-paused { background: #f1f5f9; color: #475569; }
     .status-attention { color: #b45309; }
     .status-ok { color: #065f46; }
+    .billing-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 8px; }
+    .billing-actions form { margin: 0; }
+    .btn-manage {
+      display: inline-block;
+      background: #1e3a8a;
+      color: #fff !important;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 15px;
+      padding: 14px 22px;
+      border-radius: 10px;
+      border: none;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(30, 58, 138, 0.25);
+    }
+    .btn-manage:hover { background: #1e40af; }
+    .btn-manage:disabled { opacity: 0.65; cursor: wait; }
+    .btn-secondary {
+      display: inline-block;
+      background: #f8fafc;
+      color: #1e3a8a !important;
+      border: 1px solid #c7dbff;
+      text-decoration: none;
+      font-weight: 650;
+      font-size: 14px;
+      padding: 12px 18px;
+      border-radius: 10px;
+    }
+    .billing-alert, .billing-attention {
+      background: #fff7ed;
+      border: 1px solid #fdba74;
+      color: #9a3412;
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin: 0 0 18px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .billing-muted {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin: 0 0 18px;
+      font-size: 14px;
+      color: #334155;
+    }
     .billing-notice {
       background: #ecfdf5; border: 1.5px solid #6ee7b7; color: #065f46;
       border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px;
     }
-    .billing-error {
+    .billing-error-box {
       background: #fff5f5; border: 1.5px solid #fca5a5; color: #dc2626;
       border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px;
     }
-    .billing-attention {
-      background: #fffbeb; border: 1.5px solid #fcd34d; color: #92400e;
-      border-radius: 8px; padding: 10px 12px; font-size: 13px; margin: 14px 0;
+    .billing-portal-error {
+      color: #b91c1c;
+      font-size: 14px;
+      margin-top: 12px;
+      display: none;
     }
-    .billing-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
-    .billing-actions form { margin: 0; }
-    .billing-actions .btn { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; }
-    @media (max-width: 560px) {
+    .billing-hint { font-size: 13px; color: #64748b; margin-top: 14px; line-height: 1.45; }
+    @media (max-width: 700px) {
+      .billing-grid { grid-template-columns: 1fr; }
+      .billing-panel { padding: 16px; }
       .billing-row { align-items: flex-start; }
-      .billing-actions, .billing-actions form, .billing-actions .btn { width: 100%; }
+      .billing-actions, .billing-actions form, .billing-actions .btn-manage,
+      .billing-actions .btn-secondary, .billing-actions .btn { width: 100%; }
     }
   </style>
 </head>
 <body>
-  {% set page_tagline = 'Billing' %}
+  {% set page_tagline = 'Billing & subscription' %}
   {% include 'subscriber_header.html' %}
   {% include 'subscriber_tool_nav.html' %}
-
   <main class="billing-main">
-    <div class="page-header">
-      <div class="page-header-titles">
-        <h1>Billing</h1>
-        <p class="muted">Manage your TopAI subscription and payment method.</p>
-      </div>
+    <h1>Billing</h1>
+    <p class="muted">Manage your TopAI subscription and payment method. Invoices and cancellations are handled securely in the Stripe Customer Portal.</p>
+
+    {% if notice == 'payment_method_updated' %}
+    <div class="billing-notice" role="status">Payment method updated. Your subscription is in good standing.</div>
+    {% elif notice == 'card_saved_pending' %}
+    <div class="billing-notice" role="status">Card saved. If payment is still pending, use Manage Billing or try Update payment method again.</div>
+    {% elif notice == 'cancelled' %}
+    <div class="billing-notice" role="status">Payment method update cancelled. No changes were made.</div>
+    {% endif %}
+
+    {% if error %}
+    <div class="billing-error-box" role="alert">
+      {% if error == 'session_mismatch' %}
+      That billing session doesn't belong to this account.
+      {% elif error == 'setup_incomplete' %}
+      Card setup wasn't completed. Please try updating your payment method again.
+      {% elif error == 'update_failed' %}
+      Couldn't update your payment method. Please try again or contact support.
+      {% else %}
+      Something went wrong with billing. Please try again.
+      {% endif %}
     </div>
+    {% endif %}
 
-    <section class="card billing-panel" aria-label="Subscription billing">
-      <h2>Subscription</h2>
-      <p class="billing-intro">Your current plan, billing status, and saved payment method.</p>
+    {% if summary.attention_message %}
+    <div class="billing-attention" role="status">{{ summary.attention_message }}</div>
+    {% elif billing.payment_action_required and billing.warning_message %}
+    <div class="billing-alert" role="alert">{{ billing.warning_message }}</div>
+    {% endif %}
 
-      {% if notice == 'payment_method_updated' %}
-      <div class="billing-notice" role="status">Payment method updated. Your subscription is in good standing.</div>
-      {% elif notice == 'card_saved_pending' %}
-      <div class="billing-notice" role="status">Card saved. If payment is still pending, use Manage subscription or try Update payment method again.</div>
-      {% elif notice == 'cancelled' %}
-      <div class="billing-notice" role="status">Payment method update cancelled. No changes were made.</div>
-      {% endif %}
-
-      {% if error %}
-      <div class="billing-error" role="alert">
-        {% if error == 'session_mismatch' %}
-        That billing session doesn't belong to this account.
-        {% elif error == 'setup_incomplete' %}
-        Card setup wasn't completed. Please try updating your payment method again.
-        {% elif error == 'update_failed' %}
-        Couldn't update your payment method. Please try again or contact support.
-        {% else %}
-        Something went wrong with billing. Please try again.
-        {% endif %}
+    {% if not billing.has_stripe_customer %}
+    <div class="billing-muted" role="status">
+      No Stripe billing account is linked to this login yet. Subscribe to activate your plan, then you can manage payment methods and invoices here.
+    </div>
+    <div class="billing-actions">
+      <a class="btn-manage" href="/subscribe">Subscribe</a>
+      <form method="post" action="/billing/update-payment-method">
+        <button class="btn-secondary" type="submit">Update payment method</button>
+      </form>
+    </div>
+    {% else %}
+    <section class="billing-panel" aria-label="Subscription details">
+      <div class="billing-grid">
+        <div class="billing-field">
+          <div class="label">Current plan</div>
+          <div class="value">{{ billing.plan_name }}</div>
+        </div>
+        <div class="billing-field">
+          <div class="label">Subscription status</div>
+          <div class="value">
+            <span class="status-pill status-{{ billing.status }}">{{ billing.status_label }}</span>
+          </div>
+        </div>
+        <div class="billing-field">
+          <div class="label">Monthly price</div>
+          <div class="value">{{ billing.monthly_price }}</div>
+        </div>
+        <div class="billing-field">
+          <div class="label">Next billing / renewal</div>
+          <div class="value">{% if billing.renewal_date %}{{ billing.renewal_date }}{% else %}Not available{% endif %}</div>
+        </div>
+        <div class="billing-field">
+          <div class="label">Stripe customer email</div>
+          <div class="value">{{ billing.customer_email }}</div>
+        </div>
+        <div class="billing-field">
+          <div class="label">Payment status</div>
+          <div class="value">{{ billing.payment_status }}</div>
+        </div>
       </div>
-      {% endif %}
 
-      {% if summary.attention_message %}
-      <div class="billing-attention" role="status">{{ summary.attention_message }}</div>
-      {% endif %}
-
-      <div class="billing-row">
-        <span class="billing-label">Plan</span>
-        <span class="billing-value">{{ summary.plan_name }}</span>
-      </div>
-      <div class="billing-row">
-        <span class="billing-label">Price</span>
-        <span class="billing-value">{{ summary.price_label or subscription_price }}</span>
-      </div>
-      <div class="billing-row">
-        <span class="billing-label">Status</span>
-        <span class="billing-value {% if summary.needs_payment_method_update or summary.show_update_payment_method %}status-attention{% else %}status-ok{% endif %}">
-          {{ summary.status_label }}
-        </span>
-      </div>
       <div class="billing-row">
         <span class="billing-label">Payment method</span>
-        <span class="billing-value">{{ summary.payment_method.label if summary.payment_method else 'Unavailable' }}</span>
+        <span class="billing-value {% if summary.needs_payment_method_update or summary.show_update_payment_method %}status-attention{% else %}status-ok{% endif %}">
+          {{ summary.payment_method.label if summary.payment_method else 'Unavailable' }}
+        </span>
       </div>
 
       <div class="billing-actions">
-      {% if summary.show_update_payment_method or summary.needs_payment_method_update %}
-      <form method="post" action="/billing/update-payment-method">
-        <button class="btn" type="submit">Update payment method</button>
-      </form>
-      {% else %}
-      <form method="post" action="/billing/update-payment-method">
-        <button class="btn secondary" type="submit">Update payment method</button>
-      </form>
-      {% endif %}
-
-      {% if summary.show_manage_subscription or summary.has_stripe_customer %}
-      <a class="btn secondary" href="/billing/portal">Manage subscription</a>
-      {% endif %}
+        <button type="button" class="btn-manage" id="manage-billing-btn">Manage Billing</button>
+        <form method="post" action="/billing/update-payment-method">
+          <button class="btn-secondary" type="submit">Update payment method</button>
+        </form>
+        <a class="btn-secondary" href="/dashboard">Back to Dashboard</a>
       </div>
+      <p class="billing-portal-error" id="billing-portal-error" role="alert"></p>
+      <p class="billing-hint">
+        Manage Billing opens the Stripe Customer Portal where you can change your payment method,
+        view invoices, download receipts, update billing details, or cancel your subscription.
+        Use Update payment method to replace a card or recover from Link disconnects without leaving TopAI.
+        TopAI does not store or process card numbers on this site.
+      </p>
     </section>
+    {% endif %}
   </main>
   {% include 'subscriber_footer.html' %}
   {% include 'subscriber_nav_script.html' %}
+  <script>
+    (function () {
+      var btn = document.getElementById("manage-billing-btn");
+      if (!btn) return;
+      var errEl = document.getElementById("billing-portal-error");
+      btn.addEventListener("click", function () {
+        btn.disabled = true;
+        if (errEl) { errEl.style.display = "none"; errEl.textContent = ""; }
+        fetch("/api/billing/create-portal-session", {
+          method: "POST",
+          headers: { "Accept": "application/json", "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: "{}"
+        }).then(function (res) {
+          return res.json().then(function (data) {
+            return { ok: res.ok, status: res.status, data: data };
+          });
+        }).then(function (result) {
+          if (result.ok && result.data && result.data.url) {
+            window.location.href = result.data.url;
+            return;
+          }
+          var msg = (result.data && result.data.message) || "Could not open the billing portal.";
+          if (errEl) {
+            errEl.textContent = msg;
+            errEl.style.display = "block";
+          }
+          btn.disabled = false;
+        }).catch(function () {
+          if (errEl) {
+            errEl.textContent = "Could not open the billing portal. Please try again.";
+            errEl.style.display = "block";
+          }
+          btn.disabled = false;
+        });
+      });
+    })();
+  </script>
 </body>
 </html>
