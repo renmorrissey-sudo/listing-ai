@@ -83,6 +83,12 @@
     .recent-listing-address { font-weight: 600; font-size: 13.5px; }
     .recent-listing-meta { color: #889; font-size: 12px; margin-top: 2px; }
     .social-post-area { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eef2f7; }
+    .email-campaign-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    .email-campaign-actions .copy-btn { margin-top: 0; }
+    #email-campaign-area { display: flex; align-items: center; gap: 10px; flex: 1 1 320px; flex-wrap: wrap; }
+    .email-campaign-status { width: 100%; font-size: 12px; line-height: 1.45; color: #667; }
+    .email-campaign-status.success { color: #15803d; }
+    .email-campaign-status.error { color: #b91c1c; }
     .social-destinations { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: #556; margin-bottom: 10px; }
     .post-result-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; font-size: 13px; }
     @media (max-width: 720px) { .recent-listing-row { flex-direction: column; align-items: flex-start; } }
@@ -290,7 +296,15 @@
         <button class="copy-btn" data-target="out-social">Copy</button>
         <div class="social-post-area" id="social-post-area"></div>
       </div>
-      <div class="tab-content" id="tab-lemail"><div class="output-box" id="out-email"></div><button class="copy-btn" data-target="out-email">Copy</button></div>
+      <div class="tab-content" id="tab-lemail">
+        <div class="output-box" id="out-email"></div>
+        <div class="email-campaign-actions">
+          <button class="copy-btn" data-target="out-email">Copy</button>
+          <div id="email-campaign-area">
+            <button type="button" class="btn primary" disabled>Add to Email Campaign</button>
+          </div>
+        </div>
+      </div>
     </div></div>
     <div class="card recent-listings-card">
       <div class="recent-listings-header">
@@ -1258,6 +1272,7 @@
       if (res.ok) {
         document.getElementById('listing-save-warning').style.display = 'none';
         showListingSaved(result.generation_id, result.created_at);
+        renderEmailCampaignArea({ id: result.generation_id });
         loadRecentListings();
       } else {
         retryBtn.textContent = 'Retry save';
@@ -1308,6 +1323,7 @@
         });
       }
       renderSocialPostArea(gen);
+      renderEmailCampaignArea(gen);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch { /* non-fatal: leave current view as-is */ }
   }
@@ -1360,9 +1376,11 @@
         if (result.generation_id) {
           showListingSaved(result.generation_id, result.created_at);
           renderSocialPostArea({ id: result.generation_id, social_content: result.social_content });
+          renderEmailCampaignArea({ id: result.generation_id });
           loadRecentListings();
         } else if (result.save_warning) {
           showListingSaveWarning(result.save_retry_payload);
+          renderEmailCampaignArea(null);
         }
       }
     } catch { errEl.textContent = 'Network error.'; errEl.style.display = 'block'; }
@@ -1392,6 +1410,61 @@
       document.getElementById('social-post-btn').addEventListener('click', () => runSocialPost(generation.id));
     } catch {
       area.innerHTML = '<p class="muted" style="font-size:12px;">Couldn\'t load connected destinations.</p>';
+    }
+  }
+
+  function renderEmailCampaignArea(generation) {
+    const area = document.getElementById('email-campaign-area');
+    if (!area) return;
+    if (!generation || !generation.id) {
+      area.innerHTML = '<button type="button" class="btn primary" disabled>Add to Email Campaign</button><span class="email-campaign-status">Save this generation before adding it to SendGrid.</span>';
+      return;
+    }
+    const campaign = generation.email_campaign || null;
+    if (!campaign) {
+      area.innerHTML = '<button type="button" class="btn primary" id="email-campaign-btn">Add to Email Campaign</button><span class="email-campaign-status">Creates an unscheduled SendGrid draft. Nothing is sent.</span>';
+      document.getElementById('email-campaign-btn').addEventListener('click', () => runEmailCampaignExport(generation.id, false));
+      return;
+    }
+    if (campaign.status === 'draft_created') {
+      area.innerHTML = `<span class="email-campaign-status success">&#10003; Added to Email Campaigns &middot; SendGrid draft created${campaign.created_at ? ' ' + escapeHtmlText(formatListingDate(campaign.created_at)) : ''}.</span><button type="button" class="btn secondary btn-sm" id="email-campaign-another-btn">Create Another Draft</button>`;
+      document.getElementById('email-campaign-another-btn').addEventListener('click', () => runEmailCampaignExport(generation.id, true));
+      return;
+    }
+    if (campaign.status === 'creating') {
+      area.innerHTML = '<button type="button" class="btn primary" disabled>Adding to SendGrid...</button><span class="email-campaign-status">Draft creation is in progress.</span>';
+      return;
+    }
+    const uncertain = campaign.status === 'unknown';
+    const message = campaign.error_summary || (uncertain
+      ? 'TopAI could not confirm whether SendGrid created the draft. Check SendGrid before creating another.'
+      : 'TopAI could not create the SendGrid draft.');
+    area.innerHTML = `<span class="email-campaign-status error">${escapeHtmlText(message)}</span><a class="btn secondary btn-sm" href="/integrations/email-marketing">Email Marketing Settings</a><button type="button" class="btn secondary btn-sm" id="email-campaign-another-btn">Create Another Draft</button>`;
+    document.getElementById('email-campaign-another-btn').addEventListener('click', () => runEmailCampaignExport(generation.id, true));
+  }
+
+  async function runEmailCampaignExport(generationId, createAnother) {
+    const area = document.getElementById('email-campaign-area');
+    area.innerHTML = '<button type="button" class="btn primary" disabled>Adding to SendGrid...</button><span class="email-campaign-status">Creating an unscheduled draft...</span>';
+    try {
+      const res = await fetch(`/listings/${generationId}/email-campaigns`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ create_another: Boolean(createAnother) })
+      });
+      if (res.status === 401) { handle401(); return; }
+      const data = await res.json();
+      if (data.status) {
+        renderEmailCampaignArea({ id: generationId, email_campaign: data });
+        if (data.status === 'draft_created' && data.has_recipients === false) {
+          const status = area.querySelector('.email-campaign-status');
+          if (status) status.textContent += ' Choose recipients in SendGrid before sending.';
+        }
+      } else {
+        area.innerHTML = `<span class="email-campaign-status error">${escapeHtmlText(data.error || 'TopAI could not create the SendGrid draft.')}</span><a class="btn secondary btn-sm" href="/integrations/email-marketing">Email Marketing Settings</a>`;
+      }
+    } catch {
+      area.innerHTML = '<span class="email-campaign-status error">Network error. TopAI could not confirm the draft state. Check SendGrid before trying again.</span>';
     }
   }
 

@@ -203,6 +203,10 @@ def cleanup_expired():
             return 0
         for gen_id in expired_ids:
             conn.execute(
+                "DELETE FROM listing_email_campaigns WHERE listing_generation_id = ?",
+                (gen_id,),
+            )
+            conn.execute(
                 "DELETE FROM social_publications WHERE listing_generation_id = ?",
                 (gen_id,),
             )

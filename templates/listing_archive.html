@@ -66,14 +66,21 @@
     function postedBadges(item) {
       const statuses = item.publish_status || {};
       const providers = Object.keys(statuses);
-      if (!providers.length) return '<span class="pill muted">Not posted</span>';
-      return providers.map(p => {
+      const badges = providers.map(p => {
         const st = statuses[p];
         const label = p.charAt(0).toUpperCase() + p.slice(1);
         if (st === 'published') return `<span class="pill success">${label} &#10003;</span>`;
         if (st === 'failed') return `<span class="pill danger">${label} &#10007;</span>`;
         return `<span class="pill warn">${label} &hellip;</span>`;
-      }).join('');
+      });
+      if (!providers.length) badges.push('<span class="pill muted">Not posted</span>');
+      const campaign = item.email_campaign;
+      if (campaign && campaign.status === 'draft_created') {
+        badges.push('<span class="pill success">Email Draft &#10003;</span>');
+      } else if (campaign && (campaign.status === 'failed' || campaign.status === 'unknown')) {
+        badges.push('<span class="pill warn">Email Draft needs attention</span>');
+      }
+      return badges.join('');
     }
 
     async function loadArchive() {

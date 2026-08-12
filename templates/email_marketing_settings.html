@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Email Marketing - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+  <style>
+    .integration-panel { max-width: 760px; }
+    .connection-head { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+    .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:18px; }
+    .settings-grid .wide { grid-column:1 / -1; }
+    .settings-grid label { display:block; font-size:12px; font-weight:700; margin-bottom:6px; color:#445; }
+    .settings-grid select, .settings-grid input {
+      width:100%; padding:10px 12px; border:1px solid #dbe2ea; border-radius:8px; background:#fff;
+    }
+    .action-row { display:flex; gap:10px; flex-wrap:wrap; margin-top:18px; }
+    .warning-box { margin-top:14px; padding:12px; border:1px solid #f4cf72; border-radius:9px; background:#fffbeb; color:#8a5a00; font-size:13px; }
+    .help { color:#667; font-size:12px; line-height:1.5; margin-top:5px; }
+    @media (max-width:680px) { .settings-grid { grid-template-columns:1fr; } .settings-grid .wide { grid-column:auto; } }
+  </style>
+</head>
+<body>
+  {% set page_tagline = 'Email Marketing Integration' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <div class="page-header">
+      <div class="page-header-titles">
+        <h1>Email Marketing</h1>
+        <p class="muted">Connect your SendGrid account so Listing Generator emails can be added as reviewable campaign drafts.</p>
+      </div>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+      <div class="flash {% if category == 'error' %}err{% endif %}" style="display:block;">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    <div class="card integration-panel">
+      <div class="connection-head">
+        <div>
+          <h2>SendGrid</h2>
+          {% if connection and connection.status == 'connected' %}
+          <span class="pill success">&#10003; Connected</span>
+          {% else %}
+          <span class="pill muted">Not connected</span>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if not encryption_ready %}
+      <div class="warning-box">
+        TopAI needs integration credential encryption configured before SendGrid can be connected.
+      </div>
+      {% endif %}
+
+      {% if not connection or connection.status != 'connected' %}
+      <form method="post" action="/integrations/email-marketing/connect" class="settings-grid">
+        <div class="wide">
+          <label for="api-key">SendGrid API key</label>
+          <input id="api-key" name="api_key" type="password" required autocomplete="new-password" placeholder="SG.••••••••" />
+          <p class="help">Use a SendGrid Custom Access key with Marketing Campaigns Single Sends, Lists, Sender Verification, and Suppression Groups permissions. TopAI encrypts this key and never shows it again.</p>
+        </div>
+        <div class="wide">
+          <button class="btn" type="submit" {% if not encryption_ready %}disabled{% endif %}>Connect SendGrid</button>
+        </div>
+      </form>
+      {% else %}
+        {% if resource_error %}
+        <div class="warning-box">{{ resource_error }}</div>
+        {% endif %}
+        {% if not senders %}
+        <div class="warning-box">
+          SendGrid needs a verified sender before TopAI can create a complete email campaign.
+          Configure one in SendGrid under Settings → Sender Authentication.
+        </div>
+        {% endif %}
+
+        <form method="post" action="/integrations/email-marketing/settings">
+          <div class="settings-grid">
+            <div>
+              <label for="sender-id">Default sender</label>
+              <select id="sender-id" name="sender_id">
+                <option value="">Choose a verified sender</option>
+                {% for sender in senders %}
+                <option value="{{ sender.id }}" {% if connection.sender_id|string == sender.id|string %}selected{% endif %}>
+                  {{ sender.name }}{% if sender.email %} &lt;{{ sender.email }}&gt;{% endif %}
+                </option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label for="default-list-id">Default contact list</label>
+              <select id="default-list-id" name="default_list_id">
+                <option value="">Choose recipients later in SendGrid</option>
+                {% for list in lists %}
+                <option value="{{ list.id }}" {% if list.id|string in connection.default_list_ids %}selected{% endif %}>
+                  {{ list.name }} ({{ list.contact_count }})
+                </option>
+                {% endfor %}
+              </select>
+              <p class="help">No list never means All Contacts. A draft without a list must have recipients selected in SendGrid before sending.</p>
+            </div>
+            <div class="wide">
+              <label for="suppression-group-id">Unsubscribe group</label>
+              <select id="suppression-group-id" name="suppression_group_id">
+                <option value="">Choose an unsubscribe group</option>
+                {% for group in suppression_groups %}
+                <option value="{{ group.id }}" {% if connection.suppression_group_id|string == group.id|string %}selected{% endif %}>
+                  {{ group.name }}{% if group.is_default %} (Default){% endif %}
+                </option>
+                {% endfor %}
+              </select>
+              <p class="help">Required for Listing Generator campaign drafts. SendGrid manages unsubscribe behavior; TopAI never creates fake unsubscribe links.</p>
+            </div>
+          </div>
+          <div class="action-row">
+            <button class="btn" type="submit">Save</button>
+          </div>
+        </form>
+        <div class="action-row">
+          <form method="post" action="/integrations/email-marketing/test">
+            <button class="btn secondary" type="submit">Test Connection</button>
+          </form>
+          <form method="post" action="/integrations/email-marketing/disconnect">
+            <button class="btn secondary" type="submit">Disconnect</button>
+          </form>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="card integration-panel">
+      <h2>Campaign behavior</h2>
+      <p class="muted" style="font-size:13px;margin-top:8px;">
+        Listing Generator creates an unscheduled SendGrid Single Send draft only.
+        It never schedules or sends a campaign. Review recipients, content, and compliance in SendGrid before sending.
+      </p>
+    </div>
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+</body>
+</html>
