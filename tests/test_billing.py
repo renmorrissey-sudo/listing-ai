@@ -414,3 +414,92 @@ def test_payment_method_replacement_message_codes():
     ):
         msg = stripe_billing.payment_failure_user_message(code)
         assert "payment method needs to be updated" in msg.lower()
+
+
+def test_payment_failed_does_not_promote_none_to_past_due(app_client, two_users, monkeypatch):
+    _billing_ok(monkeypatch)
+    u1, _ = two_users
+    db.set_stripe_customer(u1, "cus_none")
+    event = {
+        "id": "evt_fail_none",
+        "type": "invoice.payment_failed",
+        "data": {
+            "object": {
+                "customer": "cus_none",
+                "subscription": "sub_x",
+                "last_payment_error": {"code": "card_declined"},
+            }
+        },
+    }
+    assert _post_webhook(app_client, event).status_code == 200
+    user = db.get_user_by_id(u1)
+    assert user["subscription_status"] != "past_due"
+    assert auth.user_has_active_subscription(user) is False
+    assert user.get("payment_action_required") in (1, True)
+
+
+def test_payment_failed_does_not_revive_canceled(app_client, two_users, monkeypatch):
+    _billing_ok(monkeypatch)
+    u1, _ = two_users
+    db.update_user_subscription(
+        u1, "canceled", subscription_id="sub_old", stripe_customer_id="cus_cxl2"
+    )
+    event = {
+        "id": "evt_fail_canceled",
+        "type": "invoice.payment_failed",
+        "data": {
+            "object": {
+                "customer": "cus_cxl2",
+                "subscription": "sub_old",
+                "last_payment_error": {"code": "link_connection_closed"},
+            }
+        },
+    }
+    assert _post_webhook(app_client, event).status_code == 200
+    user = db.get_user_by_id(u1)
+    assert user["subscription_status"] == "canceled"
+    assert auth.user_has_active_subscription(user) is False
+
+
+def test_invoice_paid_retrieve_failure_does_not_force_active(
+    app_client, two_users, monkeypatch
+):
+    _billing_ok(monkeypatch)
+    u1, _ = two_users
+    db.update_user_subscription(
+        u1,
+        "past_due",
+        subscription_id="sub_ret",
+        stripe_customer_id="cus_ret",
+        payment_action_required=True,
+        last_payment_error="expired_card",
+    )
+    event = {
+        "id": "evt_paid_retrieve_fail",
+        "type": "invoice.paid",
+        "data": {"object": {"customer": "cus_ret", "subscription": "sub_ret"}},
+    }
+    with patch(
+        "stripe.Subscription.retrieve",
+        side_effect=__import__("stripe").StripeError("boom"),
+    ):
+        assert _post_webhook(app_client, event).status_code == 200
+    user = db.get_user_by_id(u1)
+    assert user["subscription_status"] == "past_due"
+    assert not user.get("payment_action_required")
+
+
+def test_app_tools_page_shows_billing_warning(app_client, two_users, monkeypatch):
+    monkeypatch.setattr(config, "SUBSCRIPTION_REQUIRED", True)
+    u1, _ = two_users
+    db.update_user_subscription(
+        u1,
+        "past_due",
+        stripe_customer_id="cus_warn",
+        payment_action_required=True,
+        last_payment_error="link_connection_closed",
+    )
+    _login(app_client, u1)
+    html = app_client.get("/app").get_data(as_text=True)
+    assert "payment method needs to be updated" in html.lower()
+    assert 'href="/billing"' in html

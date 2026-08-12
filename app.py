@@ -369,6 +369,7 @@ def subscriber_app():
         subscribe_notice=notice,
         email=user["email"],
         has_billing_portal=bool(user.get("stripe_customer_id")),
+        needs_billing_attention=auth.user_needs_billing_attention(user),
         active_nav="listing",
     )
 

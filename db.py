@@ -276,7 +276,11 @@ def set_stripe_customer(user_id, stripe_customer_id):
 
 
 def flag_payment_action_required(user_id, error_code=None):
-    """Mark account past-due / payment action required without wiping other fields."""
+    """Mark payment action required without wiping other fields.
+
+    Only promote active/trialing → past_due. Never promote none/canceled to
+    past_due (that would grant tool access via the past_due grace path).
+    """
     with get_db() as conn:
         conn.execute(
             """
@@ -284,7 +288,7 @@ def flag_payment_action_required(user_id, error_code=None):
             SET payment_action_required = ?,
                 last_payment_error = COALESCE(?, last_payment_error),
                 subscription_status = CASE
-                    WHEN subscription_status IN ('active', 'trialing', 'none')
+                    WHEN subscription_status IN ('active', 'trialing')
                     THEN 'past_due'
                     ELSE subscription_status
                 END

@@ -601,7 +601,10 @@ def apply_subscription_to_user(user_id, subscription, *, stripe_customer_id=None
 
 
 def handle_invoice_payment_failed(invoice) -> bool:
-    """Flag past_due / payment action required. Does not disable the account."""
+    """Flag past_due / payment action required. Does not disable the account.
+
+    Never revive canceled/none accounts into past_due (which grants tool access).
+    """
     customer_id = _sub_get(invoice, "customer")
     if not customer_id:
         return False
@@ -611,11 +614,24 @@ def handle_invoice_payment_failed(invoice) -> bool:
     error_code = payment_error_code_from_stripe_object(invoice)
     db.flag_payment_action_required(user["id"], error_code)
     sub_id = _sub_get(invoice, "subscription")
-    if sub_id:
+    if not sub_id:
+        return True
+    resolved_sub = sub_id if isinstance(sub_id, str) else _sub_get(sub_id, "id")
+    current = (user.get("subscription_status") or "none").lower()
+    # Only move entitled/grace statuses to past_due; leave canceled/none alone.
+    if current in ("active", "trialing", "past_due", "incomplete", "unpaid", "paused"):
         db.update_user_subscription(
             user["id"],
             "past_due",
-            subscription_id=sub_id if isinstance(sub_id, str) else _sub_get(sub_id, "id"),
+            subscription_id=resolved_sub,
+            payment_action_required=True,
+            last_payment_error=error_code,
+        )
+    else:
+        db.update_user_subscription(
+            user["id"],
+            current or "canceled",
+            subscription_id=resolved_sub,
             payment_action_required=True,
             last_payment_error=error_code,
         )
@@ -641,12 +657,15 @@ def handle_invoice_paid(invoice) -> bool:
             return True
         except stripe.StripeError:
             logger.exception("Failed retrieving subscription after invoice.paid")
-    db.update_user_subscription(
-        user["id"],
-        "active",
-        subscription_id=sub_id if isinstance(sub_id, str) else None,
-        clear_payment_error=True,
-    )
+    # Do not force "active" when we cannot confirm Stripe subscription status.
+    # Clear the payment-action flag only; leave subscription_status unchanged.
+    db.clear_payment_action_required(user["id"])
+    if sub_id and isinstance(sub_id, str):
+        db.update_user_subscription(
+            user["id"],
+            user.get("subscription_status") or "none",
+            subscription_id=sub_id,
+        )
     return True
 
 
