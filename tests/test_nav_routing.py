@@ -112,7 +112,7 @@ def test_auth_subscribed_header_open_tools_manage_billing(app_client, two_users,
     html = app_client.get("/features").get_data(as_text=True)
     nav = html.split('id="mkt-nav"', 1)[1].split("</nav>", 1)[0]
     assert "Open Tools" in nav
-    assert "Manage Billing" in nav
+    assert "Billing" in nav
     assert "Log out" in nav
     assert "Sign in" not in nav
     assert "Subscribe" not in nav
@@ -120,7 +120,7 @@ def test_auth_subscribed_header_open_tools_manage_billing(app_client, two_users,
     assert "Sign in" not in html
     assert "Start trial" not in html
     assert 'href="/app"' in html
-    assert 'href="/billing/portal"' in html
+    assert 'href="/billing"' in html
 
 
 def test_auth_unsubscribed_header_keeps_subscribe(app_client, two_users, monkeypatch):

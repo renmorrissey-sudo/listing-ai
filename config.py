@@ -63,6 +63,11 @@ STRIPE_PUBLISHABLE_KEY = _env_strip("STRIPE_PUBLISHABLE_KEY") or _env_strip(
 )
 STRIPE_WEBHOOK_SECRET = _env("STRIPE_WEBHOOK_SECRET")
 STRIPE_PRICE_ID = _env_strip("STRIPE_PRICE_ID")
+# Optional Stripe Payment Method Configuration with Card enabled and Link disabled.
+# When unset, Checkout falls back to payment_method_types=["card"].
+STRIPE_SUBSCRIPTION_PAYMENT_METHOD_CONFIGURATION = _env_strip(
+    "STRIPE_SUBSCRIPTION_PAYMENT_METHOD_CONFIGURATION"
+) or ""
 APP_URL = _env("APP_URL", "http://localhost:8080")
 
 # Public website copy. Keep these as constants so malformed host environment

@@ -275,8 +275,12 @@ def _extract_section(text, start_marker, end_marker):
 from stripe_billing import (
     billing_config_error as _billing_config_error,
     billing_is_configured as _billing_is_configured,
+    billing_summary as _billing_summary,
     checkout_idempotency_key as _checkout_idempotency_key,
+    complete_payment_method_update as _complete_payment_method_update,
+    create_payment_method_update_session as _create_payment_method_update_session,
     create_subscription_checkout_session as _create_subscription_checkout_session,
+    handle_stripe_webhook_event as _handle_stripe_webhook_event,
     normalize_email as _normalize_email,
     resolve_subscribe_gate as _resolve_subscribe_gate,
     stripe_customer_for_email as _stripe_customer_for_email,
@@ -755,6 +759,127 @@ def billing_success():
     return render_template("billing_success.html")
 
 
+@app.route("/billing")
+@auth.login_required
+def billing_page():
+    """Customer-facing subscription / payment-method status."""
+    user = auth.get_current_user()
+    summary = _billing_summary(user) if config.STRIPE_SECRET_KEY else {
+        "plan_name": "TopAI Pro",
+        "price_label": config.SUBSCRIPTION_PRICE,
+        "status_label": (user.get("subscription_status") or "none").replace("_", " ").title(),
+        "payment_method": {"label": "Unavailable"},
+        "attention_message": None,
+        "show_update_payment_method": (user.get("subscription_status") or "") in (
+            "past_due", "unpaid", "incomplete", "paused"
+        ),
+        "show_manage_subscription": bool(user.get("stripe_customer_id")),
+        "has_stripe_customer": bool(user.get("stripe_customer_id")),
+        "local_status": user.get("subscription_status") or "none",
+    }
+    notice = request.args.get("notice")
+    error = request.args.get("error")
+    return render_template(
+        "billing.html",
+        email=user["email"],
+        summary=summary,
+        notice=notice,
+        error=error,
+        product_name=config.PRODUCT_NAME,
+        subscription_price=config.SUBSCRIPTION_PRICE,
+        billing_frequency=config.BILLING_FREQUENCY,
+    )
+
+
+@app.route("/billing/update-payment-method", methods=["POST", "GET"])
+@auth.login_required
+@limiter.limit("10 per minute")
+def billing_update_payment_method():
+    """Start Stripe Checkout mode=setup to collect a new card for this tenant only."""
+    user = auth.get_current_user()
+    if not config.STRIPE_SECRET_KEY:
+        flash("Billing is temporarily unavailable.", "error")
+        return redirect(url_for("billing_page"))
+    if not user.get("stripe_customer_id"):
+        # Ensure customer exists for users who somehow lack the linkage.
+        try:
+            from stripe_billing import ensure_stripe_customer
+
+            ensure_stripe_customer(user)
+            user = auth.get_current_user()
+        except Exception:
+            logger.exception("Failed ensuring Stripe customer for payment method update")
+            flash("Couldn't start payment method update. Please contact support.", "error")
+            return redirect(url_for("billing_page"))
+    try:
+        session = _create_payment_method_update_session(
+            user,
+            success_url=f"{config.APP_URL}/billing/payment-method/success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{config.APP_URL}/billing?notice=cancelled",
+        )
+    except stripe.StripeError:
+        logger.exception("Failed creating payment-method update Checkout session")
+        flash("Couldn't start payment method update. Please try again.", "error")
+        return redirect(url_for("billing_page"))
+    return redirect(session.url, code=303)
+
+
+@app.route("/billing/payment-method/success")
+@auth.login_required
+def billing_payment_method_success():
+    """Return from setup Checkout. Applies defaults + retries invoice from Stripe state.
+
+    Browser return alone never marks the invoice paid — only Stripe-reported success does.
+    """
+    user = auth.get_current_user()
+    session_id = request.args.get("session_id")
+    if not session_id or not config.STRIPE_SECRET_KEY:
+        return redirect(url_for("billing_page", error="missing_session"))
+    try:
+        checkout = stripe.checkout.Session.retrieve(session_id, expand=["setup_intent"])
+    except stripe.StripeError:
+        logger.exception("Failed retrieving setup Checkout session")
+        return redirect(url_for("billing_page", error="session_lookup_failed"))
+
+    # Tenant isolation: session must belong to this user/customer.
+    meta_uid = (checkout.get("metadata") or {}).get("user_id") if isinstance(checkout, dict) else (
+        (getattr(checkout, "metadata", None) or {}).get("user_id")
+    )
+    client_ref = checkout.get("client_reference_id") if isinstance(checkout, dict) else getattr(
+        checkout, "client_reference_id", None
+    )
+    if str(client_ref or meta_uid or "") != str(user["id"]):
+        logger.warning(
+            "Payment-method success session user mismatch session_user=%s auth_user=%s",
+            client_ref or meta_uid,
+            user["id"],
+        )
+        return redirect(url_for("billing_page", error="session_mismatch"))
+
+    customer = checkout.get("customer") if isinstance(checkout, dict) else getattr(checkout, "customer", None)
+    if user.get("stripe_customer_id") and customer and customer != user.get("stripe_customer_id"):
+        return redirect(url_for("billing_page", error="session_mismatch"))
+
+    try:
+        result = _complete_payment_method_update(user, checkout_session=checkout)
+    except PermissionError:
+        return redirect(url_for("billing_page", error="session_mismatch"))
+    except ValueError as exc:
+        logger.info("Payment method update incomplete: %s", exc)
+        return redirect(url_for("billing_page", error="setup_incomplete"))
+    except stripe.StripeError:
+        logger.exception("Payment method update apply/retry failed")
+        return redirect(url_for("billing_page", error="update_failed"))
+
+    if result.get("paid") or result.get("status") in ("no_open_invoice", "already_paid"):
+        return redirect(url_for("billing_page", notice="payment_method_updated"))
+    if result.get("status") == "payment_action_required" and result.get("hosted_invoice_url"):
+        return redirect(result["hosted_invoice_url"])
+    if result.get("applied"):
+        return redirect(url_for("billing_page", notice="card_saved_pending"))
+    return redirect(url_for("billing_page", error="setup_incomplete"))
+
+
 @app.route("/billing/portal")
 @auth.login_required
 def billing_portal():
@@ -763,7 +888,7 @@ def billing_portal():
         return redirect(url_for("subscribe"))
     portal = stripe.billing_portal.Session.create(
         customer=user["stripe_customer_id"],
-        return_url=f"{config.APP_URL}/",
+        return_url=f"{config.APP_URL}/billing",
     )
     return redirect(portal.url, code=303)
 
@@ -786,34 +911,19 @@ def stripe_webhook():
 
     event_id = event.get("id") or ""
     event_type = event["type"]
-    if event_id and not db.claim_stripe_webhook_event(event_id, event_type):
+    # Process first, claim only after success — so a crashed handler does not
+    # permanently skip Stripe retries.
+    if event_id and db.stripe_webhook_event_exists(event_id):
         return jsonify({"received": True, "duplicate": True}), 200
 
-    data = event["data"]["object"]
+    try:
+        _handle_stripe_webhook_event(event)
+    except Exception:
+        logger.exception("Stripe webhook handler failed type=%s id=%s", event_type, event_id)
+        return jsonify({"error": "Webhook handler failed."}), 500
 
-    if event_type == "checkout.session.completed":
-        user_id = data.get("client_reference_id") or (data.get("metadata") or {}).get("user_id")
-        if user_id and data.get("subscription"):
-            sub = stripe.Subscription.retrieve(data["subscription"])
-            sub_id = sub["id"] if isinstance(sub, dict) else sub.id
-            db.update_user_subscription(
-                int(user_id),
-                _stripe_status_from_subscription(sub),
-                subscription_id=sub_id,
-                stripe_customer_id=data.get("customer"),
-            )
-
-    elif event_type in ("customer.subscription.updated", "customer.subscription.deleted"):
-        customer_id = data.get("customer")
-        user = db.get_user_by_stripe_customer(customer_id) if customer_id else None
-        if user:
-            status = (
-                "canceled"
-                if event_type == "customer.subscription.deleted"
-                else _stripe_status_from_subscription(data)
-            )
-            db.update_user_subscription(user["id"], status, subscription_id=data.get("id"))
-
+    if event_id:
+        db.claim_stripe_webhook_event(event_id, event_type)
     return jsonify({"received": True}), 200
 
 

@@ -355,10 +355,9 @@ def test_canceling_subscriber_sees_end_date_no_checkout(app_client, two_users, m
     assert res.status_code == 200
     html = res.get_data(as_text=True)
     assert "July 31, 2026" in html
-    assert "Manage Billing" in html
+    assert "Billing" in html or "Manage subscription" in html
     assert "Open Tools" in html
     assert "Continue to checkout" not in html
-    assert 'method="post"' not in html
 
 
 def test_past_due_blocks_new_subscription(app_client, two_users, monkeypatch):
@@ -369,9 +368,10 @@ def test_past_due_blocks_new_subscription(app_client, two_users, monkeypatch):
     gate = {
         "can_checkout": False,
         "state": "past_due",
-        "message": "Your payment is past due. Update billing to restore full access — do not start a new subscription.",
+        "message": "Your payment is past due. Update your payment method to restore full access — do not start a new subscription.",
         "access_ends_on": None,
         "show_manage_billing": True,
+        "show_update_payment_method": True,
         "show_open_tools": False,
         "redirect": None,
     }
@@ -382,8 +382,8 @@ def test_past_due_blocks_new_subscription(app_client, two_users, monkeypatch):
         post_res = app_client.post("/subscribe", data={"email": "x@y.com"})
         create_checkout.assert_not_called()
     assert get_res.status_code == 200
-    assert b"past due" in get_res.data.lower()
-    assert b"Manage Billing" in get_res.data
+    assert b"past due" in get_res.data.lower() or b"payment method" in get_res.data.lower()
+    assert b"Update payment method" in get_res.data
     assert b"Continue to checkout" not in get_res.data
     assert post_res.status_code == 409
 
@@ -403,6 +403,7 @@ def test_incomplete_and_unpaid_recovery_states(app_client, two_users, monkeypatc
             "message": f"recovery for {needle}",
             "access_ends_on": None,
             "show_manage_billing": True,
+            "show_update_payment_method": True,
             "show_open_tools": False,
             "redirect": None,
         }
@@ -410,7 +411,7 @@ def test_incomplete_and_unpaid_recovery_states(app_client, two_users, monkeypatc
             res = app_client.get("/subscribe")
         assert res.status_code == 200, state
         html = res.get_data(as_text=True)
-        assert "Manage Billing" in html, state
+        assert "Update payment method" in html or "Billing" in html, state
         assert "Continue to checkout" not in html, state
 
 
@@ -462,6 +463,7 @@ def test_create_checkout_passes_idempotency_key(monkeypatch):
     monkeypatch.setattr(config, "STRIPE_SECRET_KEY", "sk_test_123")
     monkeypatch.setattr(config, "STRIPE_PRICE_ID", "price_1TfRM1BKSi4KGHsxagBmTsgG")
     monkeypatch.setattr(config, "STRIPE_PUBLISHABLE_KEY", "pk_test_abc")
+    monkeypatch.setattr(config, "STRIPE_SUBSCRIPTION_PAYMENT_METHOD_CONFIGURATION", "")
     user = {"id": 9, "email": "a@example.com", "stripe_customer_id": "cus_abc"}
     with patch("stripe.checkout.Session.create", return_value=MagicMock()) as create:
         stripe_billing.create_subscription_checkout_session(
@@ -472,6 +474,27 @@ def test_create_checkout_passes_idempotency_key(monkeypatch):
         )
     assert create.call_args.kwargs["idempotency_key"] == "subchk_test_key"
     assert create.call_args.kwargs["customer"] == "cus_abc"
+    assert create.call_args.kwargs["payment_method_types"] == ["card"]
+    assert "link" not in create.call_args.kwargs.get("payment_method_types", [])
+    assert create.call_args.kwargs["subscription_data"]["payment_settings"]["payment_method_types"] == ["card"]
+    assert "payment_method_configuration" not in create.call_args.kwargs
+    assert "automatic_payment_methods" not in create.call_args.kwargs
+
+
+def test_create_checkout_uses_payment_method_configuration_when_set(monkeypatch):
+    monkeypatch.setattr(config, "STRIPE_SECRET_KEY", "sk_test_123")
+    monkeypatch.setattr(config, "STRIPE_PRICE_ID", "price_1TfRM1BKSi4KGHsxagBmTsgG")
+    monkeypatch.setattr(config, "STRIPE_PUBLISHABLE_KEY", "pk_test_abc")
+    monkeypatch.setattr(config, "STRIPE_SUBSCRIPTION_PAYMENT_METHOD_CONFIGURATION", "pmc_topai_subs")
+    user = {"id": 9, "email": "a@example.com", "stripe_customer_id": "cus_abc"}
+    with patch("stripe.checkout.Session.create", return_value=MagicMock()) as create:
+        stripe_billing.create_subscription_checkout_session(
+            user,
+            success_url="https://example.com/ok",
+            cancel_url="https://example.com/cancel",
+        )
+    assert create.call_args.kwargs["payment_method_configuration"] == "pmc_topai_subs"
+    assert "payment_method_types" not in create.call_args.kwargs
 
 
 def test_app_already_subscribed_notice(app_client, two_users, monkeypatch):

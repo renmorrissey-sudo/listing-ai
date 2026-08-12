@@ -205,14 +205,18 @@ def _gate_from_local_status(local_status: str | None) -> dict | None:
             "message": "Your subscription is already active.",
             "access_ends_on": None,
             "show_manage_billing": True,
+            "show_update_payment_method": False,
             "show_open_tools": True,
             "redirect": "subscriber_app",
         }
     if status in ("past_due", "incomplete", "unpaid", "paused"):
         labels = {
-            "past_due": "Your payment is past due. Update billing to restore full access — do not start a new subscription.",
+            "past_due": (
+                "Your payment is past due. Update your payment method to restore full access "
+                "— do not start a new subscription."
+            ),
             "incomplete": "Your checkout was not completed. Resume billing below instead of creating a new subscription.",
-            "unpaid": "Your subscription has an unpaid invoice. Update billing to continue — a new subscription is blocked.",
+            "unpaid": "Your subscription has an unpaid invoice. Update your payment method to continue — a new subscription is blocked.",
             "paused": "Your subscription is paused. Manage billing to resume — a new subscription is blocked.",
         }
         return {
@@ -221,6 +225,7 @@ def _gate_from_local_status(local_status: str | None) -> dict | None:
             "message": labels[status],
             "access_ends_on": None,
             "show_manage_billing": True,
+            "show_update_payment_method": True,
             "show_open_tools": False,
             "redirect": None,
         }
@@ -239,6 +244,7 @@ def resolve_subscribe_gate(user, *, check_stripe: bool = True) -> dict:
         "message": None,
         "access_ends_on": None,
         "show_manage_billing": False,
+        "show_update_payment_method": False,
         "show_open_tools": False,
         "redirect": None,
         "subscription_id": None,
@@ -289,6 +295,7 @@ def resolve_subscribe_gate(user, *, check_stripe: bool = True) -> dict:
                             "message": "Your subscription is already active.",
                             "access_ends_on": top.get("access_ends_on"),
                             "show_manage_billing": True,
+                            "show_update_payment_method": False,
                             "show_open_tools": True,
                             "redirect": "subscriber_app",
                             "subscription_id": top.get("subscription_id"),
@@ -305,6 +312,7 @@ def resolve_subscribe_gate(user, *, check_stripe: bool = True) -> dict:
                             ),
                             "access_ends_on": top.get("access_ends_on"),
                             "show_manage_billing": True,
+                            "show_update_payment_method": False,
                             "show_open_tools": True,
                             "redirect": None,
                             "subscription_id": top.get("subscription_id"),
@@ -318,7 +326,18 @@ def resolve_subscribe_gate(user, *, check_stripe: bool = True) -> dict:
                             "access_ends_on": top.get("access_ends_on"),
                             "subscription_id": top.get("subscription_id"),
                             "show_manage_billing": True,
+                            "show_update_payment_method": True,
                         }
+                        # Prefer Link-replacement copy when Stripe reports link_connection_closed.
+                        try:
+                            summary = billing_summary({**user, "subscription_id": top.get("subscription_id")})
+                            if summary.get("failure_code") == LINK_CONNECTION_CLOSED or (
+                                summary.get("payment_method") or {}
+                            ).get("is_link"):
+                                stripe_gate["message"] = PAYMENT_METHOD_REPLACEMENT_MSG
+                                stripe_gate["show_update_payment_method"] = True
+                        except Exception:
+                            logger.exception("Failed enriching subscribe gate with billing summary")
         except stripe.StripeError:
             logger.exception(
                 "Stripe subscribe-gate check failed for user_id=%s", user.get("id")
@@ -404,6 +423,31 @@ def checkout_idempotency_key(user_id, *, bucket_seconds: int = 120) -> str:
     return f"subchk_{user_id}_{digest}"
 
 
+LINK_CONNECTION_CLOSED = "link_connection_closed"
+PAYMENT_METHOD_REPLACEMENT_MSG = (
+    "Your saved payment method is no longer available. "
+    "Please add a new card to continue your subscription."
+)
+
+
+def checkout_payment_method_kwargs() -> dict:
+    """Card-oriented payment methods for TopAI subscriptions — Link excluded.
+
+    Prefer a dedicated Payment Method Configuration (Card on, Link off) when
+    STRIPE_SUBSCRIPTION_PAYMENT_METHOD_CONFIGURATION is set; otherwise fall
+    back to payment_method_types=["card"]. Never uses automatic_payment_methods.
+    """
+    pmc = (getattr(config, "STRIPE_SUBSCRIPTION_PAYMENT_METHOD_CONFIGURATION", None) or "").strip()
+    if pmc:
+        return {"payment_method_configuration": pmc}
+    return {"payment_method_types": ["card"]}
+
+
+def subscription_payment_settings() -> dict:
+    """Lock renewals to card so Stripe does not retry a stale Link PM."""
+    return {"payment_method_types": ["card"]}
+
+
 def create_subscription_checkout_session(
     user,
     *,
@@ -428,6 +472,602 @@ def create_subscription_checkout_session(
         client_reference_id=str(user["id"]),
         metadata={"user_id": str(user["id"])},
         allow_promotion_codes=True,
+        subscription_data={
+            "payment_settings": subscription_payment_settings(),
+            "metadata": {"user_id": str(user["id"])},
+        },
     )
+    params.update(checkout_payment_method_kwargs())
     key = idempotency_key or checkout_idempotency_key(user["id"])
     return stripe.checkout.Session.create(**params, idempotency_key=key)
+
+
+def _obj_get(obj, key, default=None):
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _pm_id(value):
+    if not value:
+        return None
+    if isinstance(value, str):
+        return value
+    return _obj_get(value, "id")
+
+
+def _pm_type(pm) -> str | None:
+    if not pm:
+        return None
+    if isinstance(pm, str):
+        return None
+    return (_obj_get(pm, "type") or "").lower() or None
+
+
+def primary_subscription_for_user(user):
+    """Return the recoverable Stripe subscription for this tenant, if any."""
+    if not user or not config.STRIPE_SECRET_KEY:
+        return None
+    customer_id = user.get("stripe_customer_id")
+    if not customer_id:
+        return None
+    sub_id = user.get("subscription_id")
+    if sub_id:
+        try:
+            return stripe.Subscription.retrieve(
+                sub_id, expand=["default_payment_method", "latest_invoice"]
+            )
+        except stripe.StripeError:
+            logger.exception("Failed retrieving subscription %s", sub_id)
+    blocking = list_blocking_subscriptions(customer_id)
+    if not blocking:
+        return None
+    classified = [classify_subscription(s) for s in blocking]
+    priority = {
+        "past_due": 0,
+        "unpaid": 1,
+        "incomplete": 2,
+        "paused": 3,
+        "canceling": 4,
+        "active": 5,
+        "trialing": 5,
+    }
+    classified.sort(key=lambda c: priority.get(c["state"], 99))
+    top_id = classified[0].get("subscription_id")
+    if not top_id:
+        return None
+    try:
+        return stripe.Subscription.retrieve(
+            top_id, expand=["default_payment_method", "latest_invoice"]
+        )
+    except stripe.StripeError:
+        logger.exception("Failed retrieving subscription %s", top_id)
+        return None
+
+
+def create_payment_method_update_session(
+    user,
+    *,
+    success_url: str,
+    cancel_url: str,
+):
+    """Stripe Checkout mode=setup — collect a new card without creating a subscription."""
+    if not config.STRIPE_SECRET_KEY:
+        raise RuntimeError("Billing not configured: missing_secret_key")
+    customer_id = user.get("stripe_customer_id") or ensure_stripe_customer(user)
+    params = dict(
+        mode="setup",
+        customer=customer_id,
+        success_url=success_url,
+        cancel_url=cancel_url,
+        client_reference_id=str(user["id"]),
+        metadata={
+            "user_id": str(user["id"]),
+            "purpose": "payment_method_update",
+        },
+    )
+    params.update(checkout_payment_method_kwargs())
+    return stripe.checkout.Session.create(**params)
+
+
+def apply_default_payment_method(user, payment_method_id: str) -> dict:
+    """Set subscription + customer default PM to a non-Link card for this tenant only."""
+    if not user or not payment_method_id:
+        raise ValueError("User and payment_method_id are required.")
+    customer_id = user.get("stripe_customer_id")
+    if not customer_id:
+        raise ValueError("No Stripe customer on this account.")
+
+    pm = stripe.PaymentMethod.retrieve(payment_method_id)
+    pm_customer = _obj_get(pm, "customer")
+    if pm_customer and pm_customer != customer_id:
+        raise PermissionError("Payment method does not belong to this customer.")
+    if not pm_customer:
+        stripe.PaymentMethod.attach(payment_method_id, customer=customer_id)
+
+    pm_type = (_obj_get(pm, "type") or "").lower()
+    if pm_type == "link":
+        raise ValueError(
+            "Link payment methods cannot be used for TopAI subscriptions. "
+            "Please add a card instead."
+        )
+
+    subscription = primary_subscription_for_user(user)
+    if not subscription:
+        raise ValueError("No recoverable subscription found for this account.")
+    sub_id = _obj_get(subscription, "id")
+    if _obj_get(subscription, "customer") != customer_id:
+        raise PermissionError("Subscription does not belong to this customer.")
+
+    stripe.Subscription.modify(
+        sub_id,
+        default_payment_method=payment_method_id,
+        payment_settings=subscription_payment_settings(),
+    )
+    stripe.Customer.modify(
+        customer_id,
+        invoice_settings={"default_payment_method": payment_method_id},
+    )
+    return {
+        "subscription_id": sub_id,
+        "customer_id": customer_id,
+        "payment_method_id": payment_method_id,
+        "payment_method_type": pm_type,
+    }
+
+
+def latest_open_invoice_for_subscription(customer_id, subscription_id):
+    if not customer_id or not subscription_id:
+        return None
+    invoices = stripe.Invoice.list(
+        customer=customer_id,
+        subscription=subscription_id,
+        status="open",
+        limit=5,
+    )
+    data = _obj_get(invoices, "data") or []
+    return data[0] if data else None
+
+
+def retry_open_subscription_invoice(user, *, payment_method_id: str | None = None) -> dict:
+    """Pay the latest open invoice for the user's subscription with the new card."""
+    customer_id = (user or {}).get("stripe_customer_id")
+    subscription = primary_subscription_for_user(user)
+    if not customer_id or not subscription:
+        return {"status": "no_subscription", "invoice_id": None, "paid": False}
+    sub_id = _obj_get(subscription, "id")
+    invoice = latest_open_invoice_for_subscription(customer_id, sub_id)
+    if not invoice:
+        return {"status": "no_open_invoice", "invoice_id": None, "paid": False}
+
+    invoice_id = _obj_get(invoice, "id")
+    pay_kwargs = {}
+    if payment_method_id:
+        pay_kwargs["payment_method"] = payment_method_id
+    try:
+        paid = stripe.Invoice.pay(invoice_id, **pay_kwargs)
+    except stripe.CardError as exc:
+        err = getattr(exc, "error", None) or {}
+        code = _obj_get(err, "code") if not isinstance(err, dict) else err.get("code")
+        logger.warning(
+            "Invoice.pay card error invoice=%s code=%s", invoice_id, code
+        )
+        return {
+            "status": "payment_failed",
+            "invoice_id": invoice_id,
+            "paid": False,
+            "error_code": code,
+            "requires_action": code in ("authentication_required", "card_declined")
+            or (_obj_get(err, "type") == "card_error"),
+        }
+    except stripe.InvalidRequestError as exc:
+        msg = str(exc)
+        if "already paid" in msg.lower() or "not open" in msg.lower():
+            return {"status": "already_paid", "invoice_id": invoice_id, "paid": True}
+        logger.exception("Invoice.pay invalid request invoice=%s", invoice_id)
+        return {
+            "status": "payment_failed",
+            "invoice_id": invoice_id,
+            "paid": False,
+            "error_code": "invalid_request",
+        }
+    except stripe.StripeError:
+        logger.exception("Invoice.pay failed invoice=%s", invoice_id)
+        return {
+            "status": "payment_failed",
+            "invoice_id": invoice_id,
+            "paid": False,
+            "error_code": "stripe_error",
+        }
+
+    status = (_obj_get(paid, "status") or "").lower()
+    if status == "paid":
+        return {"status": "paid", "invoice_id": invoice_id, "paid": True}
+
+    # 3DS / action required — do not mark paid locally.
+    pi = _obj_get(paid, "payment_intent")
+    pi_status = None
+    if pi and not isinstance(pi, str):
+        pi_status = (_obj_get(pi, "status") or "").lower()
+    if pi_status == "requires_action" or status in ("open", "draft"):
+        return {
+            "status": "payment_action_required",
+            "invoice_id": invoice_id,
+            "paid": False,
+            "hosted_invoice_url": _obj_get(paid, "hosted_invoice_url"),
+        }
+    return {"status": status or "unknown", "invoice_id": invoice_id, "paid": False}
+
+
+def complete_payment_method_update(user, *, checkout_session) -> dict:
+    """Apply defaults from a completed setup Checkout session and retry open invoice.
+
+    Does not mark the subscription paid unless Stripe reports the invoice paid.
+    """
+    if _obj_get(checkout_session, "mode") != "setup":
+        raise ValueError("Expected a setup Checkout session.")
+    if _obj_get(checkout_session, "customer") != user.get("stripe_customer_id"):
+        # Allow if local customer missing but session customer matches after sync.
+        session_customer = _obj_get(checkout_session, "customer")
+        if not session_customer:
+            raise ValueError("Checkout session has no customer.")
+        if user.get("stripe_customer_id") and session_customer != user.get("stripe_customer_id"):
+            raise PermissionError("Checkout session customer mismatch.")
+        db.set_stripe_customer(user["id"], session_customer)
+        user = dict(user)
+        user["stripe_customer_id"] = session_customer
+
+    setup_intent_id = _obj_get(checkout_session, "setup_intent")
+    if not setup_intent_id:
+        raise ValueError("Checkout session has no setup_intent.")
+    if isinstance(setup_intent_id, str):
+        setup_intent = stripe.SetupIntent.retrieve(setup_intent_id)
+    else:
+        setup_intent = setup_intent_id
+    if (_obj_get(setup_intent, "status") or "").lower() != "succeeded":
+        return {
+            "applied": False,
+            "paid": False,
+            "status": "setup_incomplete",
+            "message": "Card setup was not completed.",
+        }
+    payment_method_id = _pm_id(_obj_get(setup_intent, "payment_method"))
+    if not payment_method_id:
+        raise ValueError("SetupIntent has no payment method.")
+
+    applied = apply_default_payment_method(user, payment_method_id)
+    retry = retry_open_subscription_invoice(user, payment_method_id=payment_method_id)
+
+    # Sync local status from live subscription after retry.
+    sub = primary_subscription_for_user(user)
+    if sub:
+        db.update_user_subscription(
+            user["id"],
+            stripe_status_from_subscription(sub),
+            subscription_id=_obj_get(sub, "id"),
+            stripe_customer_id=user.get("stripe_customer_id"),
+        )
+    return {
+        "applied": True,
+        "paid": bool(retry.get("paid")),
+        "status": retry.get("status"),
+        "invoice_id": retry.get("invoice_id"),
+        "payment_method_id": applied["payment_method_id"],
+        "hosted_invoice_url": retry.get("hosted_invoice_url"),
+        "message": None
+        if retry.get("paid") or retry.get("status") in ("no_open_invoice", "already_paid")
+        else (
+            "Card saved. Additional authentication may be required to finish payment."
+            if retry.get("status") == "payment_action_required"
+            else "Card saved. If payment is still pending, open Manage subscription."
+        ),
+    }
+
+
+def _failure_code_from_invoice(invoice) -> str | None:
+    if not invoice:
+        return None
+    # Prefer last_finalization_error / charge / payment_intent last_payment_error.
+    for path in (
+        ("last_finalization_error", "code"),
+    ):
+        node = invoice
+        for key in path[:-1]:
+            node = _obj_get(node, key)
+        if node:
+            code = _obj_get(node, path[-1]) if not isinstance(node, str) else None
+            if code:
+                return str(code)
+    pi = _obj_get(invoice, "payment_intent")
+    if isinstance(pi, str):
+        try:
+            pi = stripe.PaymentIntent.retrieve(pi)
+        except stripe.StripeError:
+            pi = None
+    if pi:
+        err = _obj_get(pi, "last_payment_error")
+        code = _obj_get(err, "code") if err else None
+        if code:
+            return str(code)
+        decline = _obj_get(err, "decline_code") if err else None
+        if decline:
+            return str(decline)
+    return None
+
+
+def payment_method_display(pm) -> dict:
+    """Safe display fields only — never full card numbers."""
+    if not pm or isinstance(pm, str):
+        return {"label": "Unavailable", "brand": None, "last4": None, "type": None, "is_link": False}
+    pm_type = (_obj_get(pm, "type") or "").lower()
+    if pm_type == "link":
+        return {"label": "Unavailable", "brand": None, "last4": None, "type": "link", "is_link": True}
+    if pm_type == "card":
+        card = _obj_get(pm, "card") or {}
+        brand = (_obj_get(card, "brand") or "Card").title()
+        last4 = _obj_get(card, "last4")
+        label = f"{brand} •••• {last4}" if last4 else brand
+        return {"label": label, "brand": brand, "last4": last4, "type": "card", "is_link": False}
+    return {
+        "label": "Unavailable" if not pm_type else pm_type.replace("_", " ").title(),
+        "brand": None,
+        "last4": None,
+        "type": pm_type or None,
+        "is_link": False,
+    }
+
+
+def billing_summary(user) -> dict:
+    """UI-facing billing snapshot for /billing and subscribe recovery gates."""
+    local_status = ((user or {}).get("subscription_status") or "none").lower()
+    summary = {
+        "plan_name": "TopAI Pro",
+        "price_label": getattr(config, "SUBSCRIPTION_PRICE", "$49/month"),
+        "local_status": local_status,
+        "stripe_status": local_status,
+        "status_label": _status_label(local_status),
+        "payment_method": {"label": "Unavailable", "brand": None, "last4": None, "type": None, "is_link": False},
+        "needs_payment_method_update": local_status in ("past_due", "unpaid", "incomplete", "paused"),
+        "attention_message": None,
+        "failure_code": None,
+        "subscription_id": (user or {}).get("subscription_id"),
+        "has_stripe_customer": bool((user or {}).get("stripe_customer_id")),
+        "show_update_payment_method": local_status in ("past_due", "unpaid", "incomplete", "paused"),
+        "show_manage_subscription": bool((user or {}).get("stripe_customer_id")),
+    }
+    if not user or not config.STRIPE_SECRET_KEY or not user.get("stripe_customer_id"):
+        if summary["needs_payment_method_update"]:
+            summary["attention_message"] = (
+                "Your payment needs attention. Please add a new card to continue your subscription."
+            )
+        return summary
+
+    try:
+        customer = stripe.Customer.retrieve(
+            user["stripe_customer_id"],
+            expand=["invoice_settings.default_payment_method"],
+        )
+        sub = primary_subscription_for_user(user)
+    except stripe.StripeError:
+        logger.exception("billing_summary Stripe fetch failed user_id=%s", user.get("id"))
+        if summary["needs_payment_method_update"]:
+            summary["attention_message"] = (
+                "Your payment needs attention. Please add a new card to continue your subscription."
+            )
+        return summary
+
+    if sub:
+        stripe_status = (_obj_get(sub, "status") or local_status).lower()
+        summary["stripe_status"] = stripe_status
+        summary["status_label"] = _status_label(
+            "active" if stripe_status == "trialing" else stripe_status
+        )
+        summary["subscription_id"] = _obj_get(sub, "id")
+        summary["needs_payment_method_update"] = stripe_status in (
+            "past_due",
+            "unpaid",
+            "incomplete",
+            "paused",
+        )
+        summary["show_update_payment_method"] = summary["needs_payment_method_update"] or False
+        pm = _obj_get(sub, "default_payment_method")
+        if isinstance(pm, str):
+            try:
+                pm = stripe.PaymentMethod.retrieve(pm)
+            except stripe.StripeError:
+                pm = None
+        summary["payment_method"] = payment_method_display(pm)
+        if summary["payment_method"]["is_link"]:
+            summary["needs_payment_method_update"] = True
+            summary["show_update_payment_method"] = True
+            summary["attention_message"] = PAYMENT_METHOD_REPLACEMENT_MSG
+            summary["failure_code"] = LINK_CONNECTION_CLOSED
+            summary["status_label"] = "Payment method needs attention"
+
+        latest = _obj_get(sub, "latest_invoice")
+        if isinstance(latest, str):
+            try:
+                latest = stripe.Invoice.retrieve(latest, expand=["payment_intent"])
+            except stripe.StripeError:
+                latest = None
+        elif latest:
+            # May need payment_intent expanded
+            pass
+        fail_code = _failure_code_from_invoice(latest)
+        if fail_code:
+            summary["failure_code"] = fail_code
+        if fail_code == LINK_CONNECTION_CLOSED or summary["payment_method"]["is_link"]:
+            summary["needs_payment_method_update"] = True
+            summary["show_update_payment_method"] = True
+            summary["attention_message"] = PAYMENT_METHOD_REPLACEMENT_MSG
+            summary["status_label"] = "Payment method needs attention"
+        elif summary["needs_payment_method_update"] and not summary["attention_message"]:
+            summary["attention_message"] = (
+                "Your payment needs attention. Please add a new card to continue your subscription."
+            )
+            summary["show_update_payment_method"] = True
+    else:
+        inv_pm = _obj_get(_obj_get(customer, "invoice_settings") or {}, "default_payment_method")
+        if isinstance(inv_pm, str):
+            try:
+                inv_pm = stripe.PaymentMethod.retrieve(inv_pm)
+            except stripe.StripeError:
+                inv_pm = None
+        if inv_pm:
+            summary["payment_method"] = payment_method_display(inv_pm)
+            if summary["payment_method"]["is_link"]:
+                summary["needs_payment_method_update"] = True
+                summary["show_update_payment_method"] = True
+                summary["attention_message"] = PAYMENT_METHOD_REPLACEMENT_MSG
+
+    return summary
+
+
+def _status_label(status: str) -> str:
+    return {
+        "active": "Active",
+        "trialing": "Active",
+        "past_due": "Payment method needs attention",
+        "unpaid": "Payment required",
+        "incomplete": "Payment setup incomplete",
+        "paused": "Paused",
+        "canceled": "Canceled",
+        "none": "No subscription",
+    }.get((status or "none").lower(), (status or "none").replace("_", " ").title())
+
+
+def sync_user_from_invoice_event(customer_id, *, force_status: str | None = None):
+    """Update local subscription_status from Stripe after invoice webhooks."""
+    if not customer_id:
+        return
+    user = db.get_user_by_stripe_customer(customer_id)
+    if not user:
+        return
+    if force_status:
+        db.update_user_subscription(user["id"], force_status)
+        return
+    sub = primary_subscription_for_user(user)
+    if not sub:
+        return
+    db.update_user_subscription(
+        user["id"],
+        stripe_status_from_subscription(sub),
+        subscription_id=_obj_get(sub, "id"),
+        stripe_customer_id=customer_id,
+    )
+
+
+def handle_stripe_webhook_event(event: dict) -> None:
+    """Process a verified Stripe event. Raises on failure so Stripe can retry."""
+    event_type = event["type"]
+    data = event["data"]["object"]
+
+    if event_type == "checkout.session.completed":
+        mode = data.get("mode")
+        user_id = data.get("client_reference_id") or (data.get("metadata") or {}).get("user_id")
+        if mode == "setup" and user_id:
+            user = db.get_user_by_id(int(user_id))
+            if not user:
+                return
+            if data.get("customer") and not user.get("stripe_customer_id"):
+                db.set_stripe_customer(user["id"], data["customer"])
+                user = db.get_user_by_id(int(user_id))
+            # Re-fetch full session with setup_intent for apply path.
+            session = stripe.checkout.Session.retrieve(
+                data["id"], expand=["setup_intent"]
+            )
+            complete_payment_method_update(user, checkout_session=session)
+            return
+        if user_id and data.get("subscription"):
+            sub = stripe.Subscription.retrieve(data["subscription"])
+            sub_id = sub["id"] if isinstance(sub, dict) else sub.id
+            # Prefer card defaults when Checkout attached a PM.
+            try:
+                pm = _obj_get(sub, "default_payment_method")
+                if pm and _pm_type(pm) != "link":
+                    stripe.Subscription.modify(
+                        sub_id,
+                        payment_settings=subscription_payment_settings(),
+                    )
+                    if data.get("customer") and _pm_id(pm):
+                        stripe.Customer.modify(
+                            data["customer"],
+                            invoice_settings={"default_payment_method": _pm_id(pm)},
+                        )
+            except stripe.StripeError:
+                logger.exception("Post-checkout payment_settings sync failed sub=%s", sub_id)
+            db.update_user_subscription(
+                int(user_id),
+                stripe_status_from_subscription(sub),
+                subscription_id=sub_id,
+                stripe_customer_id=data.get("customer"),
+            )
+        return
+
+    if event_type == "customer.subscription.deleted":
+        customer_id = data.get("customer")
+        user = db.get_user_by_stripe_customer(customer_id) if customer_id else None
+        if user:
+            db.update_user_subscription(user["id"], "canceled", subscription_id=data.get("id"))
+        return
+
+    if event_type == "customer.subscription.updated":
+        customer_id = data.get("customer")
+        user = db.get_user_by_stripe_customer(customer_id) if customer_id else None
+        if user:
+            db.update_user_subscription(
+                user["id"],
+                stripe_status_from_subscription(data),
+                subscription_id=data.get("id"),
+            )
+        return
+
+    if event_type == "invoice.paid":
+        customer_id = data.get("customer")
+        sub_id = data.get("subscription")
+        user = db.get_user_by_stripe_customer(customer_id) if customer_id else None
+        if user and sub_id:
+            try:
+                sub = stripe.Subscription.retrieve(sub_id)
+            except stripe.StripeError:
+                logger.exception("invoice.paid: failed retrieving subscription %s", sub_id)
+                sync_user_from_invoice_event(customer_id)
+                return
+            db.update_user_subscription(
+                user["id"],
+                stripe_status_from_subscription(sub),
+                subscription_id=_obj_get(sub, "id") or sub_id,
+                stripe_customer_id=customer_id,
+            )
+        else:
+            sync_user_from_invoice_event(customer_id)
+        return
+
+    if event_type == "invoice.payment_failed":
+        customer_id = data.get("customer")
+        user = db.get_user_by_stripe_customer(customer_id) if customer_id else None
+        if user:
+            # past_due until Stripe restores active via invoice.paid / subscription.updated
+            db.update_user_subscription(
+                user["id"],
+                "past_due",
+                subscription_id=data.get("subscription"),
+                stripe_customer_id=customer_id,
+            )
+        return
+
+    if event_type == "invoice.payment_action_required":
+        customer_id = data.get("customer")
+        user = db.get_user_by_stripe_customer(customer_id) if customer_id else None
+        if user:
+            db.update_user_subscription(
+                user["id"],
+                "past_due",
+                subscription_id=data.get("subscription"),
+                stripe_customer_id=customer_id,
+            )
+        else:
+            sync_user_from_invoice_event(customer_id, force_status="past_due")
+        return
