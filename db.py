@@ -307,11 +307,22 @@ def clear_payment_action_required(user_id):
         )
 
 
-def claim_stripe_webhook_event(event_id, event_type):
-    """Record a Stripe event for idempotent processing.
+def stripe_webhook_event_exists(event_id):
+    """True if this Stripe event was already successfully processed."""
+    if not event_id:
+        return False
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT event_id FROM stripe_webhook_events WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+        return bool(row)
 
-    Returns True if this is the first time seeing the event (caller should process),
-    False if it was already processed.
+
+def claim_stripe_webhook_event(event_id, event_type):
+    """Record a Stripe event after successful processing (idempotency ledger).
+
+    Returns True if this is the first successful claim, False if already recorded.
     """
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
@@ -333,6 +344,17 @@ def claim_stripe_webhook_event(event_id, event_type):
             # Concurrent insert race — treat as already processed.
             return False
         return True
+
+
+def release_stripe_webhook_event(event_id):
+    """Remove a claim so Stripe can retry after a failed handler."""
+    if not event_id:
+        return
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM stripe_webhook_events WHERE event_id = ?",
+            (event_id,),
+        )
 
 
 def get_business_profile(user_id):

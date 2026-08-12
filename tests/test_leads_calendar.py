@@ -101,6 +101,47 @@ def test_event_filters_and_stable_ids(two_users):
     assert len(ids) == len(set(ids))
 
 
+def test_lead_less_task_does_not_masquerade_as_a_follow_up(two_users):
+    """A generic task with no lead attached (e.g. "Create a lead for Mark
+    Smith") must never be labeled like a scheduled lead follow-up on the
+    calendar, even if its task_type happens to be send_sms/call/etc -- that
+    reads as a real /crm/follow-ups item when it isn't one."""
+    u1, _ = two_users
+    due = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    task_id, err = crm_db.create_task(
+        u1,
+        {
+            "title": "Create a lead for Mark Smith",
+            "due_at": due,
+            "task_type": "send_sms",
+        },
+    )
+    assert err is None
+    events = [e for e in crm_db.list_calendar_events(u1) if e["id"] == f"task:{task_id}"]
+    assert len(events) == 1
+    assert events[0]["event_type"] == "task"
+    assert events[0]["lead_id"] is None
+
+
+def test_task_with_lead_still_maps_to_typed_event(two_users):
+    u1, _ = two_users
+    lead_id = _lead(u1, "Typed Task Lead")
+    due = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    task_id, err = crm_db.create_task(
+        u1,
+        {
+            "title": "Call the lead",
+            "lead_id": lead_id,
+            "due_at": due,
+            "task_type": "call",
+        },
+    )
+    assert err is None
+    events = [e for e in crm_db.list_calendar_events(u1) if e["id"] == f"task:{task_id}"]
+    assert len(events) == 1
+    assert events[0]["event_type"] == "call"
+
+
 def test_timezone_local_day_helper(two_users):
     # 02:00 UTC on Jul 30 is Jul 29 evening in America/Denver.
     due = "2026-07-30T02:00:00+00:00"

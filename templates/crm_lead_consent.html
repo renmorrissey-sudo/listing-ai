@@ -14,7 +14,7 @@
   <main>
     <p class="muted"><a href="/crm/leads/{{ lead.id }}">← {{ lead.name or 'Lead' }}</a></p>
     <h1>SMS consent</h1>
-    <p class="muted">{{ lead.phone_number }} · status {{ lead.sms_consent_status or 'unverified' }} ·
+    <p class="muted">{{ lead.phone_number }} · status {{ sms_consent_label(lead.sms_consent_status) }} ·
       {% if lead.sms_sending_blocked %}blocked{% else %}enabled{% endif %}</p>
     {% if error %}<div class="flash err" style="display:block;">{{ error }}</div>{% endif %}
 

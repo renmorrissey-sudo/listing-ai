@@ -3,41 +3,113 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>External lead sources - {{ product_name }}</title>
+  <title>Lead Sources - {{ product_name }}</title>
   <meta name="robots" content="noindex" />
   {% include 'crm_base_styles.html' %}
 </head>
 <body>
-  {% set page_tagline = 'External sources' %}
+  {% set page_tagline = 'Lead sources' %}
   {% include 'subscriber_header.html' %}
   {% include 'subscriber_tool_nav.html' %}
   <main>
-    <p class="muted"><a href="/crm/leads">← Leads</a> · <a href="/crm/external-leads/new">Add lead</a> · <a href="/crm/external-leads/import">CSV import</a></p>
-    <h1>External lead sources</h1>
-    <p class="muted">Configure portals and feeds. Every ingested lead stays SMS Unverified and Blocked until you confirm evidence. Consent is never inferred from the source name.</p>
+    <p class="muted"><a href="/crm/leads">&larr; Leads</a></p>
+    <h1>Lead Sources</h1>
+    <p class="muted">
+      Connect the places your leads already come from. Every ingested lead stays SMS Unverified and
+      Blocked until you confirm consent evidence &mdash; consent is never inferred from the source.
+    </p>
     {% if created_secret %}
-    <div class="flash" style="display:block;">Webhook secret (copy now — shown once): <code>{{ created_secret }}</code></div>
+    <div class="flash" style="display:block;">Webhook secret (copy now &mdash; shown once): <code>{{ created_secret }}</code></div>
     {% endif %}
     {% if error %}<div class="flash err" style="display:block;">{{ error }}</div>{% endif %}
 
     <div class="card">
-      <h2>Add source</h2>
+      <h2>Connected</h2>
+      {% if sources %}
+      <div class="source-grid">
+        {% for s in sources %}
+        <div class="source-card">
+          <div class="row" style="justify-content:space-between;">
+            <div class="source-card-title">{{ s.name }}</div>
+            <span class="pill success">Connected</span>
+          </div>
+          <div class="source-card-sub">
+            {{ s.category }} &middot; {{ s.import_method }}
+            {% if s.last_lead_received_at %}
+            <br />Last lead received {{ s.last_lead_received_at[:10] }}
+            {% else %}
+            <br />No leads received yet
+            {% endif %}
+          </div>
+          <a class="btn secondary" href="/crm/external-sources/{{ s.id }}">Manage</a>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="empty">No sources connected yet. Set one up below.</p>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Available now</h2>
+      <p class="muted">These ingestion methods work today &mdash; every lead lands in the same CRM Lead record as manual entry.</p>
+      <div class="source-grid">
+        <div class="source-card">
+          <div class="source-card-title">CSV Upload</div>
+          <div class="source-card-sub">Import a spreadsheet export from any provider. Preview, map columns, and commit in one flow.</div>
+          <a class="btn" href="/crm/external-leads/import">Import</a>
+        </div>
+        <div class="source-card">
+          <div class="source-card-title">Webhook / API</div>
+          <div class="source-card-sub">Generate a secure per-source endpoint and secret. Point any provider's outbound webhook or a Zapier/Make automation at it.</div>
+          <a class="btn" href="#add-source-form">Set up</a>
+        </div>
+        <div class="source-card">
+          <div class="source-card-title">Manual Entry</div>
+          <div class="source-card-sub">Add a single lead by hand from the Leads page &mdash; takes a few seconds.</div>
+          <a class="btn" href="/crm/leads">+ New Lead</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Popular lead providers</h2>
+      <p class="muted">
+        TopAI does not have a direct API/OAuth partnership with these providers today. Use Webhook/API
+        (with a Zapier/Make bridge) or CSV export in the meantime.
+      </p>
+      <div class="source-grid">
+        {% for p in popular_providers|default([]) %}
+        <div class="source-card disabled">
+          <div class="row" style="justify-content:space-between;">
+            <div class="source-card-title">{{ p.name }}</div>
+            <span class="pill muted">Coming soon</span>
+          </div>
+          <div class="source-card-sub">Direct integration not available yet.</div>
+          <button class="btn secondary" type="button" disabled>Coming soon</button>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card" id="add-source-form">
+      <h2>Set up a webhook / API source</h2>
       <form method="post">
-        <label>Name <input name="name" required placeholder="Zillow Flex" /></label>
+        <label>Name <input name="name" required placeholder="e.g. Zillow Premier Agent" /></label>
         <label>Category
           <select name="category">
             {% for c in categories %}
-            <option value="{{ c }}">{{ c }}</option>
+            <option value="{{ c }}" {% if c == 'webhook' %}selected{% endif %}>{{ c }}</option>
             {% endfor %}
           </select>
         </label>
-        <label>Provider key <input name="provider_key" placeholder="zillow-flex" /> <span class="muted">Used in webhook URL</span></label>
+        <label>Provider key <input name="provider_key" placeholder="zillow-premier-agent" /> <span class="muted">Used in the webhook URL</span></label>
         <label>Import method
           <select name="import_method">
-            <option value="manual">manual</option>
-            <option value="csv">csv</option>
-            <option value="webhook">webhook</option>
+            <option value="webhook" selected>webhook</option>
             <option value="api">api</option>
+            <option value="csv">csv</option>
+            <option value="manual">manual</option>
           </select>
         </label>
         <label>Default pond status
@@ -51,32 +123,6 @@
         <p class="muted">Consent behavior is fixed: <strong>unverified_blocked</strong> (not configurable).</p>
         <button class="btn" type="submit">Create source</button>
       </form>
-    </div>
-
-    <div class="card">
-      <h2>Your sources</h2>
-      {% if sources %}
-      <table>
-        <thead><tr><th>Name</th><th>Key</th><th>Category</th><th>Method</th><th>Webhook</th></tr></thead>
-        <tbody>
-          {% for s in sources %}
-          <tr>
-            <td>{{ s.name }}</td>
-            <td><code>{{ s.provider_key }}</code></td>
-            <td>{{ s.category }}</td>
-            <td>{{ s.import_method }}</td>
-            <td class="muted">
-              {% if s.webhook_secret_hash %}
-              POST /api/external-leads/webhook/{{ s.provider_key }}
-              {% else %}—{% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      {% else %}
-      <p class="empty">No sources yet.</p>
-      {% endif %}
     </div>
   </main>
   {% include 'subscriber_footer.html' %}

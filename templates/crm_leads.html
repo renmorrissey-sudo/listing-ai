@@ -12,12 +12,18 @@
   {% include 'subscriber_header.html' %}
   {% include 'subscriber_tool_nav.html' %}
   <main>
-    <h1>Leads</h1>
-    <p class="muted">Filter and open lead records. Status changes are always agent-controlled.
-      <a href="/crm/external-leads/new">Add external lead</a> ·
-      <a href="/crm/external-leads/import">CSV import</a> ·
-      <a href="/crm/external-sources">Sources</a>
-    </p>
+    <div class="page-header">
+      <div class="page-header-titles">
+        <h1>Leads</h1>
+        <p class="muted">Manage prospects and AI-assisted outreach. Status changes are always agent-controlled.</p>
+      </div>
+      <div class="page-header-actions">
+        <button type="button" class="btn" onclick="openNewLeadDrawer(this)">+ New Lead</button>
+        <a class="btn secondary" href="/crm/external-leads/import">Import CSV</a>
+        <a class="btn secondary" href="/crm/external-sources">Connect Lead Sources</a>
+      </div>
+    </div>
+
     {% if active_filter %}
     <div class="filter-banner" role="status">
       <div>
@@ -27,86 +33,407 @@
       <a href="/crm/leads">Clear filters</a>
     </div>
     {% endif %}
-    <form class="filters" method="get" action="/crm/leads">
+
+    <form method="get" action="/crm/leads" id="leads-filter-form">
       {% if scope_filter %}<input type="hidden" name="active" value="1" />{% endif %}
-      <select name="stage" aria-label="Pipeline stage">
-        <option value="">All stages</option>
-        {% for stage_id, label, _members in pipeline_stages|default([]) %}
-        <option value="{{ stage_id }}" {% if stage_filter == stage_id %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-      <select name="status" aria-label="Exact status">
-        <option value="">All statuses</option>
-        {% for slug, label in statuses %}
-        <option value="{{ slug }}" {% if status_filter == slug and not stage_filter %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-      <input name="source" placeholder="Source" value="{{ source_filter }}" />
-      <select name="consent" aria-label="SMS consent">
-        <option value="">All consent</option>
-        <option value="unverified" {% if sms_consent_filter == 'unverified' %}selected{% endif %}>Unverified</option>
-        <option value="verified" {% if sms_consent_filter == 'verified' %}selected{% endif %}>Verified</option>
-        <option value="opted_out" {% if sms_consent_filter == 'opted_out' %}selected{% endif %}>Opted out</option>
-        <option value="not_permitted" {% if sms_consent_filter == 'not_permitted' %}selected{% endif %}>Not permitted</option>
-        <option value="review" {% if consent_review_filter == '1' %}selected{% endif %}>Consent review</option>
-      </select>
-      <select name="sms_blocked" aria-label="SMS blocked">
-        <option value="">SMS blocked?</option>
-        <option value="1" {% if blocked_filter == '1' %}selected{% endif %}>Blocked</option>
-        <option value="0" {% if blocked_filter == '0' %}selected{% endif %}>Enabled</option>
-      </select>
-      <select name="origin" aria-label="Lead origin">
-        <option value="">All origins</option>
-        <option value="external" {% if external_filter == '1' %}selected{% endif %}>External only</option>
-      </select>
-      <select name="pond" aria-label="Pond status">
-        <option value="">All pond</option>
-        <option value="claimable" {% if pond_filter == 'claimable' %}selected{% endif %}>Claimable</option>
-        <option value="claimed" {% if pond_filter == 'claimed' %}selected{% endif %}>Claimed</option>
-        <option value="assigned" {% if pond_filter == 'assigned' %}selected{% endif %}>Assigned</option>
-        <option value="unassigned" {% if pond_filter == 'unassigned' %}selected{% endif %}>Unassigned</option>
-      </select>
-      <input name="batch" placeholder="Batch id" value="{{ batch_filter }}" style="width:90px;" />
-      <button class="btn" type="submit">Filter</button>
-      {% if active_filter %}<a class="btn secondary" href="/crm/leads">Clear filters</a>{% endif %}
+      <div class="leads-toolbar">
+        <div class="search-input-wrap">
+          <span class="search-icon" aria-hidden="true">&#128269;</span>
+          <input
+            type="search"
+            name="q"
+            id="search-input"
+            placeholder="Search leads..."
+            value="{{ search_filter }}"
+            aria-label="Search leads by name, phone, or email"
+          />
+        </div>
+        <select
+          name="status"
+          class="quick-status-select"
+          aria-label="Status"
+          onchange="document.getElementById('leads-filter-form').submit()"
+        >
+          <option value="">All statuses</option>
+          {% for slug, label in statuses %}
+          <option value="{{ slug }}" {% if status_filter == slug and not stage_filter %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <div class="filters-popover-wrap">
+          <button
+            type="button"
+            class="btn secondary"
+            id="filters-toggle"
+            aria-haspopup="true"
+            aria-expanded="false"
+            aria-controls="filters-popover"
+            onclick="toggleFiltersPopover()"
+          >Filters{% if has_active_filters %} &bull;{% endif %} &#9662;</button>
+          <div class="filters-popover" id="filters-popover" role="dialog" aria-label="Advanced filters">
+            <div class="field">
+              <label for="stage-select">Stage</label>
+              <select name="stage" id="stage-select">
+                <option value="">All stages</option>
+                {% for stage_id, label, _members in pipeline_stages|default([]) %}
+                <option value="{{ stage_id }}" {% if stage_filter == stage_id %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="field">
+              <label for="source-input">Source</label>
+              <input name="source" id="source-input" placeholder="e.g. sms, external:zillow" value="{{ source_filter }}" />
+            </div>
+            <div class="field">
+              <label for="consent-select">Consent</label>
+              <select name="consent" id="consent-select">
+                <option value="">All consent</option>
+                <option value="unverified" {% if sms_consent_filter == 'unverified' %}selected{% endif %}>Unverified</option>
+                <option value="user_certified" {% if sms_consent_filter == 'user_certified' %}selected{% endif %}>Certified</option>
+                <option value="verified" {% if sms_consent_filter == 'verified' %}selected{% endif %}>Verified</option>
+                <option value="opted_out" {% if sms_consent_filter == 'opted_out' %}selected{% endif %}>Opted out</option>
+                <option value="not_permitted" {% if sms_consent_filter == 'not_permitted' %}selected{% endif %}>Not permitted</option>
+                <option value="review" {% if consent_review_filter == '1' %}selected{% endif %}>Consent review required</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="blocked-select">SMS eligibility</label>
+              <select name="sms_blocked" id="blocked-select">
+                <option value="">All</option>
+                <option value="1" {% if blocked_filter == '1' %}selected{% endif %}>Blocked</option>
+                <option value="0" {% if blocked_filter == '0' %}selected{% endif %}>Enabled</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="origin-select">Origin</label>
+              <select name="origin" id="origin-select">
+                <option value="">All origins</option>
+                <option value="external" {% if external_filter == '1' %}selected{% endif %}>External only</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="pond-select">Pond</label>
+              <select name="pond" id="pond-select">
+                <option value="">All pond</option>
+                <option value="claimable" {% if pond_filter == 'claimable' %}selected{% endif %}>Claimable</option>
+                <option value="claimed" {% if pond_filter == 'claimed' %}selected{% endif %}>Claimed</option>
+                <option value="assigned" {% if pond_filter == 'assigned' %}selected{% endif %}>Assigned</option>
+                <option value="unassigned" {% if pond_filter == 'unassigned' %}selected{% endif %}>Unassigned</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="batch-input">Batch ID</label>
+              <input name="batch" id="batch-input" placeholder="Import batch id" value="{{ batch_filter }}" />
+            </div>
+            <div class="filters-popover-actions">
+              {% if has_active_filters %}<a class="btn secondary" href="/crm/leads">Clear all</a>{% endif %}
+              <button class="btn" type="submit">Apply filters</button>
+            </div>
+          </div>
+        </div>
+        {% if has_active_filters %}<a class="btn secondary" href="/crm/leads">Clear filters</a>{% endif %}
+      </div>
     </form>
+
     <div class="card">
       {% if leads %}
-      <table>
-        <thead>
-          <tr><th>Lead</th><th>Status</th><th>Consent</th><th>Follow-up</th><th>Next action</th><th></th></tr>
-        </thead>
-        <tbody>
-          {% for lead in leads %}
-          <tr>
-            <td>
-              <strong>{{ lead.name or 'Lead' }}</strong>
-              <div class="muted">{{ lead.phone_number }} · {{ lead.message_count or 0 }} msgs
-                {% if lead.source %} · {{ lead.source }}{% endif %}
-              </div>
-            </td>
-            <td><span class="pill">{{ status_label(lead.status) }}</span></td>
-            <td>
-              <span class="pill">{{ lead.sms_consent_status or 'unverified' }}</span>
-              {% if lead.sms_sending_blocked %}<span class="pill danger">blocked</span>{% endif %}
-            </td>
-            <td class="muted">
-              {% if lead.next_follow_up_at or lead.follow_up_at %}
-                {{ (lead.next_follow_up_at or lead.follow_up_at)[:16] }}
-                {% if lead.follow_up_reason %}<div style="margin-top:2px;">{{ lead.follow_up_reason[:60] }}{% if lead.follow_up_reason|length > 60 %}…{% endif %}</div>{% endif %}
-              {% else %}—{% endif %}
-            </td>
-            <td>{{ (lead.next_action or '—')[:80] }}</td>
-            <td><a class="cta" href="/crm/leads/{{ lead.id }}">Open</a></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+      <div class="lead-list">
+        {% for lead in leads %}
+        <div class="lead-row">
+          <div class="lead-row-main">
+            <div class="lead-row-name">{{ lead.name or 'Lead' }}</div>
+            <div class="lead-row-sub">
+              <span>{{ lead.phone_number }}</span>
+              {% if lead.email %}<span>{{ lead.email }}</span>{% endif %}
+              <span>{{ lead.message_count or 0 }} message{% if lead.message_count != 1 %}s{% endif %}</span>
+              {% if lead.source %}<span>{{ lead.source }}</span>{% endif %}
+              {% if lead.updated_at %}<span>Last activity {{ lead.updated_at[:10] }}</span>{% endif %}
+            </div>
+            {% if lead.next_action %}
+            <div class="lead-row-sub">Next: {{ lead.next_action[:80] }}</div>
+            {% endif %}
+            {% if lead.next_follow_up_at or lead.follow_up_at %}
+            <div class="lead-row-sub">Follow-up {{ (lead.next_follow_up_at or lead.follow_up_at)[:10] }}{% if lead.follow_up_reason %} &middot; {{ lead.follow_up_reason[:60] }}{% endif %}</div>
+            {% endif %}
+          </div>
+          <div class="lead-row-meta">
+            <span class="pill">{{ status_label(lead.status) }}</span>
+            <span class="pill {% if lead.sms_sending_blocked %}danger{% endif %}">{{ sms_consent_label(lead.sms_consent_status) }}</span>
+            {% if lead.sms_sending_blocked %}<span class="pill danger">SMS blocked</span>{% endif %}
+          </div>
+          <a class="lead-row-open" href="/crm/leads/{{ lead.id }}" aria-label="Open lead {{ lead.name or 'Lead' }}">Open &rarr;</a>
+        </div>
+        {% endfor %}
+      </div>
+      {% elif has_active_filters %}
+      <p class="empty">No leads match this filter. <a href="/crm/leads">Clear filters</a> to see all leads.</p>
       {% else %}
-      <p class="empty">No leads match this filter. Leads appear here when created manually or contacted through AI SMS or AI Calling.</p>
+      <div class="empty-state">
+        <h2>No leads yet</h2>
+        <p>Create your first lead or import an existing lead list.</p>
+        <div class="empty-state-actions">
+          <button type="button" class="btn" onclick="openNewLeadDrawer(this)">+ New Lead</button>
+          <a class="btn secondary" href="/crm/external-leads/import">Import CSV</a>
+        </div>
+      </div>
       {% endif %}
     </div>
   </main>
+
+  <div class="drawer-backdrop" id="new-lead-backdrop">
+    <div class="drawer-panel" id="new-lead-drawer" role="dialog" aria-modal="true" aria-labelledby="new-lead-title">
+      <div class="drawer-header">
+        <h2 id="new-lead-title" style="margin:0;">New Lead</h2>
+        <button type="button" class="drawer-close" aria-label="Close New Lead form" onclick="closeNewLeadDrawer()">&times;</button>
+      </div>
+      <div id="nl-error" class="flash err" style="display:none;" role="alert"></div>
+      <div class="form-row-2">
+        <div class="form-field">
+          <label for="nl-first">First name *</label>
+          <input id="nl-first" name="first_name" autocomplete="given-name" required />
+          <span class="field-error" id="nl-first-error">First name is required.</span>
+        </div>
+        <div class="form-field">
+          <label for="nl-last">Last name *</label>
+          <input id="nl-last" name="last_name" autocomplete="family-name" required />
+          <span class="field-error" id="nl-last-error">Last name is required.</span>
+        </div>
+      </div>
+      <div class="form-field">
+        <label for="nl-phone">Mobile phone *</label>
+        <input id="nl-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="(555) 123-4567" required />
+        <span class="field-error" id="nl-phone-error">A valid 10-digit mobile phone number is required.</span>
+        <div class="duplicate-warning" id="nl-duplicate-warning" role="alert">
+          A lead with this number already exists: <strong id="nl-duplicate-name"></strong>.
+          <a href="#" id="nl-duplicate-link">Open existing lead</a>
+        </div>
+      </div>
+      <div class="form-field">
+        <label for="nl-email">Email</label>
+        <input id="nl-email" name="email" type="email" autocomplete="email" />
+      </div>
+      <div class="form-field">
+        <label for="nl-source">Source</label>
+        <select id="nl-source" name="external_source_id">
+          <option value="">Manual entry</option>
+          {% for s in lead_sources|default([]) %}
+          <option value="{{ s.id }}">{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label for="nl-status">Lead status</label>
+        <select id="nl-status" name="status">
+          {% for slug, label in statuses %}
+          <option value="{{ slug }}" {% if slug == 'new' %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-field">
+        <label id="nl-consent-label">SMS Consent</label>
+        <div class="consent-display" aria-labelledby="nl-consent-label">
+          <span class="pill danger">Not verified</span>
+          <div class="field-hint" style="margin-top:6px;">
+            SMS cannot be sent until valid consent is recorded. You can certify consent from this
+            lead's Manage Consent page after it's created.
+          </div>
+        </div>
+      </div>
+      <div class="form-field">
+        <label for="nl-notes">Notes</label>
+        <textarea id="nl-notes" name="notes" rows="3"></textarea>
+      </div>
+      <div class="drawer-footer">
+        <button type="button" class="btn secondary" onclick="closeNewLeadDrawer()">Cancel</button>
+        <button type="button" class="btn" id="nl-submit-btn" onclick="submitNewLead()" disabled>Create Lead</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let newLeadTriggerEl = null;
+    let duplicateCheckTimer = null;
+
+    function formatUSPhoneDisplay(digits) {
+      const d = digits.slice(0, 10);
+      if (d.length > 6) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+      if (d.length > 3) return `(${d.slice(0, 3)}) ${d.slice(3)}`;
+      if (d.length > 0) return `(${d}`;
+      return '';
+    }
+
+    function validateNewLeadForm() {
+      const first = document.getElementById('nl-first').value.trim();
+      const last = document.getElementById('nl-last').value.trim();
+      const phoneDigits = document.getElementById('nl-phone').value.replace(/\D/g, '');
+      const valid = first.length > 0 && last.length > 0 && phoneDigits.length === 10;
+      document.getElementById('nl-submit-btn').disabled = !valid;
+      return valid;
+    }
+
+    function attachFieldValidation(inputId, errorId, validator) {
+      const input = document.getElementById(inputId);
+      const error = document.getElementById(errorId);
+      input.addEventListener('blur', () => {
+        error.classList.toggle('show', !validator(input.value));
+      });
+      input.addEventListener('input', () => {
+        if (validator(input.value)) error.classList.remove('show');
+        validateNewLeadForm();
+      });
+    }
+
+    function onPhoneInput(e) {
+      const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
+      e.target.value = formatUSPhoneDisplay(digits);
+      validateNewLeadForm();
+      scheduleDuplicateCheck();
+    }
+
+    function scheduleDuplicateCheck() {
+      clearTimeout(duplicateCheckTimer);
+      duplicateCheckTimer = setTimeout(checkDuplicatePhone, 450);
+    }
+
+    async function checkDuplicatePhone() {
+      const digits = document.getElementById('nl-phone').value.replace(/\D/g, '');
+      const warn = document.getElementById('nl-duplicate-warning');
+      const submitBtn = document.getElementById('nl-submit-btn');
+      if (digits.length !== 10) {
+        warn.classList.remove('show');
+        submitBtn.textContent = 'Create Lead';
+        return;
+      }
+      try {
+        const res = await fetch(`/api/crm/leads/check-duplicate?phone=${encodeURIComponent(digits)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.duplicate) {
+          document.getElementById('nl-duplicate-name').textContent = data.name || 'Lead';
+          document.getElementById('nl-duplicate-link').href = data.url;
+          warn.classList.add('show');
+          submitBtn.textContent = 'Create anyway';
+        } else {
+          warn.classList.remove('show');
+          submitBtn.textContent = 'Create Lead';
+        }
+      } catch (err) {
+        // Non-blocking pre-check — ignore network hiccups.
+      }
+    }
+
+    async function submitNewLead() {
+      if (!validateNewLeadForm()) return;
+      const btn = document.getElementById('nl-submit-btn');
+      const errorBox = document.getElementById('nl-error');
+      errorBox.style.display = 'none';
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Creating…';
+      const payload = {
+        first_name: document.getElementById('nl-first').value.trim(),
+        last_name: document.getElementById('nl-last').value.trim(),
+        phone: document.getElementById('nl-phone').value,
+        email: document.getElementById('nl-email').value.trim(),
+        external_source_id: document.getElementById('nl-source').value || null,
+        status: document.getElementById('nl-status').value,
+        notes: document.getElementById('nl-notes').value.trim(),
+      };
+      try {
+        const res = await fetch('/api/crm/leads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          errorBox.textContent = data.error || 'Could not create lead. Please try again.';
+          errorBox.style.display = 'block';
+          btn.disabled = false;
+          btn.textContent = original;
+          return;
+        }
+        window.location.href = data.redirect_url || '/crm/leads';
+      } catch (err) {
+        errorBox.textContent = 'Network error. Please try again.';
+        errorBox.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    }
+
+    function handleDrawerKeydown(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeNewLeadDrawer();
+        return;
+      }
+      if (e.key === 'Tab') {
+        const panel = document.getElementById('new-lead-drawer');
+        const focusable = Array.from(
+          panel.querySelectorAll('input, select, textarea, button, a[href]')
+        ).filter((el) => !el.disabled && el.offsetParent !== null);
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+
+    function openNewLeadDrawer(triggerEl) {
+      newLeadTriggerEl = triggerEl || document.activeElement;
+      document.getElementById('new-lead-backdrop').classList.add('open');
+      document.getElementById('nl-error').style.display = 'none';
+      document.getElementById('nl-duplicate-warning').classList.remove('show');
+      document.getElementById('nl-submit-btn').textContent = 'Create Lead';
+      document.addEventListener('keydown', handleDrawerKeydown);
+      setTimeout(() => document.getElementById('nl-first').focus(), 30);
+    }
+
+    function closeNewLeadDrawer() {
+      document.getElementById('new-lead-backdrop').classList.remove('open');
+      document.removeEventListener('keydown', handleDrawerKeydown);
+      if (newLeadTriggerEl && typeof newLeadTriggerEl.focus === 'function') {
+        newLeadTriggerEl.focus();
+      }
+    }
+
+    function toggleFiltersPopover() {
+      const pop = document.getElementById('filters-popover');
+      const btn = document.getElementById('filters-toggle');
+      const isOpen = pop.classList.toggle('open');
+      btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    }
+
+    document.getElementById('new-lead-backdrop').addEventListener('click', (e) => {
+      if (e.target.id === 'new-lead-backdrop') closeNewLeadDrawer();
+    });
+    document.getElementById('nl-phone').addEventListener('input', onPhoneInput);
+    attachFieldValidation('nl-first', 'nl-first-error', (v) => v.trim().length > 0);
+    attachFieldValidation('nl-last', 'nl-last-error', (v) => v.trim().length > 0);
+    attachFieldValidation('nl-phone', 'nl-phone-error', (v) => v.replace(/\D/g, '').length === 10);
+
+    document.addEventListener('click', (e) => {
+      const wrap = document.querySelector('.filters-popover-wrap');
+      const pop = document.getElementById('filters-popover');
+      if (wrap && pop && pop.classList.contains('open') && !wrap.contains(e.target)) {
+        pop.classList.remove('open');
+        document.getElementById('filters-toggle').setAttribute('aria-expanded', 'false');
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const pop = document.getElementById('filters-popover');
+        if (pop.classList.contains('open')) pop.classList.remove('open');
+      }
+    });
+  </script>
+
   {% include 'subscriber_footer.html' %}
   {% include 'subscriber_nav_script.html' %}
 </body>

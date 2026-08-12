@@ -4,9 +4,12 @@
 - subscription_current_period_end: Unix timestamp of next renewal / period end
 - payment_action_required: 1 when invoice/payment failed and user must update PM
 - last_payment_error: Stripe decline/error code (e.g. link_connection_closed)
+
+Numbered 021 because main already shipped 019_listing_generations_and_social and
+020_listing_email_campaigns. Column adds are idempotent (skip if present).
 """
 
-VERSION = "019_billing_subscription_fields"
+VERSION = "021_billing_subscription_fields"
 
 USER_COLS_SQLITE = [
     ("stripe_price_id", "TEXT"),

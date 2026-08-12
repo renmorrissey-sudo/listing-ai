@@ -25,11 +25,13 @@ from crm_constants import (
     cancel_reason_label,
     outcome_label,
     normalize_lead_status,
+    sms_consent_is_certified,
+    sms_consent_label,
     status_label,
 )
 
 PIPELINE_STAGE_IDS = {stage_id for stage_id, _label, _members in PIPELINE_STAGES}
-ALLOWED_SMS_CONSENT = {"unverified", "verified", "opted_out", "not_permitted"}
+ALLOWED_SMS_CONSENT = {"unverified", "verified", "user_certified", "opted_out", "not_permitted"}
 ALLOWED_POND = {"claimable", "claimed", "assigned", "unassigned"}
 ALLOWED_FOLLOW_UP_RANGES = {
     "today": "today",
@@ -129,6 +131,8 @@ def _parse_leads_list_filters(args):
     batch = (args.get("batch") or "").strip() or None
     import_batch_id = int(batch) if batch and batch.isdigit() else None
 
+    search = (args.get("q") or args.get("search") or "").strip()[:200] or None
+
     return {
         "status": status,
         "source": source,
@@ -142,6 +146,7 @@ def _parse_leads_list_filters(args):
         "review": review,
         "batch": batch if import_batch_id is not None else "",
         "import_batch_id": import_batch_id,
+        "search": search,
     }
 
 
@@ -358,6 +363,8 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
         "cancel_reason_label": cancel_reason_label,
         "user_timezone": db.get_user_timezone(user["id"]),
         "status_label": status_label,
+        "sms_consent_label": sms_consent_label,
+        "sms_consent_is_certified": sms_consent_is_certified,
         "outcome_label": outcome_label,
         "flash_message": flash_message,
         "flash_error": flash_error,
@@ -396,6 +403,7 @@ def crm_leads_page():
     sms_blocked = filters["sms_blocked"]
     review = filters["review"]
     batch = filters["batch"]
+    search = filters["search"]
     leads = crm_db.filter_leads(
         user["id"],
         status=status,
@@ -408,6 +416,7 @@ def crm_leads_page():
         external_only=external,
         import_batch_id=filters["import_batch_id"],
         consent_review_required=review,
+        search=search,
     )
     active_filter = None
     if scope == "active":
@@ -440,9 +449,17 @@ def crm_leads_page():
         )
     if pond:
         active_filter = (active_filter + f" · Pond: {pond}") if active_filter else f"Pond: {pond}"
+    if search:
+        active_filter = (
+            (active_filter + f' · Search: "{search}"') if active_filter else f'Search: "{search}"'
+        )
+    import external_leads_db as xdb
+
+    lead_sources = xdb.list_external_lead_sources(user["id"], active_only=True)
     return render_template(
         "crm_leads.html",
         leads=leads,
+        lead_sources=lead_sources,
         statuses=LEAD_STATUSES,
         pipeline_stages=PIPELINE_STAGES,
         status_filter=status or "",
@@ -455,9 +472,12 @@ def crm_leads_page():
         blocked_filter=blocked or "",
         consent_review_filter=review or "",
         batch_filter=batch or "",
+        search_filter=search or "",
         active_filter=active_filter,
         result_count=len(leads),
         status_label=status_label,
+        sms_consent_label=sms_consent_label,
+        has_active_filters=bool(active_filter),
         **_nav_context(user, "leads"),
     )
 

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ source.name }} - Lead Sources - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+</head>
+<body>
+  {% set page_tagline = 'Lead sources' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <p class="muted"><a href="/crm/external-sources">&larr; Lead Sources</a></p>
+    <h1>{{ source.name }}</h1>
+    <p class="muted">{{ source.category }} &middot; {{ source.import_method }} &middot; provider key <code>{{ source.provider_key }}</code></p>
+
+    {% if rotated_secret %}
+    <div class="flash" style="display:block;">New webhook secret (copy now &mdash; shown once): <code>{{ rotated_secret }}</code></div>
+    {% endif %}
+    {% if error %}<div class="flash err" style="display:block;">{{ error }}</div>{% endif %}
+
+    <div class="card">
+      <h2>Status</h2>
+      <p>
+        <span class="pill success">{% if source.active %}Connected{% else %}Inactive{% endif %}</span>
+      </p>
+      <p class="muted">
+        {% if last_lead_received_at %}
+        Last lead received {{ last_lead_received_at[:10] }}.
+        {% else %}
+        No leads received yet.
+        {% endif %}
+      </p>
+      <p class="muted">Consent behavior is fixed: <strong>unverified_blocked</strong>. Every lead from this source stays SMS Unverified and Blocked until an agent confirms consent evidence.</p>
+      <a class="btn secondary" href="/crm/leads?source={{ source.name }}">View leads from this source</a>
+    </div>
+
+    {% if source.import_method in ['webhook', 'api'] %}
+    <div class="card">
+      <h2>Webhook endpoint</h2>
+      <p class="muted">POST leads (or point a Zapier/Make automation) to:</p>
+      <p><code>POST /api/external-leads/webhook/{{ source.provider_key }}</code></p>
+      <p class="muted">Include the shared secret in the <code>X-TopAI-Webhook-Secret</code> header. Rotating the secret invalidates the old one immediately.</p>
+      <form method="post">
+        <input type="hidden" name="action" value="rotate_secret" />
+        <button class="btn" type="submit">Rotate secret</button>
+      </form>
+    </div>
+    {% endif %}
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+</body>
+</html>

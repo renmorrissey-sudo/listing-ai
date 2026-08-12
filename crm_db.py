@@ -1816,6 +1816,11 @@ def record_appointment_outcome(
                 )
 
             if apply_follow_up and suggestion.get("suggested_follow_up_at"):
+                # Intentionally NOT calling set_lead_follow_up() here: this whole
+                # outcome apply runs inside one all-or-nothing transaction (status +
+                # follow-up + task + needs_attention together), and set_lead_follow_up
+                # opens its own connection/transaction. Dedupe instead keys off the
+                # `[appointment:{id}]` marker embedded in the reason text below.
                 due_at = suggestion["suggested_follow_up_at"]
                 reason = (
                     f"Follow-up after appointment outcome: {outcome_label(outcome)} "
@@ -2498,6 +2503,12 @@ def _map_appointment_event_type(appt):
 
 
 def _map_task_event_type(task):
+    # A task without a lead attached (e.g. "Create a lead for Mark Smith") is
+    # generic agent work, not a lead interaction — never label it like a lead
+    # follow-up/call/showing regardless of task_type, or it reads on the
+    # calendar as a scheduled follow-up that doesn't exist in lead_follow_ups.
+    if not task.get("lead_id"):
+        return "task"
     task_type = str(task.get("task_type") or "")
     mapping = {
         "call": "call",
@@ -2790,6 +2801,7 @@ def filter_leads(
     external_only=None,
     import_batch_id=None,
     consent_review_required=None,
+    search=None,
 ):
     """List leads for this tenant. scope=active / stage=* match dashboard Pipeline cards."""
     from crm_constants import normalize_lead_status as norm
@@ -2802,6 +2814,15 @@ def filter_leads(
             WHERE l.user_id = ?
         """
         params = [user_id]
+        search_term = (search or "").strip()
+        if search_term:
+            # Wildcards must be bound values: a literal % in the SQL text breaks
+            # psycopg's placeholder conversion on Postgres (see db_backend.py).
+            like_term = f"%{search_term}%"
+            sql += (
+                " AND (l.name LIKE ? OR l.phone_number LIKE ? OR l.email LIKE ?)"
+            )
+            params.extend([like_term, like_term, like_term])
         if scope == "active":
             sql += (
                 " AND l.status NOT IN ('closed_won', 'closed_lost', 'do_not_contact')"

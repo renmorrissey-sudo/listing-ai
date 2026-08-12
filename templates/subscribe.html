@@ -116,6 +116,11 @@
         <p class="muted" style="margin-bottom:14px;">{{ private_beta_supporting }}</p>
         <a class="btn" href="/login">Sign in</a>
         <a class="btn secondary" href="mailto:{{ contact_email }}">Contact support</a>
+        {% if gate and gate.show_update_payment_method %}
+        <form method="post" action="/billing/update-payment-method">
+          <button class="btn" type="submit">Update payment method</button>
+        </form>
+        {% endif %}
         {% if gate and gate.show_manage_billing %}
         <a class="btn secondary" href="/billing">Manage Billing</a>
         {% endif %}
@@ -129,11 +134,17 @@
         {% if gate and gate.access_ends_on %}
         <p class="meta" style="margin-bottom:14px;">Access ends on <strong>{{ gate.access_ends_on }}</strong>.</p>
         {% endif %}
+        {% if gate and gate.show_update_payment_method %}
+        <form method="post" action="/billing/update-payment-method">
+          <button class="btn" type="submit">Update payment method</button>
+        </form>
+        {% endif %}
         {% if gate and gate.show_open_tools %}
-        <a class="btn" href="/app">Open Tools</a>
+        <a class="btn{% if gate.show_update_payment_method %} secondary{% endif %}" href="/app">Open Tools</a>
         {% endif %}
         {% if gate and gate.show_manage_billing %}
         <a class="btn secondary" href="/billing">Manage Billing</a>
+        <a class="btn secondary" href="/billing/portal">Manage subscription</a>
         {% endif %}
         <p class="footer"><a href="/pricing">View pricing</a> · <a href="/logout">Log out</a></p>
 

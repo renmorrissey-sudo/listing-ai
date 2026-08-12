@@ -14,12 +14,17 @@ import crm_db
 import db
 from datetime import datetime, timedelta, timezone
 
+import listing_generations_db as listing_db
+import email_marketing_db as email_marketing_db
 import sms_coach
 from crm import crm_bp
 from crm_constants import status_label
 from external_leads_routes import external_leads_bp
+from email_marketing_routes import email_marketing_bp
 from sms_campaigns import sms_campaigns_bp
+from social_routes import social_bp
 from sms_prompts import build_sms_prompt
+from social_content import build_social_content_snapshot
 from sms_provider import (
     SmsProviderError,
     get_sms_provider,
@@ -69,7 +74,9 @@ app.config["PERMANENT_SESSION_LIFETIME"] = 86400 * 14
 db.init_db()
 app.register_blueprint(crm_bp)
 app.register_blueprint(external_leads_bp)
+app.register_blueprint(email_marketing_bp)
 app.register_blueprint(sms_campaigns_bp)
+app.register_blueprint(social_bp)
 client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 if config.STRIPE_SECRET_KEY:
@@ -270,16 +277,16 @@ def _extract_section(text, start_marker, end_marker):
 
 
 from stripe_billing import (
-    apply_subscription_to_user as _apply_subscription_to_user,
     billing_config_error as _billing_config_error,
     billing_is_configured as _billing_is_configured,
+    billing_summary as _billing_summary,
     build_billing_summary as _build_billing_summary,
     checkout_idempotency_key as _checkout_idempotency_key,
+    complete_payment_method_update as _complete_payment_method_update,
     create_billing_portal_session as _create_billing_portal_session,
+    create_payment_method_update_session as _create_payment_method_update_session,
     create_subscription_checkout_session as _create_subscription_checkout_session,
-    handle_invoice_paid as _handle_invoice_paid,
-    handle_invoice_payment_failed as _handle_invoice_payment_failed,
-    handle_payment_intent_failed as _handle_payment_intent_failed,
+    handle_stripe_webhook_event as _handle_stripe_webhook_event,
     normalize_email as _normalize_email,
     resolve_subscribe_gate as _resolve_subscribe_gate,
     stripe_customer_for_email as _stripe_customer_for_email,
@@ -357,7 +364,13 @@ def subscriber_app():
     notice = None
     if request.args.get("already_subscribed") == "1":
         notice = "Your subscription is already active."
-    return render_template("index.html", subscribe_notice=notice)
+    return render_template(
+        "index.html",
+        subscribe_notice=notice,
+        email=user["email"],
+        has_billing_portal=bool(user.get("stripe_customer_id")),
+        active_nav="listing",
+    )
 
 
 @app.route("/session-status")
@@ -743,18 +756,40 @@ def logout():
 
 @app.route("/billing")
 @auth.login_required
-def billing():
-    """Subscriber billing overview. Card/invoice management stays in Stripe Portal."""
+def billing_page():
+    """Customer-facing subscription / payment-method status."""
     user = auth.get_current_user()
-    summary = _build_billing_summary(user)
+    billing = _build_billing_summary(user)
+    summary = _billing_summary(user) if config.STRIPE_SECRET_KEY else {
+        "plan_name": billing.get("plan_name") or "TopAI Pro",
+        "price_label": config.SUBSCRIPTION_PRICE,
+        "status_label": billing.get("status_label")
+        or (user.get("subscription_status") or "none").replace("_", " ").title(),
+        "payment_method": {"label": "Unavailable"},
+        "attention_message": billing.get("warning_message"),
+        "show_update_payment_method": (user.get("subscription_status") or "") in (
+            "past_due", "unpaid", "incomplete", "paused"
+        ) or bool(user.get("payment_action_required")),
+        "show_manage_subscription": bool(user.get("stripe_customer_id")),
+        "has_stripe_customer": bool(user.get("stripe_customer_id")),
+        "local_status": user.get("subscription_status") or "none",
+        "needs_payment_method_update": bool(user.get("payment_action_required")),
+    }
+    notice = request.args.get("notice")
+    error = request.args.get("error")
     return render_template(
         "billing.html",
         email=user["email"],
         has_billing_portal=bool(user.get("stripe_customer_id")),
         needs_billing_attention=auth.user_needs_billing_attention(user),
         active_nav="billing",
-        billing=summary,
+        billing=billing,
+        summary=summary,
+        notice=notice,
+        error=error,
+        product_name=config.PRODUCT_NAME,
         subscription_price=config.SUBSCRIPTION_PRICE,
+        billing_frequency=config.BILLING_FREQUENCY,
     )
 
 
@@ -774,6 +809,95 @@ def billing_success():
     return render_template("billing_success.html")
 
 
+@app.route("/billing/update-payment-method", methods=["POST", "GET"])
+@auth.login_required
+@limiter.limit("10 per minute")
+def billing_update_payment_method():
+    """Start Stripe Checkout mode=setup to collect a new card for this tenant only."""
+    user = auth.get_current_user()
+    if not config.STRIPE_SECRET_KEY:
+        flash("Billing is temporarily unavailable.", "error")
+        return redirect(url_for("billing_page"))
+    if not user.get("stripe_customer_id"):
+        # Ensure customer exists for users who somehow lack the linkage.
+        try:
+            from stripe_billing import ensure_stripe_customer
+
+            ensure_stripe_customer(user)
+            user = auth.get_current_user()
+        except Exception:
+            logger.exception("Failed ensuring Stripe customer for payment method update")
+            flash("Couldn't start payment method update. Please contact support.", "error")
+            return redirect(url_for("billing_page"))
+    try:
+        session = _create_payment_method_update_session(
+            user,
+            success_url=f"{config.APP_URL}/billing/payment-method/success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{config.APP_URL}/billing?notice=cancelled",
+        )
+    except stripe.StripeError:
+        logger.exception("Failed creating payment-method update Checkout session")
+        flash("Couldn't start payment method update. Please try again.", "error")
+        return redirect(url_for("billing_page"))
+    return redirect(session.url, code=303)
+
+
+@app.route("/billing/payment-method/success")
+@auth.login_required
+def billing_payment_method_success():
+    """Return from setup Checkout. Applies defaults + retries invoice from Stripe state.
+
+    Browser return alone never marks the invoice paid — only Stripe-reported success does.
+    """
+    user = auth.get_current_user()
+    session_id = request.args.get("session_id")
+    if not session_id or not config.STRIPE_SECRET_KEY:
+        return redirect(url_for("billing_page", error="missing_session"))
+    try:
+        checkout = stripe.checkout.Session.retrieve(session_id, expand=["setup_intent"])
+    except stripe.StripeError:
+        logger.exception("Failed retrieving setup Checkout session")
+        return redirect(url_for("billing_page", error="session_lookup_failed"))
+
+    # Tenant isolation: session must belong to this user/customer.
+    meta_uid = (checkout.get("metadata") or {}).get("user_id") if isinstance(checkout, dict) else (
+        (getattr(checkout, "metadata", None) or {}).get("user_id")
+    )
+    client_ref = checkout.get("client_reference_id") if isinstance(checkout, dict) else getattr(
+        checkout, "client_reference_id", None
+    )
+    if str(client_ref or meta_uid or "") != str(user["id"]):
+        logger.warning(
+            "Payment-method success session user mismatch session_user=%s auth_user=%s",
+            client_ref or meta_uid,
+            user["id"],
+        )
+        return redirect(url_for("billing_page", error="session_mismatch"))
+
+    customer = checkout.get("customer") if isinstance(checkout, dict) else getattr(checkout, "customer", None)
+    if user.get("stripe_customer_id") and customer and customer != user.get("stripe_customer_id"):
+        return redirect(url_for("billing_page", error="session_mismatch"))
+
+    try:
+        result = _complete_payment_method_update(user, checkout_session=checkout)
+    except PermissionError:
+        return redirect(url_for("billing_page", error="session_mismatch"))
+    except ValueError as exc:
+        logger.info("Payment method update incomplete: %s", exc)
+        return redirect(url_for("billing_page", error="setup_incomplete"))
+    except stripe.StripeError:
+        logger.exception("Payment method update apply/retry failed")
+        return redirect(url_for("billing_page", error="update_failed"))
+
+    if result.get("paid") or result.get("status") in ("no_open_invoice", "already_paid"):
+        return redirect(url_for("billing_page", notice="payment_method_updated"))
+    if result.get("status") == "payment_action_required" and result.get("hosted_invoice_url"):
+        return redirect(result["hosted_invoice_url"])
+    if result.get("applied"):
+        return redirect(url_for("billing_page", notice="card_saved_pending"))
+    return redirect(url_for("billing_page", error="setup_incomplete"))
+
+
 @app.route("/billing/portal")
 @auth.login_required
 def billing_portal():
@@ -781,9 +905,9 @@ def billing_portal():
     user = auth.get_current_user()
     url, err, _status = _create_billing_portal_session(user)
     if err == "no_customer" or err == "not_configured":
-        return redirect(url_for("billing"))
+        return redirect(url_for("billing_page"))
     if err:
-        return redirect(url_for("billing"))
+        return redirect(url_for("billing_page"))
     return redirect(url, code=303)
 
 
@@ -834,67 +958,19 @@ def stripe_webhook():
 
     event_id = event.get("id") or ""
     event_type = event["type"]
-    if event_id and not db.claim_stripe_webhook_event(event_id, event_type):
+    # Process first, claim only after success — so a crashed handler does not
+    # permanently skip Stripe retries.
+    if event_id and db.stripe_webhook_event_exists(event_id):
         return jsonify({"received": True, "duplicate": True}), 200
 
-    data = event["data"]["object"]
+    try:
+        _handle_stripe_webhook_event(event)
+    except Exception:
+        logger.exception("Stripe webhook handler failed type=%s id=%s", event_type, event_id)
+        return jsonify({"error": "Webhook handler failed."}), 500
 
-    if event_type == "checkout.session.completed":
-        user_id = data.get("client_reference_id") or (data.get("metadata") or {}).get("user_id")
-        if user_id and data.get("subscription"):
-            sub = stripe.Subscription.retrieve(data["subscription"])
-            _apply_subscription_to_user(
-                int(user_id),
-                sub,
-                stripe_customer_id=data.get("customer"),
-            )
-
-    elif event_type == "customer.subscription.created":
-        customer_id = data.get("customer")
-        user = db.get_user_by_stripe_customer(customer_id) if customer_id else None
-        if user:
-            _apply_subscription_to_user(
-                user["id"], data, stripe_customer_id=customer_id
-            )
-        else:
-            # Link via checkout metadata / client_reference when customer row not yet set
-            meta = data.get("metadata") or {}
-            uid = meta.get("user_id")
-            if uid:
-                _apply_subscription_to_user(
-                    int(uid), data, stripe_customer_id=customer_id
-                )
-
-    elif event_type == "customer.subscription.updated":
-        customer_id = data.get("customer")
-        user = db.get_user_by_stripe_customer(customer_id) if customer_id else None
-        if user:
-            _apply_subscription_to_user(
-                user["id"], data, stripe_customer_id=customer_id
-            )
-
-    elif event_type == "customer.subscription.deleted":
-        customer_id = data.get("customer")
-        user = db.get_user_by_stripe_customer(customer_id) if customer_id else None
-        if user:
-            db.update_user_subscription(
-                user["id"],
-                "canceled",
-                subscription_id=data.get("id"),
-                current_period_end=data.get("current_period_end"),
-                clear_payment_error=True,
-            )
-
-    elif event_type == "invoice.paid":
-        _handle_invoice_paid(data)
-
-    elif event_type == "invoice.payment_failed":
-        # Flag past_due / payment action required — do not wipe the account.
-        _handle_invoice_payment_failed(data)
-
-    elif event_type == "payment_intent.payment_failed":
-        _handle_payment_intent_failed(data)
-
+    if event_id:
+        db.claim_stripe_webhook_event(event_id, event_type)
     return jsonify({"received": True}), 200
 
 
@@ -2176,16 +2252,200 @@ def generate():
             messages=[{"role": "user", "content": build_listing_prompt(cleaned)}],
         )
         raw = message.content[0].text
-        listing = _extract_section(raw, "LISTING DESCRIPTION", "SOCIAL POSTS")
-        social = _extract_section(raw, "SOCIAL POSTS", "PROSPECT EMAIL")
-        email = _extract_section(raw, "PROSPECT EMAIL", None)
+        listing = _extract_section(raw, "LISTING DESCRIPTION", "SOCIAL POSTS").strip()
+        social = _extract_section(raw, "SOCIAL POSTS", "PROSPECT EMAIL").strip()
+        email = _extract_section(raw, "PROSPECT EMAIL", None).strip()
         user = auth.get_current_user()
+        output_snapshot = {"listing": listing, "social": social, "email": email}
+        response_body = dict(output_snapshot)
         if user:
             db.record_tool_usage(user["id"], "listing_generator", "generated")
-        return jsonify({"listing": listing.strip(), "social": social.strip(), "email": email.strip()})
+            try:
+                generation = listing_db.create_generation(
+                    user["id"],
+                    display_address=cleaned.get("address", ""),
+                    input_snapshot=cleaned,
+                    output_snapshot=output_snapshot,
+                    social_content=build_social_content_snapshot(social),
+                )
+                response_body["generation_id"] = generation["id"]
+                response_body["created_at"] = generation["created_at"]
+            except Exception:
+                # Generated content is still returned to the user — persistence
+                # failure must never destroy or hide work that already succeeded.
+                logger.exception("Failed to auto-save listing generation for user %s", user["id"])
+                response_body["save_warning"] = (
+                    "Couldn't save this listing to your history. You can retry saving below."
+                )
+                response_body["save_retry_payload"] = {
+                    "address": cleaned.get("address", ""),
+                    "input_snapshot": cleaned,
+                    "output_snapshot": output_snapshot,
+                    "social_content": build_social_content_snapshot(social),
+                }
+        return jsonify(response_body)
     except Exception:
         logger.exception("Listing generation failed")
         return jsonify({"error": "Generation failed. Please try again."}), 500
+
+
+@app.route("/listings/recent", methods=["GET"])
+@auth.subscription_required
+def listings_recent():
+    user = auth.get_current_user()
+    items = listing_db.list_recent(user["id"], limit=20)
+    items = email_marketing_db.annotate_campaign_status(user["id"], items)
+    return jsonify({"items": items})
+
+
+@app.route("/listings/archive", methods=["GET"])
+def listings_archive_page():
+    user = auth.get_current_user()
+    if not user:
+        return redirect(url_for("login", next="/listings/archive"))
+    if config.SUBSCRIPTION_REQUIRED and not auth.user_has_active_subscription(user):
+        return redirect(url_for("subscribe"))
+    return render_template(
+        "listing_archive.html",
+        email=user["email"],
+        has_billing_portal=bool(user.get("stripe_customer_id")),
+        active_nav="listing-archive",
+        product_name=config.PRODUCT_NAME,
+        retention_days=config.LISTING_GENERATION_RETENTION_DAYS,
+    )
+
+
+@app.route("/listings/archive/search", methods=["GET"])
+@auth.subscription_required
+def listings_archive_search():
+    user = auth.get_current_user()
+    query = request.args.get("q", "")
+    try:
+        page = int(request.args.get("page", "1"))
+    except (TypeError, ValueError):
+        page = 1
+    result = listing_db.search_archive(user["id"], query=query, page=page, page_size=20)
+    try:
+        from listing_publish import annotate_publish_status
+
+        result["items"] = annotate_publish_status(user["id"], result["items"])
+    except Exception:
+        logger.exception("Failed to annotate publish status for listing archive")
+    try:
+        result["items"] = email_marketing_db.annotate_campaign_status(
+            user["id"], result["items"]
+        )
+    except Exception:
+        logger.exception("Failed to annotate email campaign status for listing archive")
+    return jsonify(result)
+
+
+@app.route("/listings/<int:generation_id>", methods=["GET"])
+@auth.subscription_required
+def listings_get_one(generation_id):
+    user = auth.get_current_user()
+    generation = listing_db.get_by_id(user["id"], generation_id)
+    if not generation:
+        return jsonify({"error": "Listing not found or no longer retained."}), 404
+    versions = listing_db.list_versions_for_address(user["id"], generation["normalized_address"])
+    try:
+        from listing_publish import annotate_publish_status
+
+        generation = annotate_publish_status(user["id"], [generation])[0]
+    except Exception:
+        logger.exception("Failed to annotate publish status for listing %s", generation_id)
+    try:
+        generation = email_marketing_db.annotate_campaign_status(
+            user["id"], [generation]
+        )[0]
+    except Exception:
+        logger.exception(
+            "Failed to annotate email campaign status for listing %s",
+            generation_id,
+        )
+    return jsonify({
+        "generation": generation,
+        "versions": [
+            {"id": v["id"], "created_at": v["created_at"], "display_address": v["display_address"]}
+            for v in versions
+        ],
+    })
+
+
+@app.route("/listings/save-retry", methods=["POST"])
+@auth.subscription_required
+@limiter.limit("20 per minute", key_func=_user_rate_limit_key)
+def listings_save_retry():
+    """Persist an already-generated snapshot again — no AI call, no extra cost."""
+    user = auth.get_current_user()
+    data = request.get_json(silent=True) or {}
+    address = (data.get("address") or "").strip()
+    output_snapshot = data.get("output_snapshot")
+    if not address or not output_snapshot:
+        return jsonify({"error": "Missing generated content to save."}), 400
+    try:
+        generation = listing_db.create_generation(
+            user["id"],
+            display_address=address,
+            input_snapshot=data.get("input_snapshot"),
+            output_snapshot=output_snapshot,
+            social_content=data.get("social_content"),
+        )
+    except Exception:
+        logger.exception("Retry save of listing generation failed for user %s", user["id"])
+        return jsonify({"error": "Still couldn't save. Please try again shortly."}), 500
+    return jsonify({"generation_id": generation["id"], "created_at": generation["created_at"]})
+
+
+@app.route("/listings/<int:generation_id>/post", methods=["POST"])
+@auth.subscription_required
+@limiter.limit("20 per minute", key_func=_user_rate_limit_key)
+def listings_post(generation_id):
+    """One-click Post: publish to the tenant's default-enabled+ready channels."""
+    from listing_publish import publish_listing
+
+    user = auth.get_current_user()
+    data = request.get_json(silent=True) or {}
+    try:
+        result = publish_listing(
+            user["id"],
+            generation_id,
+            operation_id=data.get("operation_id"),
+            connection_ids=data.get("connection_ids"),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except Exception:
+        logger.exception("Listing publish failed for generation %s", generation_id)
+        return jsonify({"error": "Couldn't publish this post. Please try again."}), 500
+    if not result["results"]:
+        return jsonify({
+            "error": "No social accounts are connected and enabled for one-click posting.",
+            "operation_id": result["operation_id"],
+            "results": [],
+        }), 400
+    return jsonify(result)
+
+
+@app.route("/listings/<int:generation_id>/post/<provider>/retry", methods=["POST"])
+@auth.subscription_required
+@limiter.limit("20 per minute", key_func=_user_rate_limit_key)
+def listings_post_retry(generation_id, provider):
+    """Retry exactly one provider's publication without reposting the others."""
+    from listing_publish import retry_publish
+
+    user = auth.get_current_user()
+    data = request.get_json(silent=True) or {}
+    try:
+        result = retry_publish(
+            user["id"], generation_id, provider, operation_id=data.get("operation_id")
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except Exception:
+        logger.exception("Listing publish retry failed for generation %s provider %s", generation_id, provider)
+        return jsonify({"error": "Couldn't publish this post. Please try again."}), 500
+    return jsonify(result)
 
 
 @app.route("/generate-script", methods=["POST"])

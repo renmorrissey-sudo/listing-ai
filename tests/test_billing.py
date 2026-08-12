@@ -169,7 +169,8 @@ def test_checkout_limits_payment_methods_to_card_and_link(monkeypatch):
             cancel_url="https://example.com/cancel",
             idempotency_key="subchk_test_key",
         )
-    assert create.call_args.kwargs["payment_method_types"] == ["card", "link"]
+    assert create.call_args.kwargs["payment_method_types"] == ["card"]
+    assert "link" not in create.call_args.kwargs["payment_method_types"]
     assert "klarna" not in create.call_args.kwargs["payment_method_types"]
 
 

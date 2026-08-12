@@ -23,10 +23,26 @@
     .billing-link:hover { background: #4f8ef7; color: white; }
     .logout-btn { background: none; border: 1.5px solid #445; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #aab; cursor: pointer; transition: all 0.15s; }
     .logout-btn:hover { border-color: #aab; color: white; }
-    .tool-nav { background: #232344; display: flex; padding: 0 32px; gap: 4px; }
-    .tool-nav-btn { padding: 12px 20px; font-size: 13px; font-weight: 600; color: #8899bb; background: none; border: none; cursor: pointer; border-bottom: 3px solid transparent; transition: all 0.15s; }
-    .tool-nav-btn:hover { color: #ccd; }
-    .tool-nav-btn.active { color: #4f8ef7; border-bottom-color: #4f8ef7; }
+    .account-menu { position: relative; }
+    .account-menu summary { list-style: none; border: 1.5px solid #445; border-radius: 7px; padding: 7px 11px; color: #dce3ef; font-size: 12px; font-weight: 700; cursor: pointer; user-select: none; }
+    .account-menu summary::-webkit-details-marker { display: none; }
+    .account-menu summary:hover, .account-menu[open] summary { border-color: #71809a; color: white; }
+    .account-menu summary:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 2px; }
+    .account-menu-panel { position: absolute; right: 0; top: calc(100% + 8px); z-index: 200; min-width: 210px; padding: 7px; background: white; border: 1px solid #dfe5ef; border-radius: 10px; box-shadow: 0 14px 36px rgba(15,23,42,0.24); }
+    .account-menu-panel a, .account-menu-panel button { display: block; width: 100%; padding: 9px 10px; border: 0; border-radius: 7px; background: transparent; color: #334; font: inherit; font-size: 13px; font-weight: 600; text-align: left; text-decoration: none; cursor: pointer; }
+    .account-menu-panel a:hover, .account-menu-panel button:hover, .account-menu-panel [aria-current="page"] { background: #eef5ff; color: #1d4ed8; }
+    .account-menu-panel form { margin: 0; }
+    .account-menu-divider { height: 1px; margin: 5px 3px; background: #e8edf4; }
+    .tool-nav-bar { background: #232344; padding: 0 32px; }
+    .tool-nav-toggle { display: none; align-items: center; gap: 8px; width: 100%; background: transparent; border: none; color: #ccd; font-size: 13px; font-weight: 700; padding: 10px 0; cursor: pointer; }
+    .tool-nav-toggle-icon { width: 18px; height: 2px; background: #ccd; position: relative; display: inline-block; }
+    .tool-nav-toggle-icon::before, .tool-nav-toggle-icon::after { content: ''; position: absolute; left: 0; width: 18px; height: 2px; background: #ccd; }
+    .tool-nav-toggle-icon::before { top: -6px; }
+    .tool-nav-toggle-icon::after { top: 6px; }
+    .tool-nav { display: flex; gap: 4px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .tool-nav a { padding: 12px 16px; font-size: 13px; font-weight: 600; color: #8899bb; text-decoration: none; border-bottom: 3px solid transparent; white-space: nowrap; flex: 0 0 auto; }
+    .tool-nav a:hover { color: #ccd; }
+    .tool-nav a.active { color: #4f8ef7; border-bottom-color: #4f8ef7; }
     .tool-page { display: none; }
     .tool-page.active { display: block; }
     main { max-width: 960px; margin: 32px auto; padding: 0 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
@@ -58,11 +74,48 @@
     .copy-btn.copied { border-color: #22c55e; color: #22c55e; }
     .placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 280px; color: #aab; text-align: center; gap: 12px; }
     .placeholder svg { opacity: 0.35; }
+    .btn { display: inline-block; background: #eef2f7; color: #334; border: 1.5px solid #dde3ee; border-radius: 7px; padding: 7px 14px; font-size: 12px; font-weight: 700; text-decoration: none; cursor: pointer; }
+    .btn:hover { border-color: #4f8ef7; color: #3a7de0; }
+    .btn.primary { background: #4f8ef7; color: white; border-color: #4f8ef7; }
+    .btn.primary:hover { background: #3a7de0; }
+    .btn.secondary { background: white; }
+    .btn.btn-sm { padding: 4px 10px; font-size: 11px; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .pill { display: inline-block; border-radius: 999px; padding: 2px 9px; font-size: 11px; font-weight: 700; background: #eef5ff; color: #1d4ed8; }
+    .pill.success { background: #ecfdf5; color: #15803d; }
+    .pill.warn { background: #fff7ed; color: #c2410c; }
+    .pill.danger { background: #fef2f2; color: #b91c1c; }
+    .pill.muted { background: #f1f5f9; color: #556; }
+    .listing-output-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; font-size: 12px; color: #667; }
+    .listing-saved-note { color: #15803d; font-weight: 600; }
+    .listing-save-warning { color: #c2410c; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .listing-version-select { margin-left: auto; padding: 6px 10px; font-size: 12px; border-radius: 7px; border: 1.5px solid #e0e4ed; }
+    .recent-listings-card { grid-column: 1 / -1; }
+    .recent-listings-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .recent-listings-header a { font-size: 13px; font-weight: 600; color: #4f8ef7; text-decoration: none; }
+    .recent-listings-header a:hover { text-decoration: underline; }
+    .recent-listing-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 0; border-bottom: 1px solid #eef2f7; flex-wrap: wrap; }
+    .recent-listing-row:last-child { border-bottom: none; }
+    .recent-listing-address { font-weight: 600; font-size: 13.5px; }
+    .recent-listing-meta { color: #889; font-size: 12px; margin-top: 2px; }
+    .social-post-area { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eef2f7; }
+    .email-campaign-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    .email-campaign-actions .copy-btn { margin-top: 0; }
+    #email-campaign-area { display: flex; align-items: center; gap: 10px; flex: 1 1 320px; flex-wrap: wrap; }
+    .email-campaign-status { width: 100%; font-size: 12px; line-height: 1.45; color: #667; }
+    .email-campaign-status.success { color: #15803d; }
+    .email-campaign-status.error { color: #b91c1c; }
+    .social-destinations { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: #556; margin-bottom: 10px; }
+    .post-result-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; font-size: 13px; }
+    @media (max-width: 720px) { .recent-listing-row { flex-direction: column; align-items: flex-start; } }
     .placeholder p { font-size: 14px; }
     .error-msg { background: #fff5f5; border: 1.5px solid #fca5a5; color: #dc2626; border-radius: 8px; padding: 12px 16px; font-size: 13px; margin-top: 12px; display: none; }
     .notice { background: #fff8e6; border: 1.5px solid #f0d98c; color: #7a5c00; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.45; margin-bottom: 14px; }
     .checkbox-row { display: flex; gap: 9px; align-items: flex-start; margin: 12px 0; font-size: 13px; color: #556; line-height: 1.45; }
     .checkbox-row input { width: auto; margin-top: 3px; }
+    .field-section-label { font-size: 11px; font-weight: 800; color: #8899aa; text-transform: uppercase; letter-spacing: 0.6px; margin: 20px 0 10px; padding-top: 16px; border-top: 1px solid #eef2f7; }
+    .field-section-label:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+    .success-msg { background: #f0fdf4; border: 1.5px solid #86efac; color: #15803d; border-radius: 8px; padding: 12px 16px; font-size: 13px; margin-top: 12px; display: none; }
     .call-history { display: flex; flex-direction: column; gap: 12px; max-height: 560px; overflow-y: auto; }
     .call-item { background: #f8fafc; border: 1.5px solid #e0e4ed; border-radius: 8px; padding: 14px; font-size: 13px; line-height: 1.5; }
     .call-item strong { color: #1a1a2e; }
@@ -118,6 +171,14 @@
     .public-nav { background: #eef2f7; border-bottom: 1px solid #dde4f0; padding: 9px 32px; font-size: 13px; }
     .public-nav a { color: #445; text-decoration: none; margin-right: 18px; font-weight: 600; }
     .public-nav a:hover { color: #4f8ef7; }
+    @media (max-width: 900px) {
+      .tool-nav-bar { padding-left: 16px; padding-right: 16px; }
+      .tool-nav-toggle { display: flex; }
+      .tool-nav { display: none; flex-direction: column; overflow-x: visible; padding-bottom: 8px; }
+      .tool-nav-bar.is-open .tool-nav { display: flex; }
+      .tool-nav a { border-bottom: none; border-left: 3px solid transparent; padding: 10px 8px; }
+      .tool-nav a.active { border-left-color: #4f8ef7; }
+    }
     @media (max-width: 640px) {
       header { padding: 14px 16px; display: block; }
       header .logo { font-size: 21px; line-height: 1.05; max-width: 190px; }
@@ -127,11 +188,9 @@
       #header-right { margin-top: 12px; }
       .subscriber-info { justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
       .subscriber-email { flex: 1 1 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-      .billing-link, .logout-btn, .subscribe-btn { padding: 7px 10px; font-size: 12px; }
+      .logout-btn, .subscribe-btn { padding: 7px 10px; font-size: 12px; }
       .public-nav { padding: 8px 16px; display: flex; gap: 14px; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
       .public-nav a { margin-right: 0; flex: 0 0 auto; }
-      .tool-nav { padding: 0 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-      .tool-nav-btn { flex: 0 0 auto; padding: 11px 14px; min-width: 118px; white-space: normal; line-height: 1.15; text-align: center; }
       main { margin: 20px auto; padding: 0 12px; }
       .card { padding: 20px; border-radius: 10px; }
       .form-row { grid-template-columns: 1fr; gap: 0; }
@@ -180,46 +239,12 @@
   </div>
 </div>
 
-<header>
-  <div>
-    <a class="logo" href="/dashboard" aria-label="TopAI Real Estate Tools — Dashboard" id="header-logo">TopAI <span>Real Estate Tools</span></a>
-    <div class="tagline">AI-powered content for real estate agents</div>
-    <div class="business-note">Operated by {{ legal_entity_name }}</div>
-  </div>
-  <div id="header-right">
-    <a class="subscribe-btn" href="{{ registration_cta_href }}">{% if registration_can_signup %}Get 50% off your first month{% else %}Private beta{% endif %}</a>
-  </div>
-</header>
+{% set page_tagline = 'AI-powered content for real estate agents' %}
+{% include 'subscriber_header.html' %}
 {% if subscribe_notice %}
 <div class="subscribe-notice" role="status" style="margin:12px 20px 0;padding:10px 14px;background:#ecfdf5;border:1px solid #6ee7b7;color:#065f46;border-radius:8px;font-size:14px;">{{ subscribe_notice }}</div>
 {% endif %}
-<div class="public-nav" id="public-nav">
-  <a class="nav-marketing" href="/">Home</a>
-  <a class="nav-marketing" href="/features">Features</a>
-  <a class="nav-marketing" href="/how-it-works">How It Works</a>
-  <a class="nav-marketing" href="/pricing">Pricing</a>
-  <a class="nav-subscriber" href="/dashboard" style="display:none;">Dashboard</a>
-  <a class="nav-subscriber" href="/tutorial" style="display:none;">Tutorial</a>
-  <a href="/terms">Terms</a>
-  <a href="/privacy">Privacy</a>
-  <a href="/refund-policy">Refund Policy</a>
-  <a href="/contact">Contact</a>
-</div>
-<nav class="tool-nav">
-  <button class="tool-nav-btn active" data-tool="listing" onclick="switchTool('listing', this)">&#128221; Listing Generator</button>
-  <button class="tool-nav-btn" data-tool="coldcall" onclick="switchTool('coldcall', this)">&#128222; Cold Call Scripts</button>
-  <button class="tool-nav-btn" data-tool="voice" onclick="switchTool('voice', this)">AI Calling Assistant</button>
-  <button class="tool-nav-btn" data-tool="sms" onclick="switchTool('sms', this)">AI SMS Assistant</button>
-  <a class="tool-nav-btn nav-subscriber" id="dashboard-tool-link" href="/dashboard" style="display:none; text-decoration:none;">Dashboard</a>
-  <a class="tool-nav-btn nav-subscriber" id="crm-leads-tool-link" href="/crm/leads" style="display:none; text-decoration:none;">Leads</a>
-  <a class="tool-nav-btn nav-subscriber" id="crm-calendar-tool-link" href="/crm/calendar" style="display:none; text-decoration:none;">Leads Calendar</a>
-  <a class="tool-nav-btn nav-subscriber" id="crm-followups-tool-link" href="/crm/follow-ups" style="display:none; text-decoration:none;">Follow-ups</a>
-  <a class="tool-nav-btn nav-subscriber" id="crm-tasks-tool-link" href="/crm/tasks" style="display:none; text-decoration:none;">Tasks</a>
-  <a class="tool-nav-btn nav-subscriber" id="crm-needs-tool-link" href="/crm/needs-attention" style="display:none; text-decoration:none;">Needs Attention</a>
-  <a class="tool-nav-btn nav-subscriber" id="bulk-sms-tool-link" href="/crm/sms-campaigns" style="display:none; text-decoration:none;">Bulk SMS</a>
-  <a class="tool-nav-btn nav-subscriber" id="billing-tool-link" href="/billing" style="display:none; text-decoration:none;">Billing</a>
-  <a class="tool-nav-btn nav-subscriber" id="tutorial-tool-link" href="/tutorial" style="display:none; text-decoration:none;">Tutorial</a>
-</nav>
+{% include 'subscriber_tool_nav.html' %}
 
 <div id="tool-listing" class="tool-page active">
   <main>
@@ -246,7 +271,36 @@
         <button type="submit" class="btn-generate" id="listing-btn"><div class="spinner" id="listing-spinner"></div><span id="listing-btn-label">Generate Content</span></button>
       </form>
     </div>
-    <div class="card results-panel"><div class="placeholder" id="listing-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg><p>Fill in the property details<br/>and click Generate Content</p></div><div id="listing-output" style="display:none;"><div class="tabs"><div class="tab active" data-group="listing" data-tab="ldesc">Listing</div><div class="tab" data-group="listing" data-tab="lsocial">Social Posts</div><div class="tab" data-group="listing" data-tab="lemail">Email</div></div><div class="tab-content active" id="tab-ldesc"><div class="output-box" id="out-listing"></div><button class="copy-btn" data-target="out-listing">Copy</button></div><div class="tab-content" id="tab-lsocial"><div class="output-box" id="out-social"></div><button class="copy-btn" data-target="out-social">Copy</button></div><div class="tab-content" id="tab-lemail"><div class="output-box" id="out-email"></div><button class="copy-btn" data-target="out-email">Copy</button></div></div></div>
+    <div class="card results-panel"><div class="placeholder" id="listing-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg><p>Fill in the property details<br/>and click Generate Content</p></div><div id="listing-output" style="display:none;">
+      <div class="listing-output-meta" id="listing-output-meta">
+        <span id="listing-saved-note" class="listing-saved-note" style="display:none;"></span>
+        <span id="listing-save-warning" class="listing-save-warning" style="display:none;">Couldn't save this listing to your history. <button type="button" class="btn secondary btn-sm" id="listing-save-retry-btn">Retry save</button></span>
+        <select id="listing-version-select" class="listing-version-select" style="display:none;" aria-label="Version"></select>
+      </div>
+      <div class="tabs"><div class="tab active" data-group="listing" data-tab="ldesc">Listing</div><div class="tab" data-group="listing" data-tab="lsocial">Social Posts</div><div class="tab" data-group="listing" data-tab="lemail">Email</div></div>
+      <div class="tab-content active" id="tab-ldesc"><div class="output-box" id="out-listing"></div><button class="copy-btn" data-target="out-listing">Copy</button></div>
+      <div class="tab-content" id="tab-lsocial">
+        <div class="output-box" id="out-social"></div>
+        <button class="copy-btn" data-target="out-social">Copy</button>
+        <div class="social-post-area" id="social-post-area"></div>
+      </div>
+      <div class="tab-content" id="tab-lemail">
+        <div class="output-box" id="out-email"></div>
+        <div class="email-campaign-actions">
+          <button class="copy-btn" data-target="out-email">Copy</button>
+          <div id="email-campaign-area">
+            <button type="button" class="btn primary" disabled>Add to Email Campaign</button>
+          </div>
+        </div>
+      </div>
+    </div></div>
+    <div class="card recent-listings-card">
+      <div class="recent-listings-header">
+        <h2>Recent Listings</h2>
+        <a href="/listings/archive">View Archive &rarr;</a>
+      </div>
+      <div id="recent-listings-list"><p class="muted" style="font-size:13px;">Loading...</p></div>
+    </div>
   </main>
 </div>
 
@@ -340,41 +394,52 @@
     <div class="card">
       <h2>AI SMS Assistant</h2>
       <div class="notice">
-        Use consent-based one-to-one SMS only. You are responsible for TCPA, DNC, carrier rules, brokerage policy, and local regulations. Include opt-out language where required. Nothing is sent until you review the draft and click Send.
+        AI-drafted, one-to-one SMS. Review and edit the message before it sends — nothing goes out automatically.
       </div>
       <form id="sms-form">
         <div class="form-group"><label>Persona</label><select name="persona_id" id="sms-persona" required><option value="">Loading personas...</option></select></div>
-        <div class="form-row">
-          <div class="form-group"><label>Lead Name</label><input type="text" name="lead_name" placeholder="e.g. Sarah Johnson" maxlength="120" /></div>
-          <div class="form-group"><label>Phone Number *</label><input type="tel" name="phone_number" placeholder="e.g. (555) 123-4567" maxlength="32" required /></div>
+
+        <div class="field-section-label">Lead</div>
+        <div class="form-group">
+          <label>Select existing lead</label>
+          <select id="sms-compose-lead-select"><option value="">Enter lead details manually...</option></select>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>Your Name</label><input type="text" name="agent_name" placeholder="Your name" maxlength="120" />
-          <div class="form-group"><label>Lead Type</label><input type="text" name="lead_type" placeholder="e.g. buyer lead, open house visitor" maxlength="80" /></div>
+          <div class="form-group"><label>Lead Name</label><input type="text" name="lead_name" id="sms-lead-name" placeholder="e.g. Sarah Johnson" maxlength="120" /></div>
+          <div class="form-group"><label>Phone Number *</label><input type="tel" name="phone_number" id="sms-phone-number" placeholder="e.g. (555) 123-4567" maxlength="32" required /></div>
         </div>
-        <div class="form-group"><label>Property Interest</label><textarea name="property_interest" maxlength="500" placeholder="e.g. Looking at 3-bedroom homes near downtown under $500k"></textarea></div>
+
+        <div class="field-section-label">Agent / Context</div>
+        <div class="form-row">
+          <div class="form-group"><label>Your Name</label><input type="text" name="agent_name" placeholder="Your name" maxlength="120" /></div>
+          <div class="form-group"><label>Lead Type</label><input type="text" name="lead_type" id="sms-lead-type" placeholder="e.g. buyer lead, open house visitor" maxlength="80" /></div>
+        </div>
+        <div class="form-group"><label>Property Interest</label><textarea name="property_interest" id="sms-property-interest" maxlength="500" placeholder="e.g. Looking at 3-bedroom homes near downtown under $500k"></textarea></div>
         <div class="form-group"><label>Desired Outcome</label><input type="text" name="desired_outcome" maxlength="300" placeholder="e.g. get a reply and book a showing" /></div>
-        <div class="form-group"><label>Agent Notes</label><textarea name="notes" maxlength="1500" placeholder="Any context the AI should use in the text"></textarea></div>
+        <div class="form-group"><label>Agent Notes</label><textarea name="notes" id="sms-notes" maxlength="1500" placeholder="Any context the AI should use in the text"></textarea></div>
+
+        <div class="field-section-label">Message</div>
         <div class="form-group">
           <label>SMS Message</label>
           <textarea name="message_body" id="sms-message-body" maxlength="480" placeholder="Click Generate SMS to draft a message, then edit before sending."></textarea>
           <div class="muted" id="sms-char-count" style="font-size:12px;margin-top:6px;">0 / 480 characters</div>
         </div>
-        <p class="muted" style="font-size:12px;margin:8px 0;">Warning: TopAI does not independently verify supporting consent records. You are solely responsible for TCPA, DNC, brokerage, and carrier compliance. Bulk sends require a certified campaign.</p>
+        <button type="button" class="btn-generate" id="sms-generate-btn"><div class="spinner" id="sms-generate-spinner"></div><span id="sms-generate-label">Generate SMS</span></button>
+
+        <div class="field-section-label">SMS Consent</div>
         <label class="checkbox-row">
           <input type="checkbox" name="compliance_confirmed" id="sms-compliance-confirmed" value="true" required />
-          <span>I confirm that this contact has consented to receive SMS messages from me or my business for this purpose. I maintain the supporting consent records and am responsible for TCPA, DNC, carrier, brokerage, privacy, opt-out, and local-law compliance.</span>
+          <span>I confirm this contact has consented to receive SMS from me or my business, and I maintain the supporting consent record.</span>
         </label>
-        <div class="error-msg" id="sms-error"></div>
-        <div id="sms-provider-status" class="notice" style="margin-top:12px;font-size:12px;display:none;" aria-live="polite"></div>
-        <div id="sms-trial-banner" class="notice" style="margin-top:12px;font-size:12px;display:none;border-color:#c45c26;color:#7a3410;" aria-live="polite"></div>
-        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
-          <button type="button" class="btn-generate" id="sms-generate-btn" style="flex:1;"><div class="spinner" id="sms-generate-spinner"></div><span id="sms-generate-label">Generate SMS</span></button>
-          <button type="submit" class="btn-generate" id="sms-send-btn" style="flex:1;" disabled><div class="spinner" id="sms-send-spinner"></div><span id="sms-send-label">Send SMS</span></button>
-        </div>
-        <p class="muted" id="sms-verification-block" style="font-size:12px;margin-top:8px;display:none;color:#7a3410;" aria-live="polite"></p>
-        <p class="muted" id="sms-config-note" style="font-size:12px;margin-top:10px;"></p>
+        <p class="muted" style="font-size:12px;">You're responsible for applicable TCPA, DNC, carrier, brokerage, privacy, opt-out, and local requirements.</p>
+
+        <div id="sms-trial-banner" class="notice" style="margin-top:4px;font-size:12px;display:none;border-color:#c45c26;color:#7a3410;" aria-live="polite"></div>
+        <p class="muted" id="sms-verification-block" style="font-size:12px;margin-top:4px;display:none;color:#7a3410;" aria-live="polite"></p>
+        <button type="submit" class="btn-generate" id="sms-send-btn" style="margin-top:14px;" disabled><div class="spinner" id="sms-send-spinner"></div><span id="sms-send-label">Send SMS</span></button>
+        <div class="error-msg" id="sms-error" aria-live="polite"></div>
+        <div class="success-msg" id="sms-success" aria-live="polite"></div>
       </form>
+      <p class="muted" style="font-size:12px;margin-top:14px;"><a href="/crm/sms-diagnostics" class="call-link">Troubleshoot SMS setup &amp; delivery status &rarr;</a></p>
     </div>
     <div class="card results-panel">
       <h2>Needs your review</h2>
@@ -419,6 +484,7 @@
   </nav>
 </footer>
 
+{% include 'subscriber_nav_script.html' %}
 <script>
   let voiceCallsRefreshTimer = null;
 
@@ -444,17 +510,16 @@
     });
   }
 
-  function showLoggedIn(email, hasBillingPortal) {
+  function showLoggedIn(email) {
     document.getElementById('gate').classList.add('hidden');
-    const billingLink = hasBillingPortal
-      ? '<a class="billing-link" href="/billing">Billing</a>'
-      : '';
-    document.getElementById('header-right').innerHTML =
-      `<div class="subscriber-info"><span class="subscriber-email">&#10003; ${email}</span>${billingLink}<button class="logout-btn" onclick="doLogout()">Sign out</button></div>`;
+    const emailEl = document.querySelector('.subscriber-email');
+    if (emailEl && email) emailEl.textContent = '\u2713 ' + email;
     setSubscriberNav(true);
     loadVoiceData();
     loadSmsData();
+    loadRecentListings();
     applyToolHash();
+    openListingFromQueryParam();
   }
 
   function handle401() {
@@ -488,56 +553,18 @@
     return data;
   }
 
-  function renderProviderStatus(status) {
-    const panel = document.getElementById('sms-provider-status') || document.getElementById('sms-twilio-status');
+  function updateSmsTrialBanner(status) {
+    // Detailed provider/config diagnostics live on the SMS Diagnostics admin
+    // page (/crm/sms-diagnostics); this banner only surfaces the one state
+    // that changes what an agent should expect when sending.
     const trial = document.getElementById('sms-trial-banner');
-    if (trial) {
-      if (status && status.trial_mode && status.trial_message) {
-        trial.textContent = status.trial_message;
-        trial.style.display = 'block';
-      } else if (status && status.trial_mode) {
-        trial.textContent = 'Telnyx trial mode is enabled. Outbound SMS is limited to the verified test number.';
-        trial.style.display = 'block';
-      } else {
-        trial.style.display = 'none';
-      }
+    if (!trial) return;
+    if (status && status.trial_mode) {
+      trial.textContent = 'Your account can currently only send SMS to a verified test number while setup is finishing.';
+      trial.style.display = 'block';
+    } else {
+      trial.style.display = 'none';
     }
-    if (!panel || !status) return;
-    const yesNo = (v) => (v ? 'yes' : 'no');
-    const provider = (status.provider || status.sms_provider || '').toLowerCase();
-    if (provider === 'telnyx') {
-      const tollDisplay = status.toll_free_number_display || '(888) 821-0810';
-      const rows = [
-        `SMS provider: Telnyx`,
-        `Telnyx API key configured: ${yesNo(status.api_key_configured)}`,
-        `Telnyx messaging profile configured: ${yesNo(status.messaging_profile_configured)}`,
-        `Telnyx phone number configured: ${yesNo(status.phone_number_configured)}`,
-        `Telnyx public key configured: ${yesNo(status.public_key_configured)}`,
-        `Webhook endpoint configured: ${yesNo(status.webhook_endpoint_configured)}`,
-        `Webhook API version: ${status.webhook_api_version || 'V2'}`,
-        `Toll-free number: +1 ${tollDisplay}`,
-        `Toll-free verification status: ${status.toll_free_verification_status || 'unknown'}`,
-        `Trial mode: ${status.trial_mode ? 'enabled' : 'disabled'}`,
-        `SMS sending enabled: ${yesNo(status.sms_sending_enabled)}`,
-        `Latest Telnyx send status: ${status.latest_send_status || 'none'}`,
-        `Latest Telnyx error code: ${status.latest_telnyx_error_code != null ? status.latest_telnyx_error_code : (status.latest_error_code != null ? status.latest_error_code : 'none')}`,
-      ];
-      const errMsg = status.latest_telnyx_error_message || status.latest_error_message;
-      if (errMsg) rows.push(`Latest Telnyx error: ${errMsg}`);
-      panel.innerHTML = `<strong>Telnyx status</strong><br/>${rows.map(escapeHtml).join('<br/>')}`;
-      panel.style.display = 'block';
-      return;
-    }
-    // Non-Telnyx rollback providers (Twilio / SimpleTexting) — only shown when active.
-    const rows = [
-      `SMS provider: ${provider || 'unknown'}`,
-      `Provider configured: ${yesNo(status.send_configured || status.configured || status.credentials_configured)}`,
-    ];
-    if (status.latest_error_message || status.latest_twilio_error_message) {
-      rows.push(`Latest error: ${status.latest_error_message || status.latest_twilio_error_message}`);
-    }
-    panel.innerHTML = `<strong>SMS provider status</strong><br/>${rows.map(escapeHtml).join('<br/>')}`;
-    panel.style.display = 'block';
   }
 
   function escapeHtml(value) {
@@ -711,7 +738,7 @@
   }
 
   async function loadSmsData() {
-    await Promise.all([loadVoicePersonas(), loadSmsMessages(), loadSmsInbox(), loadSmsLeads()]);
+    await Promise.all([loadVoicePersonas(), loadSmsMessages(), loadSmsInbox(), loadSmsLeads(), loadSmsComposeLeads()]);
   }
 
   function updateSmsCharCount() {
@@ -723,12 +750,11 @@
 
   let smsSendConfigured = false;
   let smsTollFreeVerified = false;
-  let smsVerificationBlockMessage = 'SMS sending is unavailable until Telnyx completes toll-free verification.';
+  let smsVerificationBlockMessage = "SMS sending isn't available yet while your number completes toll-free verification. Contact support if this is taking longer than expected.";
 
   async function loadSmsMessages() {
     const history = document.getElementById('sms-history');
     const placeholder = document.getElementById('sms-placeholder');
-    const note = document.getElementById('sms-config-note');
     const verifyNote = document.getElementById('sms-verification-block');
     if (!history || !placeholder) return;
     try {
@@ -746,32 +772,19 @@
       }
       if (typeof syncSmsSendEnabled === 'function') syncSmsSendEnabled();
       if (verifyNote) {
-        if ((data.sms_provider || '').toLowerCase() === 'telnyx' && !smsTollFreeVerified) {
+        const provider = (data.sms_provider || '').toLowerCase();
+        if (provider === 'telnyx' && !smsTollFreeVerified) {
           verifyNote.textContent = smsVerificationBlockMessage;
+          verifyNote.style.display = 'block';
+        } else if (!smsSendConfigured) {
+          verifyNote.textContent = 'SMS sending is temporarily unavailable. You can still generate and save drafts.';
           verifyNote.style.display = 'block';
         } else {
           verifyNote.textContent = '';
           verifyNote.style.display = 'none';
         }
       }
-      if (note) {
-        const provider = (data.sms_provider || (data.provider_status && data.provider_status.provider) || '').toLowerCase();
-        let sendNote;
-        if (provider === 'telnyx' && !smsTollFreeVerified) {
-          sendNote = smsVerificationBlockMessage;
-        } else if (smsSendConfigured && provider === 'telnyx') {
-          sendNote = 'SMS sending is configured through Telnyx. TopAI drafts the message using Claude. You review and approve the message before it is sent.';
-        } else if (smsSendConfigured) {
-          sendNote = 'SMS sending is configured for the active provider. TopAI drafts the message using Claude. You review and approve the message before it is sent.';
-        } else {
-          sendNote = 'SMS sending is not fully configured yet. You can still generate and save SMS drafts.';
-        }
-        const coachNote = data.coach_configured
-          ? ' Claude inbound coaching is enabled.'
-          : ' Add ANTHROPIC_API_KEY in Railway to enable Claude inbound coaching.';
-        note.textContent = sendNote + coachNote;
-      }
-      if (statusPayload && Object.keys(statusPayload).length) renderProviderStatus(statusPayload);
+      updateSmsTrialBanner(statusPayload);
       if (!data.messages.length) {
         history.style.display = 'none';
         placeholder.style.display = 'flex';
@@ -901,6 +914,48 @@
     } catch (err) {
       select.innerHTML = '<option value="">Leads unavailable</option>';
     }
+  }
+
+  let smsComposeLeadsById = {};
+
+  async function loadSmsComposeLeads() {
+    const select = document.getElementById('sms-compose-lead-select');
+    if (!select) return;
+    try {
+      const data = await fetchJson('/sms/leads', {cache: 'no-store'});
+      if (!data) return;
+      smsComposeLeadsById = {};
+      (data.leads || []).forEach(lead => { smsComposeLeadsById[String(lead.id)] = lead; });
+      const current = select.value;
+      if (!data.leads.length) {
+        select.innerHTML = '<option value="">Enter lead details manually...</option>';
+        return;
+      }
+      select.innerHTML = '<option value="">Enter lead details manually...</option>' + data.leads.map(lead =>
+        `<option value="${lead.id}">${escapeHtml(lead.name || 'Lead')} · ${escapeHtml(lead.phone_number || '')}</option>`
+      ).join('');
+      if (current) select.value = current;
+    } catch (err) {
+      select.innerHTML = '<option value="">Enter lead details manually...</option>';
+    }
+  }
+
+  const smsComposeLeadSelect = document.getElementById('sms-compose-lead-select');
+  if (smsComposeLeadSelect) {
+    smsComposeLeadSelect.addEventListener('change', () => {
+      const lead = smsComposeLeadsById[smsComposeLeadSelect.value];
+      if (!lead) return;
+      const nameEl = document.getElementById('sms-lead-name');
+      const phoneEl = document.getElementById('sms-phone-number');
+      const typeEl = document.getElementById('sms-lead-type');
+      const interestEl = document.getElementById('sms-property-interest');
+      const notesEl = document.getElementById('sms-notes');
+      if (nameEl) nameEl.value = lead.name || '';
+      if (phoneEl) phoneEl.value = lead.phone_number || '';
+      if (typeEl) typeEl.value = lead.lead_type || '';
+      if (interestEl) interestEl.value = lead.property_interest || '';
+      if (notesEl && !notesEl.value) notesEl.value = lead.next_action || '';
+    });
   }
 
   async function openSmsLead(leadId) {
@@ -1095,30 +1150,26 @@
 
   async function doLogout() {
     await fetch('/logout', {method:'POST'});
-    document.getElementById('header-right').innerHTML =
-      `<a class="subscribe-btn" href="{{ registration_cta_href }}">{% if registration_can_signup %}Get 50% off your first month{% else %}Private beta{% endif %}</a>`;
-    document.getElementById('gate').classList.remove('hidden');
-    document.getElementById('gate-error').textContent = '';
-    document.getElementById('gate-email').value = '';
-    setSubscriberNav(false);
+    window.location.href = '/';
   }
 
   function switchTool(tool, btn) {
     const page = document.getElementById('tool-' + tool);
     if (!page) return;
     document.querySelectorAll('.tool-page').forEach(p => p.classList.remove('active'));
-    document.querySelectorAll('.tool-nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tool-nav a[href^="/app"]').forEach(link => link.classList.remove('active'));
     page.classList.add('active');
     if (btn) {
       btn.classList.add('active');
     } else {
-      const match = document.querySelector(`.tool-nav-btn[data-tool="${tool}"]`);
+      const href = tool === 'listing' ? '/app' : '/app#' + tool;
+      const match = document.querySelector(`.tool-nav a[href="${href}"]`);
       if (match) match.classList.add('active');
     }
     if (tool === 'voice') loadVoiceData();
     if (tool === 'sms') loadSmsData();
-    if (tool === 'listing') history.replaceState(null, '', '/');
-    else history.replaceState(null, '', '/#' + tool);
+    if (tool === 'listing') history.replaceState(null, '', '/app');
+    else history.replaceState(null, '', '/app#' + tool);
   }
 
   function applyToolHash() {
@@ -1152,6 +1203,141 @@
     });
   });
 
+  let currentListingGenerationId = null;
+  let currentListingSaveRetryPayload = null;
+
+  function escapeHtmlText(str) {
+    return (str || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function formatListingDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  function resetListingOutputMeta() {
+    document.getElementById('listing-saved-note').style.display = 'none';
+    document.getElementById('listing-save-warning').style.display = 'none';
+    document.getElementById('listing-version-select').style.display = 'none';
+    currentListingSaveRetryPayload = null;
+  }
+
+  function showListingSaved(generationId, createdAt) {
+    currentListingGenerationId = generationId || null;
+    const note = document.getElementById('listing-saved-note');
+    if (generationId) {
+      note.textContent = 'Saved to your listing history' + (createdAt ? ' \u00b7 ' + formatListingDate(createdAt) : '');
+      note.style.display = 'inline';
+    } else {
+      note.style.display = 'none';
+    }
+  }
+
+  function showListingSaveWarning(payload) {
+    currentListingSaveRetryPayload = payload;
+    document.getElementById('listing-save-warning').style.display = 'flex';
+  }
+
+  async function retryListingSave() {
+    if (!currentListingSaveRetryPayload) return;
+    const retryBtn = document.getElementById('listing-save-retry-btn');
+    retryBtn.disabled = true; retryBtn.textContent = 'Saving...';
+    try {
+      const res = await fetch('/listings/save-retry', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(currentListingSaveRetryPayload)
+      });
+      if (res.status === 401) { handle401(); return; }
+      const result = await res.json();
+      if (res.ok) {
+        document.getElementById('listing-save-warning').style.display = 'none';
+        showListingSaved(result.generation_id, result.created_at);
+        renderEmailCampaignArea({ id: result.generation_id });
+        loadRecentListings();
+      } else {
+        retryBtn.textContent = 'Retry save';
+      }
+    } catch {
+      retryBtn.textContent = 'Retry save';
+    }
+    retryBtn.disabled = false;
+    if (retryBtn.textContent === 'Saving...') retryBtn.textContent = 'Retry save';
+  }
+  document.getElementById('listing-save-retry-btn').addEventListener('click', retryListingSave);
+
+  function renderVersionSelect(versions, activeId) {
+    const select = document.getElementById('listing-version-select');
+    if (!versions || versions.length < 2) { select.style.display = 'none'; return; }
+    select.innerHTML = versions.map(v =>
+      `<option value="${v.id}"${String(v.id) === String(activeId) ? ' selected' : ''}>${formatListingDate(v.created_at)}</option>`
+    ).join('');
+    select.style.display = 'inline-block';
+  }
+
+  function fillListingOutput(snapshot) {
+    document.getElementById('out-listing').textContent = snapshot.listing || '';
+    document.getElementById('out-social').textContent = snapshot.social || '';
+    document.getElementById('out-email').textContent = snapshot.email || '';
+    document.getElementById('listing-placeholder').style.display = 'none';
+    document.getElementById('listing-output').style.display = 'block';
+  }
+
+  async function openListing(id) {
+    try {
+      const res = await fetch('/listings/' + id);
+      if (res.status === 401) { handle401(); return; }
+      if (!res.ok) return;
+      const data = await res.json();
+      const gen = data.generation;
+      if (!gen) return;
+      switchTool('listing');
+      resetListingOutputMeta();
+      fillListingOutput(gen.output_snapshot || {});
+      showListingSaved(gen.id, gen.created_at);
+      renderVersionSelect(data.versions, gen.id);
+      if (gen.input_snapshot) {
+        const form = document.getElementById('listing-form');
+        Object.entries(gen.input_snapshot).forEach(([key, value]) => {
+          const field = form.elements[key];
+          if (field && value != null) field.value = value;
+        });
+      }
+      renderSocialPostArea(gen);
+      renderEmailCampaignArea(gen);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch { /* non-fatal: leave current view as-is */ }
+  }
+  window.openListing = openListing;
+
+  document.getElementById('listing-version-select').addEventListener('change', e => {
+    if (e.target.value) openListing(e.target.value);
+  });
+
+  async function loadRecentListings() {
+    const listEl = document.getElementById('recent-listings-list');
+    try {
+      const res = await fetch('/listings/recent');
+      if (!res.ok) { listEl.innerHTML = ''; return; }
+      const data = await res.json();
+      const items = data.items || [];
+      if (!items.length) {
+        listEl.innerHTML = '<p class="muted" style="font-size:13px;">No listings generated yet. Fill in the form above to create your first one.</p>';
+        return;
+      }
+      listEl.innerHTML = items.map(item => `
+        <div class="recent-listing-row">
+          <div>
+            <div class="recent-listing-address">${escapeHtmlText(item.display_address)}</div>
+            <div class="recent-listing-meta">Generated ${formatListingDate(item.created_at)}</div>
+          </div>
+          <button type="button" class="btn secondary" onclick="openListing(${item.id})">Open</button>
+        </div>
+      `).join('');
+    } catch { listEl.innerHTML = ''; }
+  }
+
   document.getElementById('listing-form').addEventListener('submit', async e => {
     e.preventDefault();
     const btn = document.getElementById('listing-btn');
@@ -1167,15 +1353,179 @@
       const result = await res.json();
       if (!res.ok) { errEl.textContent = result.error; errEl.style.display = 'block'; }
       else {
-        document.getElementById('out-listing').textContent = result.listing;
-        document.getElementById('out-social').textContent = result.social;
-        document.getElementById('out-email').textContent = result.email;
-        document.getElementById('listing-placeholder').style.display = 'none';
-        document.getElementById('listing-output').style.display = 'block';
+        resetListingOutputMeta();
+        fillListingOutput(result);
+        if (result.generation_id) {
+          showListingSaved(result.generation_id, result.created_at);
+          renderSocialPostArea({ id: result.generation_id, social_content: result.social_content });
+          renderEmailCampaignArea({ id: result.generation_id });
+          loadRecentListings();
+        } else if (result.save_warning) {
+          showListingSaveWarning(result.save_retry_payload);
+          renderEmailCampaignArea(null);
+        }
       }
     } catch { errEl.textContent = 'Network error.'; errEl.style.display = 'block'; }
     btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Generate Content';
   });
+
+  async function renderSocialPostArea(generation) {
+    const area = document.getElementById('social-post-area');
+    if (!generation || !generation.id) { area.innerHTML = ''; return; }
+    area.innerHTML = '<p class="muted" style="font-size:12px;">Loading connected destinations...</p>';
+    try {
+      const res = await fetch('/social/default-channels');
+      if (res.status === 401) { handle401(); return; }
+      const data = await res.json();
+      const channels = data.channels || [];
+      const destLabel = channels.length
+        ? channels.map(c => `${escapeHtmlText(c.display_name || c.provider)} &#10003;`).join(', ')
+        : 'No social accounts connected yet.';
+      area.innerHTML = `
+        <div class="social-destinations">
+          <strong>Connected destinations:</strong> <span id="social-dest-list">${destLabel}</span>
+          ${!channels.length ? '<a href="/social/connections" style="margin-left:6px;">Connect an account &rarr;</a>' : ''}
+        </div>
+        <button type="button" class="btn primary" id="social-post-btn" ${channels.length ? '' : 'disabled'}>Post</button>
+        <div id="social-post-results"></div>
+      `;
+      document.getElementById('social-post-btn').addEventListener('click', () => runSocialPost(generation.id));
+    } catch {
+      area.innerHTML = '<p class="muted" style="font-size:12px;">Couldn\'t load connected destinations.</p>';
+    }
+  }
+
+  function renderEmailCampaignArea(generation) {
+    const area = document.getElementById('email-campaign-area');
+    if (!area) return;
+    if (!generation || !generation.id) {
+      area.innerHTML = '<button type="button" class="btn primary" disabled>Add to Email Campaign</button><span class="email-campaign-status">Save this generation before adding it to SendGrid.</span>';
+      return;
+    }
+    const campaign = generation.email_campaign || null;
+    if (!campaign) {
+      area.innerHTML = '<button type="button" class="btn primary" id="email-campaign-btn">Add to Email Campaign</button><span class="email-campaign-status">Creates an unscheduled SendGrid draft. Nothing is sent.</span>';
+      document.getElementById('email-campaign-btn').addEventListener('click', () => runEmailCampaignExport(generation.id, false));
+      return;
+    }
+    if (campaign.status === 'draft_created') {
+      area.innerHTML = `<span class="email-campaign-status success">&#10003; Added to Email Campaigns &middot; SendGrid draft created${campaign.created_at ? ' ' + escapeHtmlText(formatListingDate(campaign.created_at)) : ''}.</span><button type="button" class="btn secondary btn-sm" id="email-campaign-another-btn">Create Another Draft</button>`;
+      document.getElementById('email-campaign-another-btn').addEventListener('click', () => runEmailCampaignExport(generation.id, true));
+      return;
+    }
+    if (campaign.status === 'creating') {
+      area.innerHTML = '<button type="button" class="btn primary" disabled>Adding to SendGrid...</button><span class="email-campaign-status">Draft creation is in progress.</span>';
+      return;
+    }
+    const uncertain = campaign.status === 'unknown';
+    const message = campaign.error_summary || (uncertain
+      ? 'TopAI could not confirm whether SendGrid created the draft. Check SendGrid before creating another.'
+      : 'TopAI could not create the SendGrid draft.');
+    area.innerHTML = `<span class="email-campaign-status error">${escapeHtmlText(message)}</span><a class="btn secondary btn-sm" href="/integrations/email-marketing">Email Marketing Settings</a><button type="button" class="btn secondary btn-sm" id="email-campaign-another-btn">Create Another Draft</button>`;
+    document.getElementById('email-campaign-another-btn').addEventListener('click', () => runEmailCampaignExport(generation.id, true));
+  }
+
+  async function runEmailCampaignExport(generationId, createAnother) {
+    const area = document.getElementById('email-campaign-area');
+    area.innerHTML = '<button type="button" class="btn primary" disabled>Adding to SendGrid...</button><span class="email-campaign-status">Creating an unscheduled draft...</span>';
+    try {
+      const res = await fetch(`/listings/${generationId}/email-campaigns`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ create_another: Boolean(createAnother) })
+      });
+      if (res.status === 401) { handle401(); return; }
+      const data = await res.json();
+      if (data.status) {
+        renderEmailCampaignArea({ id: generationId, email_campaign: data });
+        if (data.status === 'draft_created' && data.has_recipients === false) {
+          const status = area.querySelector('.email-campaign-status');
+          if (status) status.textContent += ' Choose recipients in SendGrid before sending.';
+        }
+      } else {
+        area.innerHTML = `<span class="email-campaign-status error">${escapeHtmlText(data.error || 'TopAI could not create the SendGrid draft.')}</span><a class="btn secondary btn-sm" href="/integrations/email-marketing">Email Marketing Settings</a>`;
+      }
+    } catch {
+      area.innerHTML = '<span class="email-campaign-status error">Network error. TopAI could not confirm the draft state. Check SendGrid before trying again.</span>';
+    }
+  }
+
+  function socialOperationId() {
+    return (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : 'op-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+  }
+
+  function renderSocialPostResults(generationId, results) {
+    const resultsEl = document.getElementById('social-post-results');
+    if (!resultsEl) return;
+    if (!results.length) { resultsEl.innerHTML = ''; return; }
+    const succeeded = results.filter(r => r.status === 'published').length;
+    const summary = succeeded === results.length
+      ? `<p class="muted" style="font-size:12px;">Posted to ${succeeded} of ${results.length} channel${results.length > 1 ? 's' : ''}.</p>`
+      : `<p class="muted" style="font-size:12px;">Posted to ${succeeded} of ${results.length} channel${results.length > 1 ? 's' : ''}.</p>`;
+    resultsEl.innerHTML = summary + results.map(r => {
+      const name = escapeHtmlText(r.connection_display_name || r.provider);
+      if (r.status === 'published') {
+        const link = r.provider_post_url ? ` &middot; <a href="${r.provider_post_url}" target="_blank" rel="noopener">View post</a>` : '';
+        return `<div class="post-result-row"><span class="pill success">${name} &#10003;</span>${link}</div>`;
+      }
+      return `<div class="post-result-row"><span class="pill danger">${name} &#10007;</span> <span class="muted" style="font-size:12px;">${escapeHtmlText(r.error_summary || 'Failed to post.')}</span> <button type="button" class="btn secondary btn-sm" onclick="retrySocialPost(${generationId}, '${r.provider}')">Retry</button></div>`;
+    }).join('');
+  }
+
+  async function runSocialPost(generationId) {
+    const btn = document.getElementById('social-post-btn');
+    btn.disabled = true;
+    const originalLabel = btn.textContent;
+    btn.textContent = 'Posting...';
+    try {
+      const res = await fetch(`/listings/${generationId}/post`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ operation_id: socialOperationId() })
+      });
+      if (res.status === 401) { handle401(); return; }
+      const data = await res.json();
+      if (!res.ok) {
+        document.getElementById('social-post-results').innerHTML =
+          `<p class="muted" style="font-size:12px;color:#b91c1c;">${escapeHtmlText(data.error || 'Could not post.')}</p>`;
+      } else {
+        renderSocialPostResults(generationId, data.results || []);
+      }
+    } catch {
+      document.getElementById('social-post-results').innerHTML = '<p class="muted" style="font-size:12px;color:#b91c1c;">Network error.</p>';
+    }
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+  }
+  window.runSocialPost = runSocialPost;
+
+  async function retrySocialPost(generationId, provider) {
+    try {
+      const res = await fetch(`/listings/${generationId}/post/${provider}/retry`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ operation_id: socialOperationId() })
+      });
+      if (res.status === 401) { handle401(); return; }
+      const data = await res.json();
+      if (res.ok) {
+        const resultsEl = document.getElementById('social-post-results');
+        const rows = Array.from(resultsEl.querySelectorAll('.post-result-row'));
+        // Simplest correct redraw: just show the single updated result inline; full
+        // history remains visible above via existing rows for other providers.
+        const name = escapeHtmlText(data.connection_display_name || data.provider);
+        const html = data.status === 'published'
+          ? `<div class="post-result-row"><span class="pill success">${name} &#10003;</span>${data.provider_post_url ? ` &middot; <a href="${data.provider_post_url}" target="_blank" rel="noopener">View post</a>` : ''}</div>`
+          : `<div class="post-result-row"><span class="pill danger">${name} &#10007;</span> <span class="muted" style="font-size:12px;">${escapeHtmlText(data.error_summary || 'Failed to post.')}</span> <button type="button" class="btn secondary btn-sm" onclick="retrySocialPost(${generationId}, '${provider}')">Retry</button></div>`;
+        rows.forEach(row => { if (row.textContent.includes(name)) row.outerHTML = html; });
+      }
+    } catch { /* leave prior state visible */ }
+  }
+  window.retrySocialPost = retrySocialPost;
+
+  function openListingFromQueryParam() {
+    const params = new URLSearchParams(window.location.search);
+    const listingId = params.get('listing');
+    if (listingId) openListing(listingId);
+  }
 
   document.getElementById('script-form').addEventListener('submit', async e => {
     e.preventDefault();
@@ -1255,8 +1605,10 @@
     const spinner = document.getElementById('sms-generate-spinner');
     const label = document.getElementById('sms-generate-label');
     const errEl = document.getElementById('sms-error');
+    const successEl = document.getElementById('sms-success');
     const form = document.getElementById('sms-form');
     errEl.style.display = 'none';
+    if (successEl) successEl.style.display = 'none';
     btn.disabled = true; spinner.style.display = 'block'; label.textContent = 'Generating...';
     const data = Object.fromEntries(new FormData(form).entries());
     try {
@@ -1294,8 +1646,10 @@
     const spinner = document.getElementById('sms-send-spinner');
     const label = document.getElementById('sms-send-label');
     const errEl = document.getElementById('sms-error');
+    const successEl = document.getElementById('sms-success');
     const compliance = document.getElementById('sms-compliance-confirmed');
     errEl.style.display = 'none';
+    if (successEl) successEl.style.display = 'none';
     if (!compliance || !compliance.checked) {
       errEl.textContent = 'Certify contact SMS consent before sending.';
       errEl.style.display = 'block';
@@ -1315,6 +1669,10 @@
         errEl.textContent = result.warning;
         errEl.style.display = 'block';
       } else {
+        if (successEl) {
+          successEl.textContent = 'SMS sent.';
+          successEl.style.display = 'block';
+        }
         e.target.reset();
         updateSmsCharCount();
       }
@@ -1324,7 +1682,7 @@
       errEl.style.display = 'block';
       try {
         const status = await fetchJson('/sms/status', {cache: 'no-store'});
-        if (status) renderProviderStatus(status);
+        if (status) updateSmsTrialBanner(status);
       } catch (_ignore) {}
     }
     spinner.style.display = 'none'; label.textContent = 'Send SMS';

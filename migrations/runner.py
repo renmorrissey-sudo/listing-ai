@@ -43,7 +43,9 @@ MIGRATION_MODULES = [
     "migrations.versions.016_sms_worker_heartbeats",
     "migrations.versions.017_stripe_webhook_events",
     "migrations.versions.018_sms_ai_reply",
-    "migrations.versions.019_billing_subscription_fields",
+    "migrations.versions.019_listing_generations_and_social",
+    "migrations.versions.020_listing_email_campaigns",
+    "migrations.versions.021_billing_subscription_fields",
 ]
 
 # Required after 001_baseline. App has no separate accounts/tenants/subscriptions

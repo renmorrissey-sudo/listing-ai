@@ -63,6 +63,11 @@ STRIPE_PUBLISHABLE_KEY = _env_strip("STRIPE_PUBLISHABLE_KEY") or _env_strip(
 )
 STRIPE_WEBHOOK_SECRET = _env("STRIPE_WEBHOOK_SECRET")
 STRIPE_PRICE_ID = _env_strip("STRIPE_PRICE_ID")
+# Optional Stripe Payment Method Configuration with Card enabled and Link disabled.
+# When unset, Checkout falls back to payment_method_types=["card"].
+STRIPE_SUBSCRIPTION_PAYMENT_METHOD_CONFIGURATION = _env_strip(
+    "STRIPE_SUBSCRIPTION_PAYMENT_METHOD_CONFIGURATION"
+) or ""
 APP_URL = _env("APP_URL", "http://localhost:8080")
 
 # Public website copy. Keep these as constants so malformed host environment
@@ -194,6 +199,36 @@ SMS_IMPORT_UPLOAD_DIR = _env_strip("SMS_IMPORT_UPLOAD_DIR") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "private_uploads", "sms_imports"
 )
 SMS_IMPORT_MAX_BYTES = int(_env("SMS_IMPORT_MAX_BYTES", str(10 * 1024 * 1024)))
+
+# Listing Generator persistence (60-day workspace + archive).
+LISTING_GENERATION_RETENTION_DAYS = int(_env("LISTING_GENERATION_RETENTION_DAYS", "60"))
+
+# Social Media Connections — OAuth token encryption + per-provider app credentials.
+# SOCIAL_TOKEN_ENCRYPTION_KEY must be a urlsafe-base64 Fernet key (cryptography.fernet.Fernet.generate_key()).
+SOCIAL_TOKEN_ENCRYPTION_KEY = _env_strip("SOCIAL_TOKEN_ENCRYPTION_KEY") or ""
+# Tenant-owned integration credentials (currently SendGrid Marketing). A
+# separate key is preferred; falling back preserves compatibility for
+# installations that already provisioned the social-token Fernet key.
+INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = (
+    _env_strip("INTEGRATION_CREDENTIAL_ENCRYPTION_KEY")
+    or SOCIAL_TOKEN_ENCRYPTION_KEY
+)
+APP_BASE_URL = (_env_strip("APP_BASE_URL") or _env_strip("APP_URL") or "http://localhost:8080").rstrip("/")
+
+LINKEDIN_CLIENT_ID = _env_strip("LINKEDIN_CLIENT_ID") or ""
+LINKEDIN_CLIENT_SECRET = _env_strip("LINKEDIN_CLIENT_SECRET") or ""
+
+# Shared Meta app credentials power both Facebook Page and Instagram professional-account posting.
+FACEBOOK_APP_ID = _env_strip("FACEBOOK_APP_ID") or ""
+FACEBOOK_APP_SECRET = _env_strip("FACEBOOK_APP_SECRET") or ""
+# Flip to true only after Meta App Review + Business Verification are approved for
+# pages_manage_posts / instagram_content_publish in production.
+META_APP_REVIEW_APPROVED = _env_bool("META_APP_REVIEW_APPROVED", False)
+
+TIKTOK_CLIENT_KEY = _env_strip("TIKTOK_CLIENT_KEY") or ""
+TIKTOK_CLIENT_SECRET = _env_strip("TIKTOK_CLIENT_SECRET") or ""
+# Flip to true only after TikTok's unaudited-app user cap is lifted via app audit.
+TIKTOK_AUDIT_APPROVED = _env_bool("TIKTOK_AUDIT_APPROVED", False)
 
 # Skip subscription checks locally when Stripe is not configured.
 SUBSCRIPTION_REQUIRED = _env("SUBSCRIPTION_REQUIRED", "true").lower() == "true"

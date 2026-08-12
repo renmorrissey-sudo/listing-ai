@@ -15,6 +15,23 @@
       }
     });
   })();
+  (function initAccountMenu() {
+    const menu = document.getElementById('account-menu');
+    if (!menu) return;
+    document.addEventListener('click', (event) => {
+      if (menu.open && !menu.contains(event.target)) menu.removeAttribute('open');
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && menu.open) {
+        menu.removeAttribute('open');
+        const summary = menu.querySelector('summary');
+        if (summary) summary.focus();
+      }
+    });
+    menu.querySelectorAll('a').forEach(link => {
+      link.addEventListener('click', () => menu.removeAttribute('open'));
+    });
+  })();
   async function doLogout() {
     await fetch('/logout', { method: 'POST' });
     window.location.href = '/';

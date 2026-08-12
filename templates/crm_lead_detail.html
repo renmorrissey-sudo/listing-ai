@@ -28,14 +28,14 @@
       <div class="card" style="margin-top:12px;background:#f8fafc;">
         <h2 style="margin-top:0;font-size:16px;">SMS consent</h2>
         <div class="row" style="gap:8px;flex-wrap:wrap;">
-          <span class="pill">{% if lead.sms_consent_status == 'verified' %}Verified{% elif lead.sms_consent_status == 'opted_out' %}Opted out{% elif lead.sms_consent_status == 'not_permitted' %}Not permitted{% elif lead.sms_consent_status == 'revoked' %}Revoked{% else %}Unverified{% endif %}</span>
+          <span class="pill {% if not sms_consent_is_certified(lead.sms_consent_status) %}warn{% endif %}">{{ sms_consent_label(lead.sms_consent_status) }}</span>
           {% if lead.sms_sending_blocked %}<span class="pill danger">SMS Blocked</span>{% else %}<span class="pill">SMS Enabled</span>{% endif %}
           {% if lead.external_source_id or (lead.source or '').startswith('external:') %}
           <span class="pill">External source</span>
           {% endif %}
           {% if lead.pond_status %}<span class="pill">Pond: {{ lead.pond_status }}</span>{% endif %}
         </div>
-        {% if lead.sms_consent_status != 'verified' or lead.sms_sending_blocked %}
+        {% if not sms_consent_is_certified(lead.sms_consent_status) or lead.sms_sending_blocked %}
         <p class="muted" style="margin:8px 0 0;">SMS cannot be sent until consent is verified. Claiming or assigning this lead does not grant permission to text.</p>
         {% endif %}
         {% if external_source %}<p class="muted" style="margin:6px 0 0;">Source: {{ external_source.name }}{% if lead.external_record_id %} · record {{ lead.external_record_id }}{% endif %}</p>{% endif %}
