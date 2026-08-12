@@ -120,7 +120,7 @@ def test_auth_subscribed_header_open_tools_manage_billing(app_client, two_users,
     assert "Sign in" not in html
     assert "Start trial" not in html
     assert 'href="/app"' in html
-    assert 'href="/billing/portal"' in html
+    assert 'href="/billing"' in html
 
 
 def test_auth_unsubscribed_header_keeps_subscribe(app_client, two_users, monkeypatch):

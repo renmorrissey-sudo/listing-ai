@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Billing - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+  <style>
+    .billing-panel {
+      background: #fff;
+      border: 1px solid #e5ebf5;
+      border-radius: 12px;
+      padding: 22px;
+      box-shadow: 0 1px 5px rgba(0,0,0,0.06);
+      max-width: 720px;
+    }
+    .billing-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px 20px;
+      margin: 18px 0 22px;
+    }
+    .billing-field .label {
+      font-size: 11px;
+      font-weight: 700;
+      color: #667;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    .billing-field .value {
+      font-size: 16px;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-top: 4px;
+    }
+    .status-pill {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .status-active, .status-trialing { background: #ecfdf5; color: #065f46; }
+    .status-past_due, .status-unpaid, .status-incomplete { background: #fff7ed; color: #9a3412; }
+    .status-canceled, .status-none, .status-paused { background: #f1f5f9; color: #475569; }
+    .billing-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 8px; }
+    .btn-manage {
+      display: inline-block;
+      background: #1e3a8a;
+      color: #fff !important;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 15px;
+      padding: 14px 22px;
+      border-radius: 10px;
+      border: none;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(30, 58, 138, 0.25);
+    }
+    .btn-manage:hover { background: #1e40af; }
+    .btn-manage:disabled { opacity: 0.65; cursor: wait; }
+    .btn-secondary {
+      display: inline-block;
+      background: #f8fafc;
+      color: #1e3a8a !important;
+      border: 1px solid #c7dbff;
+      text-decoration: none;
+      font-weight: 650;
+      font-size: 14px;
+      padding: 12px 18px;
+      border-radius: 10px;
+    }
+    .billing-alert {
+      background: #fff7ed;
+      border: 1px solid #fdba74;
+      color: #9a3412;
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin: 0 0 18px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .billing-muted {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin: 0 0 18px;
+      font-size: 14px;
+      color: #334155;
+    }
+    .billing-error {
+      color: #b91c1c;
+      font-size: 14px;
+      margin-top: 12px;
+      display: none;
+    }
+    .billing-hint { font-size: 13px; color: #64748b; margin-top: 14px; line-height: 1.45; }
+    @media (max-width: 700px) {
+      .billing-grid { grid-template-columns: 1fr; }
+      .billing-panel { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+  {% set page_tagline = 'Billing & subscription' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <h1>Billing</h1>
+    <p class="muted">View your TopAI subscription. Payment methods, invoices, and cancellations are managed securely in the Stripe Customer Portal.</p>
+
+    {% if billing.payment_action_required and billing.warning_message %}
+    <div class="billing-alert" role="alert">{{ billing.warning_message }}</div>
+    {% endif %}
+
+    {% if not billing.has_stripe_customer %}
+    <div class="billing-muted" role="status">
+      No Stripe billing account is linked to this login yet. Subscribe to activate your plan, then you can manage payment methods and invoices here.
+    </div>
+    <div class="billing-actions">
+      <a class="btn-manage" href="/subscribe">Subscribe</a>
+    </div>
+    {% else %}
+    <section class="billing-panel" aria-label="Subscription details">
+      <div class="billing-grid">
+        <div class="billing-field">
+          <div class="label">Current plan</div>
+          <div class="value">{{ billing.plan_name }}</div>
+        </div>
+        <div class="billing-field">
+          <div class="label">Subscription status</div>
+          <div class="value">
+            <span class="status-pill status-{{ billing.status }}">{{ billing.status_label }}</span>
+          </div>
+        </div>
+        <div class="billing-field">
+          <div class="label">Monthly price</div>
+          <div class="value">{{ billing.monthly_price }}</div>
+        </div>
+        <div class="billing-field">
+          <div class="label">Next billing / renewal</div>
+          <div class="value">{% if billing.renewal_date %}{{ billing.renewal_date }}{% else %}Not available{% endif %}</div>
+        </div>
+        <div class="billing-field">
+          <div class="label">Stripe customer email</div>
+          <div class="value">{{ billing.customer_email }}</div>
+        </div>
+        <div class="billing-field">
+          <div class="label">Payment status</div>
+          <div class="value">{{ billing.payment_status }}</div>
+        </div>
+      </div>
+
+      <div class="billing-actions">
+        <button type="button" class="btn-manage" id="manage-billing-btn">Manage Billing</button>
+        <a class="btn-secondary" href="/dashboard">Back to Dashboard</a>
+      </div>
+      <p class="billing-error" id="billing-portal-error" role="alert"></p>
+      <p class="billing-hint">
+        Manage Billing opens the Stripe Customer Portal where you can change your payment method,
+        view invoices, download receipts, update billing details, or cancel your subscription.
+        TopAI does not store or process card numbers on this site.
+      </p>
+    </section>
+    {% endif %}
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+  <script>
+    (function () {
+      var btn = document.getElementById("manage-billing-btn");
+      if (!btn) return;
+      var errEl = document.getElementById("billing-portal-error");
+      btn.addEventListener("click", function () {
+        btn.disabled = true;
+        if (errEl) { errEl.style.display = "none"; errEl.textContent = ""; }
+        fetch("/api/billing/create-portal-session", {
+          method: "POST",
+          headers: { "Accept": "application/json", "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: "{}"
+        }).then(function (res) {
+          return res.json().then(function (data) {
+            return { ok: res.ok, status: res.status, data: data };
+          });
+        }).then(function (result) {
+          if (result.ok && result.data && result.data.url) {
+            window.location.href = result.data.url;
+            return;
+          }
+          var msg = (result.data && result.data.message) || "Could not open the billing portal.";
+          if (result.data && result.data.error === "no_customer" && result.data.subscribe_url) {
+            msg = result.data.message;
+          }
+          if (errEl) {
+            errEl.textContent = msg;
+            errEl.style.display = "block";
+          }
+          btn.disabled = false;
+        }).catch(function () {
+          if (errEl) {
+            errEl.textContent = "Could not open the billing portal. Please try again.";
+            errEl.style.display = "block";
+          }
+          btn.disabled = false;
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

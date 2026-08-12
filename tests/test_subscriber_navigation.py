@@ -21,6 +21,8 @@ APP_NAV_LINKS = [
     ("Cold Call Scripts", "/app#coldcall"),
     ("AI Calling Assistant", "/app#voice"),
     ("AI SMS Assistant", "/app#sms"),
+    ("Bulk SMS", "/crm/sms-campaigns"),
+    ("Billing", "/billing"),
     ("Tutorial", "/tutorial"),
 ]
 

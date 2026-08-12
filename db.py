@@ -217,17 +217,53 @@ def get_user_by_stripe_customer(customer_id):
         return dict(row) if row else None
 
 
-def update_user_subscription(user_id, status, subscription_id=None, stripe_customer_id=None):
+def update_user_subscription(
+    user_id,
+    status,
+    subscription_id=None,
+    stripe_customer_id=None,
+    *,
+    stripe_price_id=None,
+    current_period_end=None,
+    payment_action_required=None,
+    last_payment_error=None,
+    clear_payment_error=False,
+):
+    """Update subscription fields. Optional kwargs only overwrite when provided.
+
+    clear_payment_error=True clears payment_action_required and last_payment_error
+    (used after successful invoice.paid / recovered subscription).
+    """
+    sets = [
+        "subscription_status = ?",
+        "subscription_id = COALESCE(?, subscription_id)",
+        "stripe_customer_id = COALESCE(?, stripe_customer_id)",
+    ]
+    params = [status, subscription_id, stripe_customer_id]
+
+    if stripe_price_id is not None:
+        sets.append("stripe_price_id = ?")
+        params.append(stripe_price_id)
+    if current_period_end is not None:
+        sets.append("subscription_current_period_end = ?")
+        params.append(int(current_period_end) if current_period_end else None)
+    if clear_payment_error:
+        sets.append("payment_action_required = ?")
+        params.append(bind_bool(False))
+        sets.append("last_payment_error = NULL")
+    else:
+        if payment_action_required is not None:
+            sets.append("payment_action_required = ?")
+            params.append(bind_bool(payment_action_required))
+        if last_payment_error is not None:
+            sets.append("last_payment_error = ?")
+            params.append(last_payment_error or None)
+
+    params.append(user_id)
     with get_db() as conn:
         conn.execute(
-            """
-            UPDATE users
-            SET subscription_status = ?,
-                subscription_id = COALESCE(?, subscription_id),
-                stripe_customer_id = COALESCE(?, stripe_customer_id)
-            WHERE id = ?
-            """,
-            (status, subscription_id, stripe_customer_id, user_id),
+            f"UPDATE users SET {', '.join(sets)} WHERE id = ?",
+            tuple(params),
         )
 
 
@@ -236,6 +272,38 @@ def set_stripe_customer(user_id, stripe_customer_id):
         conn.execute(
             "UPDATE users SET stripe_customer_id = ? WHERE id = ?",
             (stripe_customer_id, user_id),
+        )
+
+
+def flag_payment_action_required(user_id, error_code=None):
+    """Mark account past-due / payment action required without wiping other fields."""
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE users
+            SET payment_action_required = ?,
+                last_payment_error = COALESCE(?, last_payment_error),
+                subscription_status = CASE
+                    WHEN subscription_status IN ('active', 'trialing', 'none')
+                    THEN 'past_due'
+                    ELSE subscription_status
+                END
+            WHERE id = ?
+            """,
+            (bind_bool(True), error_code, user_id),
+        )
+
+
+def clear_payment_action_required(user_id):
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE users
+            SET payment_action_required = ?,
+                last_payment_error = NULL
+            WHERE id = ?
+            """,
+            (bind_bool(False), user_id),
         )
 
 

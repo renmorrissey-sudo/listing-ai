@@ -34,12 +34,24 @@ def normalize_email(email: str | None) -> str:
 
 
 def stripe_status_from_subscription(subscription):
-    status = _sub_get(subscription, "status") or "none"
-    if status in ("active", "trialing"):
-        return "active"
-    if status in ("canceled", "unpaid", "incomplete_expired"):
+    """Map Stripe subscription.status to local subscription_status.
+
+    Keep past_due / unpaid / incomplete / paused so billing recovery UI works.
+    Store trialing distinctly for the Billing page (access still granted).
+    """
+    status = (_sub_get(subscription, "status") or "none").lower()
+    if status in ("canceled", "incomplete_expired"):
         return "canceled"
-    return status
+    if status in (
+        "active",
+        "trialing",
+        "past_due",
+        "unpaid",
+        "incomplete",
+        "paused",
+    ):
+        return status
+    return status or "none"
 
 
 def stripe_key_mode(secret_key: str | None = None) -> str:
@@ -198,7 +210,7 @@ def classify_subscription(subscription) -> dict:
 
 def _gate_from_local_status(local_status: str | None) -> dict | None:
     status = (local_status or "none").lower()
-    if status == "active":
+    if status in ("active", "trialing"):
         return {
             "can_checkout": False,
             "state": "active",
@@ -221,7 +233,7 @@ def _gate_from_local_status(local_status: str | None) -> dict | None:
             "message": labels[status],
             "access_ends_on": None,
             "show_manage_billing": True,
-            "show_open_tools": False,
+            "show_open_tools": status == "past_due",
             "redirect": None,
         }
     return None
@@ -356,6 +368,281 @@ def auth_free_access(user) -> bool:
     return bool(email and email in getattr(config, "FREE_ACCESS_EMAILS", set()))
 
 
+# Payment failure codes that mean the saved method must be replaced (not a soft retry).
+PAYMENT_METHOD_UPDATE_CODES = frozenset(
+    {
+        "link_connection_closed",
+        "payment_method_unavailable",
+        "payment_method_provider_decline",
+        "expired_card",
+        "card_declined",
+        "incorrect_cvc",
+        "incorrect_number",
+        "invalid_card_type",
+        "invalid_cvc",
+        "invalid_expiry_month",
+        "invalid_expiry_year",
+        "invalid_number",
+        "lost_card",
+        "stolen_card",
+        "authentication_required",
+    }
+)
+
+PAYMENT_METHOD_UPDATE_MESSAGE = (
+    "Your saved payment method needs to be updated. "
+    "Update your payment method to continue your TopAI subscription."
+)
+
+
+def billing_portal_return_url() -> str:
+    """Return URL after Stripe Customer Portal. Production uses the public www host."""
+    if getattr(config, "IS_PRODUCTION", False):
+        return "https://www.topairealestatetools.com/billing"
+    return f"{(config.APP_URL or 'http://localhost:8080').rstrip('/')}/billing"
+
+
+def extract_subscription_fields(subscription) -> dict:
+    """Pull id, status, price id, and period end from a Stripe Subscription object/dict."""
+    sub_id = _sub_get(subscription, "id")
+    status = stripe_status_from_subscription(subscription)
+    period_end = _sub_get(subscription, "current_period_end")
+    price_id = None
+    items = _sub_get(subscription, "items")
+    data = None
+    if items is not None:
+        if isinstance(items, dict):
+            data = items.get("data") or []
+        else:
+            data = getattr(items, "data", None) or []
+    if data:
+        first = data[0]
+        price = _sub_get(first, "price")
+        if price is not None:
+            price_id = _sub_get(price, "id") if not isinstance(price, str) else price
+        if not price_id:
+            price_id = _sub_get(first, "price")
+            if isinstance(price_id, dict):
+                price_id = price_id.get("id")
+    return {
+        "subscription_id": sub_id,
+        "status": status,
+        "stripe_price_id": price_id,
+        "current_period_end": period_end,
+    }
+
+
+def payment_error_code_from_stripe_object(obj) -> str | None:
+    """Best-effort decline/error code from Invoice or PaymentIntent payload."""
+    if not obj:
+        return None
+    if isinstance(obj, dict):
+        getter = obj.get
+    else:
+        getter = lambda k, d=None: getattr(obj, k, d)
+
+    # Invoice: last_payment_error on the PaymentIntent, or charge outcome
+    last_err = getter("last_payment_error")
+    if last_err:
+        code = _sub_get(last_err, "code") or _sub_get(last_err, "decline_code")
+        if code:
+            return str(code)
+
+    # Nested payment_intent on invoice
+    pi = getter("payment_intent")
+    if isinstance(pi, dict):
+        err = pi.get("last_payment_error") or {}
+        code = err.get("code") or err.get("decline_code")
+        if code:
+            return str(code)
+
+    # invoice.charge → outcome.reason sometimes
+    outcome = getter("outcome")
+    if outcome:
+        reason = _sub_get(outcome, "reason") or _sub_get(outcome, "type")
+        if reason:
+            return str(reason)
+    return None
+
+
+def payment_failure_user_message(error_code: str | None) -> str:
+    code = (error_code or "").strip().lower()
+    if code in PAYMENT_METHOD_UPDATE_CODES or not code:
+        return PAYMENT_METHOD_UPDATE_MESSAGE
+    return PAYMENT_METHOD_UPDATE_MESSAGE
+
+
+def status_display_label(status: str | None) -> str:
+    labels = {
+        "active": "Active",
+        "trialing": "Trialing",
+        "past_due": "Past Due",
+        "canceled": "Canceled",
+        "unpaid": "Unpaid",
+        "incomplete": "Incomplete",
+        "paused": "Paused",
+        "none": "None",
+    }
+    key = (status or "none").lower()
+    return labels.get(key, (status or "Unknown").replace("_", " ").title())
+
+
+def build_billing_summary(user) -> dict:
+    """Assemble Billing page fields from local DB (optionally enriched by Stripe)."""
+    status = (user.get("subscription_status") or "none").lower()
+    period_end = user.get("subscription_current_period_end")
+    price_id = user.get("stripe_price_id") or config.STRIPE_PRICE_ID
+    payment_action = bool(user.get("payment_action_required"))
+    last_error = user.get("last_payment_error")
+    customer_id = user.get("stripe_customer_id")
+
+    if payment_action or status in ("past_due", "unpaid"):
+        payment_status = "Payment action required"
+        warning = payment_failure_user_message(last_error)
+    elif status in ("active", "trialing"):
+        payment_status = "Paid"
+        warning = None
+    elif status == "canceled":
+        payment_status = "Canceled"
+        warning = None
+    elif status == "incomplete":
+        payment_status = "Checkout incomplete"
+        warning = None
+    else:
+        payment_status = "No active subscription"
+        warning = None
+
+    plan_name = "TopAI Monthly"
+    monthly_price = config.SUBSCRIPTION_PRICE
+
+    return {
+        "plan_name": plan_name,
+        "status": status,
+        "status_label": status_display_label(status),
+        "monthly_price": monthly_price,
+        "stripe_price_id": price_id,
+        "renewal_date": format_period_end(period_end),
+        "current_period_end": period_end,
+        "customer_email": user.get("email"),
+        "stripe_customer_id": customer_id,
+        "has_stripe_customer": bool(customer_id),
+        "payment_status": payment_status,
+        "payment_action_required": payment_action or status in ("past_due", "unpaid"),
+        "warning_message": warning,
+        "last_payment_error": last_error,
+        "subscription_id": user.get("subscription_id"),
+    }
+
+
+def create_billing_portal_session(user, *, return_url: str | None = None):
+    """
+    Create a Stripe Billing Portal session for the authenticated user.
+
+    Customer ID is ALWAYS taken from the database user row — never from the request.
+    Returns (portal_url, error_code, http_status).
+    error_code: None on success; 'no_customer' | 'not_configured' | 'stripe_error'
+    """
+    if not user:
+        return None, "unauthorized", 401
+    if not config.STRIPE_SECRET_KEY:
+        return None, "not_configured", 503
+    customer_id = user.get("stripe_customer_id")
+    if not customer_id:
+        return None, "no_customer", 400
+    url = return_url or billing_portal_return_url()
+    try:
+        portal = stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=url,
+        )
+        return portal.url, None, 200
+    except stripe.StripeError:
+        logger.exception(
+            "Failed creating billing portal session for user_id=%s", user.get("id")
+        )
+        return None, "stripe_error", 502
+
+
+def apply_subscription_to_user(user_id, subscription, *, stripe_customer_id=None):
+    """Persist subscription fields from a Stripe Subscription object."""
+    fields = extract_subscription_fields(subscription)
+    status = fields["status"]
+    clear_err = status in ("active", "trialing")
+    db.update_user_subscription(
+        user_id,
+        status,
+        subscription_id=fields["subscription_id"],
+        stripe_customer_id=stripe_customer_id,
+        stripe_price_id=fields.get("stripe_price_id"),
+        current_period_end=fields.get("current_period_end"),
+        clear_payment_error=clear_err,
+        payment_action_required=(False if clear_err else None),
+    )
+    return fields
+
+
+def handle_invoice_payment_failed(invoice) -> bool:
+    """Flag past_due / payment action required. Does not disable the account."""
+    customer_id = _sub_get(invoice, "customer")
+    if not customer_id:
+        return False
+    user = db.get_user_by_stripe_customer(customer_id)
+    if not user:
+        return False
+    error_code = payment_error_code_from_stripe_object(invoice)
+    db.flag_payment_action_required(user["id"], error_code)
+    sub_id = _sub_get(invoice, "subscription")
+    if sub_id:
+        db.update_user_subscription(
+            user["id"],
+            "past_due",
+            subscription_id=sub_id if isinstance(sub_id, str) else _sub_get(sub_id, "id"),
+            payment_action_required=True,
+            last_payment_error=error_code,
+        )
+    return True
+
+
+def handle_invoice_paid(invoice) -> bool:
+    customer_id = _sub_get(invoice, "customer")
+    if not customer_id:
+        return False
+    user = db.get_user_by_stripe_customer(customer_id)
+    if not user:
+        return False
+    sub_id = _sub_get(invoice, "subscription")
+    if sub_id and config.STRIPE_SECRET_KEY:
+        try:
+            sub = stripe.Subscription.retrieve(
+                sub_id if isinstance(sub_id, str) else _sub_get(sub_id, "id")
+            )
+            apply_subscription_to_user(
+                user["id"], sub, stripe_customer_id=customer_id
+            )
+            return True
+        except stripe.StripeError:
+            logger.exception("Failed retrieving subscription after invoice.paid")
+    db.update_user_subscription(
+        user["id"],
+        "active",
+        subscription_id=sub_id if isinstance(sub_id, str) else None,
+        clear_payment_error=True,
+    )
+    return True
+
+
+def handle_payment_intent_failed(payment_intent) -> bool:
+    customer_id = _sub_get(payment_intent, "customer")
+    if not customer_id:
+        return False
+    user = db.get_user_by_stripe_customer(customer_id)
+    if not user:
+        return False
+    error_code = payment_error_code_from_stripe_object(payment_intent)
+    db.flag_payment_action_required(user["id"], error_code)
+    return True
+
+
 def sync_user_from_stripe(user, email):
     if not config.STRIPE_SECRET_KEY:
         return
@@ -363,14 +650,11 @@ def sync_user_from_stripe(user, email):
     if not customer:
         return
     db.set_stripe_customer(user["id"], customer.id)
-    for status in ("active", "trialing"):
+    for status in ("active", "trialing", "past_due"):
         subs = stripe.Subscription.list(customer=customer.id, status=status, limit=1)
         if subs.data:
-            db.update_user_subscription(
-                user["id"],
-                stripe_status_from_subscription(subs.data[0]),
-                subscription_id=subs.data[0].id,
-                stripe_customer_id=customer.id,
+            apply_subscription_to_user(
+                user["id"], subs.data[0], stripe_customer_id=customer.id
             )
             return
 
@@ -411,7 +695,10 @@ def create_subscription_checkout_session(
     cancel_url: str,
     idempotency_key: str | None = None,
 ):
-    """Create a Stripe Checkout Session for subscription. Does not charge until paid."""
+    """Create a Stripe Checkout Session for subscription. Does not charge until paid.
+
+    Primary payment options are limited to card and Link (no Klarna / Cash App / Amazon Pay).
+    """
     import registration_gate
 
     # Enforce before any Stripe Customer or Checkout Session mutation.
@@ -428,6 +715,8 @@ def create_subscription_checkout_session(
         client_reference_id=str(user["id"]),
         metadata={"user_id": str(user["id"])},
         allow_promotion_codes=True,
+        # Limit wallets / BNPL so Link disconnects and card issues surface clearly.
+        payment_method_types=["card", "link"],
     )
     key = idempotency_key or checkout_idempotency_key(user["id"])
     return stripe.checkout.Session.create(**params, idempotency_key=key)

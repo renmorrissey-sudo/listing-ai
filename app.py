@@ -100,6 +100,7 @@ def inject_business_context():
         "is_public_marketing_page": seo.is_public_marketing_path(path),
         "current_user": user,
         "user_subscribed": bool(user and auth.user_has_active_subscription(user)),
+        "needs_billing_attention": bool(user and auth.user_needs_billing_attention(user)),
         "registration_enabled": registration_gate.registration_is_open(),
         "registration_can_signup": can_signup,
         "registration_cta_href": "/subscribe" if can_signup else "/private-beta",
@@ -269,15 +270,20 @@ def _extract_section(text, start_marker, end_marker):
 
 
 from stripe_billing import (
+    apply_subscription_to_user as _apply_subscription_to_user,
     billing_config_error as _billing_config_error,
     billing_is_configured as _billing_is_configured,
+    build_billing_summary as _build_billing_summary,
     checkout_idempotency_key as _checkout_idempotency_key,
+    create_billing_portal_session as _create_billing_portal_session,
     create_subscription_checkout_session as _create_subscription_checkout_session,
+    handle_invoice_paid as _handle_invoice_paid,
+    handle_invoice_payment_failed as _handle_invoice_payment_failed,
+    handle_payment_intent_failed as _handle_payment_intent_failed,
     normalize_email as _normalize_email,
     resolve_subscribe_gate as _resolve_subscribe_gate,
     stripe_customer_for_email as _stripe_customer_for_email,
     stripe_has_active_subscription as _stripe_has_active_subscription,
-    stripe_status_from_subscription as _stripe_status_from_subscription,
     sync_user_from_stripe as _sync_user_from_stripe,
 )
 
@@ -735,6 +741,23 @@ def logout():
     return jsonify({"ok": True})
 
 
+@app.route("/billing")
+@auth.login_required
+def billing():
+    """Subscriber billing overview. Card/invoice management stays in Stripe Portal."""
+    user = auth.get_current_user()
+    summary = _build_billing_summary(user)
+    return render_template(
+        "billing.html",
+        email=user["email"],
+        has_billing_portal=bool(user.get("stripe_customer_id")),
+        needs_billing_attention=auth.user_needs_billing_attention(user),
+        active_nav="billing",
+        billing=summary,
+        subscription_price=config.SUBSCRIPTION_PRICE,
+    )
+
+
 @app.route("/billing/success")
 def billing_success():
     """Checkout return URL. Access is granted only by the verified Stripe webhook."""
@@ -754,14 +777,43 @@ def billing_success():
 @app.route("/billing/portal")
 @auth.login_required
 def billing_portal():
+    """Legacy GET redirect into Stripe Customer Portal (customer ID from session user only)."""
     user = auth.get_current_user()
-    if not user.get("stripe_customer_id") or not config.STRIPE_SECRET_KEY:
-        return redirect(url_for("subscribe"))
-    portal = stripe.billing_portal.Session.create(
-        customer=user["stripe_customer_id"],
-        return_url=f"{config.APP_URL}/",
-    )
-    return redirect(portal.url, code=303)
+    url, err, _status = _create_billing_portal_session(user)
+    if err == "no_customer" or err == "not_configured":
+        return redirect(url_for("billing"))
+    if err:
+        return redirect(url_for("billing"))
+    return redirect(url, code=303)
+
+
+@app.route("/api/billing/create-portal-session", methods=["POST"])
+@auth.login_required
+def create_billing_portal_session_api():
+    """Create a Stripe Billing Portal session for the authenticated user only."""
+    user = auth.get_current_user()
+    # Never accept stripe_customer_id from the client — look it up on the user row.
+    url, err, status = _create_billing_portal_session(user)
+    if err == "no_customer":
+        return jsonify({
+            "error": "no_customer",
+            "message": (
+                "No Stripe billing account is linked to your TopAI login yet. "
+                "Subscribe to create one, then you can manage payment methods and invoices."
+            ),
+            "subscribe_url": "/subscribe",
+        }), 400
+    if err == "not_configured":
+        return jsonify({
+            "error": "not_configured",
+            "message": "Billing is temporarily unavailable. Please try again later.",
+        }), 503
+    if err:
+        return jsonify({
+            "error": "portal_unavailable",
+            "message": "Could not open the billing portal. Please try again.",
+        }), status
+    return jsonify({"url": url}), 200
 
 
 @app.route("/webhook/stripe", methods=["POST"])
@@ -791,24 +843,57 @@ def stripe_webhook():
         user_id = data.get("client_reference_id") or (data.get("metadata") or {}).get("user_id")
         if user_id and data.get("subscription"):
             sub = stripe.Subscription.retrieve(data["subscription"])
-            sub_id = sub["id"] if isinstance(sub, dict) else sub.id
-            db.update_user_subscription(
+            _apply_subscription_to_user(
                 int(user_id),
-                _stripe_status_from_subscription(sub),
-                subscription_id=sub_id,
+                sub,
                 stripe_customer_id=data.get("customer"),
             )
 
-    elif event_type in ("customer.subscription.updated", "customer.subscription.deleted"):
+    elif event_type == "customer.subscription.created":
         customer_id = data.get("customer")
         user = db.get_user_by_stripe_customer(customer_id) if customer_id else None
         if user:
-            status = (
-                "canceled"
-                if event_type == "customer.subscription.deleted"
-                else _stripe_status_from_subscription(data)
+            _apply_subscription_to_user(
+                user["id"], data, stripe_customer_id=customer_id
             )
-            db.update_user_subscription(user["id"], status, subscription_id=data.get("id"))
+        else:
+            # Link via checkout metadata / client_reference when customer row not yet set
+            meta = data.get("metadata") or {}
+            uid = meta.get("user_id")
+            if uid:
+                _apply_subscription_to_user(
+                    int(uid), data, stripe_customer_id=customer_id
+                )
+
+    elif event_type == "customer.subscription.updated":
+        customer_id = data.get("customer")
+        user = db.get_user_by_stripe_customer(customer_id) if customer_id else None
+        if user:
+            _apply_subscription_to_user(
+                user["id"], data, stripe_customer_id=customer_id
+            )
+
+    elif event_type == "customer.subscription.deleted":
+        customer_id = data.get("customer")
+        user = db.get_user_by_stripe_customer(customer_id) if customer_id else None
+        if user:
+            db.update_user_subscription(
+                user["id"],
+                "canceled",
+                subscription_id=data.get("id"),
+                current_period_end=data.get("current_period_end"),
+                clear_payment_error=True,
+            )
+
+    elif event_type == "invoice.paid":
+        _handle_invoice_paid(data)
+
+    elif event_type == "invoice.payment_failed":
+        # Flag past_due / payment action required — do not wipe the account.
+        _handle_invoice_payment_failed(data)
+
+    elif event_type == "payment_intent.payment_failed":
+        _handle_payment_intent_failed(data)
 
     return jsonify({"received": True}), 200
 

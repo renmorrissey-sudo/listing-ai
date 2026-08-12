@@ -216,6 +216,8 @@
   <a class="tool-nav-btn nav-subscriber" id="crm-followups-tool-link" href="/crm/follow-ups" style="display:none; text-decoration:none;">Follow-ups</a>
   <a class="tool-nav-btn nav-subscriber" id="crm-tasks-tool-link" href="/crm/tasks" style="display:none; text-decoration:none;">Tasks</a>
   <a class="tool-nav-btn nav-subscriber" id="crm-needs-tool-link" href="/crm/needs-attention" style="display:none; text-decoration:none;">Needs Attention</a>
+  <a class="tool-nav-btn nav-subscriber" id="bulk-sms-tool-link" href="/crm/sms-campaigns" style="display:none; text-decoration:none;">Bulk SMS</a>
+  <a class="tool-nav-btn nav-subscriber" id="billing-tool-link" href="/billing" style="display:none; text-decoration:none;">Billing</a>
   <a class="tool-nav-btn nav-subscriber" id="tutorial-tool-link" href="/tutorial" style="display:none; text-decoration:none;">Tutorial</a>
 </nav>
 
@@ -445,7 +447,7 @@
   function showLoggedIn(email, hasBillingPortal) {
     document.getElementById('gate').classList.add('hidden');
     const billingLink = hasBillingPortal
-      ? '<a class="billing-link" href="/billing/portal">Manage billing</a>'
+      ? '<a class="billing-link" href="/billing">Billing</a>'
       : '';
     document.getElementById('header-right').innerHTML =
       `<div class="subscriber-info"><span class="subscriber-email">&#10003; ${email}</span>${billingLink}<button class="logout-btn" onclick="doLogout()">Sign out</button></div>`;

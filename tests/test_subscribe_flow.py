@@ -472,6 +472,7 @@ def test_create_checkout_passes_idempotency_key(monkeypatch):
         )
     assert create.call_args.kwargs["idempotency_key"] == "subchk_test_key"
     assert create.call_args.kwargs["customer"] == "cus_abc"
+    assert create.call_args.kwargs["payment_method_types"] == ["card", "link"]
 
 
 def test_app_already_subscribed_notice(app_client, two_users, monkeypatch):

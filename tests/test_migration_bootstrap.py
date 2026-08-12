@@ -8,11 +8,16 @@ import pytest
 import config
 import db
 from migrations.runner import (
+    MIGRATION_MODULES,
     REQUIRED_BASELINE_TABLES,
     MigrationBootstrapError,
     apply_pending_migrations,
     verify_baseline_tables,
 )
+
+
+def _all_migration_versions():
+    return {mod.rsplit(".", 1)[-1] for mod in MIGRATION_MODULES}
 
 
 @pytest.fixture
@@ -66,15 +71,7 @@ def test_empty_database_bootstrap_creates_baseline_tables(empty_sqlite_db):
     names = _table_names()
     for required in REQUIRED_BASELINE_TABLES:
         assert required in names, f"missing {required}"
-    assert _applied() == {
-        "001_baseline",
-        "002_safe_additive_columns",
-        "003_user_business_profile",
-        "004_voice_call_lead_link",
-        "005_voice_call_recording_fields",
-        "006_cleanup_transient_voice_activities",
-        "007_backfill_lead_follow_through",
-    }
+    assert _applied() == _all_migration_versions()
 
 
 def test_migration_order_baseline_before_additive(empty_sqlite_db, monkeypatch):
@@ -149,15 +146,7 @@ def test_false_001_stamp_without_users_is_repaired(empty_sqlite_db):
     assert "sms_messages" in _table_names()
     with db.get_db() as conn:
         verify_baseline_tables(conn)
-    assert _applied() == {
-        "001_baseline",
-        "002_safe_additive_columns",
-        "003_user_business_profile",
-        "004_voice_call_lead_link",
-        "005_voice_call_recording_fields",
-        "006_cleanup_transient_voice_activities",
-        "007_backfill_lead_follow_through",
-    }
+    assert _applied() == _all_migration_versions()
 
 
 def test_failed_migration_is_not_marked_applied(empty_sqlite_db, monkeypatch):

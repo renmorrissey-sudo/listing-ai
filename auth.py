@@ -75,12 +75,29 @@ def email_has_free_access(email):
 
 
 def user_has_active_subscription(user):
+    """True when the user may use subscriber tools.
+
+    past_due keeps access so payment recovery is possible (billing warning shown).
+    Canceled / unpaid / none do not grant access.
+    """
     if not config.SUBSCRIPTION_REQUIRED:
         return True
-    return user and (
-        user.get("subscription_status") == "active"
-        or email_has_free_access(user.get("email"))
-    )
+    if not user:
+        return False
+    if email_has_free_access(user.get("email")):
+        return True
+    status = (user.get("subscription_status") or "").lower()
+    return status in ("active", "trialing", "past_due")
+
+
+def user_needs_billing_attention(user):
+    """True when UI should show a payment-method / past-due warning."""
+    if not user:
+        return False
+    if user.get("payment_action_required"):
+        return True
+    status = (user.get("subscription_status") or "").lower()
+    return status in ("past_due", "unpaid")
 
 
 def login_required(view):
