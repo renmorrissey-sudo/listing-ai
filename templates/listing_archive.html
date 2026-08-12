@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Listing Archive - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+  <style>
+    .archive-toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 14px 0 18px; }
+    .archive-toolbar input[type="search"] { flex: 1 1 280px; min-width: 200px; }
+    .archive-card { border: 1px solid #eef2f7; border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+    .archive-card-main { min-width: 0; flex: 1 1 auto; }
+    .archive-card-address { font-weight: 700; font-size: 15px; }
+    .archive-card-meta { color: #667; font-size: 12px; margin-top: 4px; display: flex; gap: 10px; flex-wrap: wrap; }
+    .archive-card-posted { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+    .archive-pagination { display: flex; justify-content: center; gap: 10px; align-items: center; margin-top: 14px; }
+    .archive-loading, .archive-empty { text-align: center; color: #778; padding: 32px 0; }
+  </style>
+</head>
+<body>
+  {% set page_tagline = 'Listing Archive' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <div class="page-header">
+      <div class="page-header-titles">
+        <h1>Listing Archive</h1>
+        <p class="muted">Every listing generated in the past {{ retention_days }} days. Search by property address to reopen exactly what was generated.</p>
+      </div>
+      <div class="page-header-actions">
+        <a class="btn" href="/app">+ New Listing</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="archive-toolbar">
+        <input type="search" id="archive-search" placeholder="Search by property address..." aria-label="Search by property address" />
+      </div>
+      <div id="archive-list"></div>
+      <div class="archive-pagination" id="archive-pagination" style="display:none;">
+        <button class="btn secondary" id="archive-prev" type="button">&laquo; Prev</button>
+        <span class="muted" id="archive-page-label"></span>
+        <button class="btn secondary" id="archive-next" type="button">Next &raquo;</button>
+      </div>
+    </div>
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+  <script>
+    let currentPage = 1;
+    let currentQuery = '';
+    let searchDebounce = null;
+
+    function escapeHtml(str) {
+      return (str || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    function formatDate(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      return d.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+    }
+
+    function postedBadges(item) {
+      const statuses = item.publish_status || {};
+      const providers = Object.keys(statuses);
+      if (!providers.length) return '<span class="pill muted">Not posted</span>';
+      return providers.map(p => {
+        const st = statuses[p];
+        const label = p.charAt(0).toUpperCase() + p.slice(1);
+        if (st === 'published') return `<span class="pill success">${label} &#10003;</span>`;
+        if (st === 'failed') return `<span class="pill danger">${label} &#10007;</span>`;
+        return `<span class="pill warn">${label} &hellip;</span>`;
+      }).join('');
+    }
+
+    async function loadArchive() {
+      const listEl = document.getElementById('archive-list');
+      const paginationEl = document.getElementById('archive-pagination');
+      listEl.innerHTML = '<div class="archive-loading">Loading...</div>';
+      try {
+        const params = new URLSearchParams({ q: currentQuery, page: String(currentPage) });
+        const res = await fetch(`/listings/archive/search?${params.toString()}`);
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        const data = await res.json();
+        const items = data.items || [];
+        if (!items.length) {
+          listEl.innerHTML = '<div class="archive-empty">No listings found' + (currentQuery ? ' for that address.' : ' yet. Generate your first listing to see it here.') + '</div>';
+          paginationEl.style.display = 'none';
+          return;
+        }
+        listEl.innerHTML = items.map(item => `
+          <div class="archive-card">
+            <div class="archive-card-main">
+              <div class="archive-card-address">${escapeHtml(item.display_address)}</div>
+              <div class="archive-card-meta">
+                <span>Generated ${formatDate(item.created_at)}</span>
+              </div>
+              <div class="archive-card-posted">${postedBadges(item)}</div>
+            </div>
+            <a class="btn secondary" href="/app?listing=${item.id}">Open</a>
+          </div>
+        `).join('');
+        const totalPages = Math.max(1, Math.ceil(data.total / data.page_size));
+        paginationEl.style.display = totalPages > 1 ? 'flex' : 'none';
+        document.getElementById('archive-page-label').textContent = `Page ${data.page} of ${totalPages}`;
+        document.getElementById('archive-prev').disabled = data.page <= 1;
+        document.getElementById('archive-next').disabled = data.page >= totalPages;
+      } catch (e) {
+        listEl.innerHTML = '<div class="archive-empty">Couldn\'t load the archive. Please try again.</div>';
+      }
+    }
+
+    document.getElementById('archive-search').addEventListener('input', e => {
+      clearTimeout(searchDebounce);
+      searchDebounce = setTimeout(() => {
+        currentQuery = e.target.value;
+        currentPage = 1;
+        loadArchive();
+      }, 300);
+    });
+    document.getElementById('archive-prev').addEventListener('click', () => { if (currentPage > 1) { currentPage -= 1; loadArchive(); } });
+    document.getElementById('archive-next').addEventListener('click', () => { currentPage += 1; loadArchive(); });
+
+    loadArchive();
+  </script>
+</body>
+</html>

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Social Media - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+  <style>
+    .provider-card { border: 1px solid #eef2f7; border-radius: 12px; padding: 18px; margin-bottom: 14px; }
+    .provider-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .provider-card-title { font-size: 16px; font-weight: 700; }
+    .provider-connection { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid #f3f5f9; margin-top: 10px; }
+    .provider-connection:first-of-type { border-top: none; margin-top: 6px; }
+    .provider-connection-name { font-weight: 600; font-size: 13.5px; }
+    .provider-connection-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .provider-reason { color: #778; font-size: 12.5px; margin-top: 6px; }
+    .default-channels-form { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 14px; padding-top: 14px; border-top: 1px solid #eef2f7; }
+    .default-channels-form label { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  {% set page_tagline = 'Social Media Connections' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <div class="page-header">
+      <div class="page-header-titles">
+        <h1>Social Media</h1>
+        <p class="muted">Connect the accounts where you want TopAI to publish listing content. Then use the one-click Post button on any generated listing.</p>
+      </div>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+        <div class="flash {% if category == 'error' %}err{% endif %}" style="display:block;">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="card">
+      {% for p in providers %}
+      <div class="provider-card">
+        <div class="provider-card-head">
+          <div class="provider-card-title">{{ p.display_name }}</div>
+          {% if p.readiness.state == 'live' %}
+            <a class="btn" href="/social/connections/{{ p.name }}/connect">+ Connect {{ p.display_name }}</a>
+          {% elif p.readiness.state == 'coming_soon' %}
+            <span class="pill muted">Coming soon</span>
+          {% else %}
+            <span class="pill warn">Setup required</span>
+          {% endif %}
+        </div>
+        {% if p.readiness.reason %}<div class="provider-reason">{{ p.readiness.reason }}</div>{% endif %}
+        {% if p.readiness.publish_note %}<div class="provider-reason">{{ p.readiness.publish_note }}</div>{% endif %}
+
+        {% for c in p.connections %}
+        <div class="provider-connection">
+          <div>
+            <div class="provider-connection-name">
+              {% if c.status == 'connected' %}<span class="pill success">&#10003; Connected</span>{% else %}<span class="pill danger">Needs reconnect</span>{% endif %}
+              {{ c.display_name or c.external_account_id }}
+            </div>
+          </div>
+          <div class="provider-connection-actions">
+            {% if c.status == 'connected' %}
+              <span class="pill {% if c.default_enabled %}success{% else %}muted{% endif %}">
+                {% if c.default_enabled %}Enabled for One-Click Post{% else %}Not in default post{% endif %}
+              </span>
+            {% endif %}
+            {% if c.status != 'connected' %}
+              <a class="btn secondary" href="/social/connections/{{ p.name }}/connect">Reconnect</a>
+            {% endif %}
+            <form method="post" action="/social/connections/{{ c.id }}/disconnect" style="display:inline;">
+              <button type="submit" class="btn secondary">Disconnect</button>
+            </form>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+
+    {% set connected = providers | selectattr('connections') | list %}
+    {% if connected %}
+    <div class="card">
+      <h2>Default Post Channels</h2>
+      <p class="muted" style="font-size:13px;">These channels are used automatically when you click the one-click Post button on a generated listing.</p>
+      <form method="post" action="/social/connections/default-channels" class="default-channels-form">
+        {% for p in providers %}
+          {% for c in p.connections %}
+            {% if c.status == 'connected' %}
+            <label>
+              <input type="checkbox" name="enabled_connection_ids" value="{{ c.id }}" {% if c.default_enabled %}checked{% endif %} />
+              {{ p.display_name }}{% if c.display_name %} ({{ c.display_name }}){% endif %}
+            </label>
+            {% endif %}
+          {% endfor %}
+        {% endfor %}
+        <button type="submit" class="btn">Save</button>
+      </form>
+    </div>
+    {% endif %}
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+</body>
+</html>
