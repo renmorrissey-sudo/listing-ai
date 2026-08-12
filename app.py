@@ -15,10 +15,12 @@ import db
 from datetime import datetime, timedelta, timezone
 
 import listing_generations_db as listing_db
+import email_marketing_db as email_marketing_db
 import sms_coach
 from crm import crm_bp
 from crm_constants import status_label
 from external_leads_routes import external_leads_bp
+from email_marketing_routes import email_marketing_bp
 from sms_campaigns import sms_campaigns_bp
 from social_routes import social_bp
 from sms_prompts import build_sms_prompt
@@ -72,6 +74,7 @@ app.config["PERMANENT_SESSION_LIFETIME"] = 86400 * 14
 db.init_db()
 app.register_blueprint(crm_bp)
 app.register_blueprint(external_leads_bp)
+app.register_blueprint(email_marketing_bp)
 app.register_blueprint(sms_campaigns_bp)
 app.register_blueprint(social_bp)
 client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
@@ -359,7 +362,13 @@ def subscriber_app():
     notice = None
     if request.args.get("already_subscribed") == "1":
         notice = "Your subscription is already active."
-    return render_template("index.html", subscribe_notice=notice)
+    return render_template(
+        "index.html",
+        subscribe_notice=notice,
+        email=user["email"],
+        has_billing_portal=bool(user.get("stripe_customer_id")),
+        active_nav="listing",
+    )
 
 
 @app.route("/session-status")
@@ -782,6 +791,8 @@ def billing_page():
     return render_template(
         "billing.html",
         email=user["email"],
+        has_billing_portal=bool(user.get("stripe_customer_id")),
+        active_nav="billing",
         summary=summary,
         notice=notice,
         error=error,
@@ -2247,6 +2258,7 @@ def generate():
 def listings_recent():
     user = auth.get_current_user()
     items = listing_db.list_recent(user["id"], limit=20)
+    items = email_marketing_db.annotate_campaign_status(user["id"], items)
     return jsonify({"items": items})
 
 
@@ -2283,6 +2295,12 @@ def listings_archive_search():
         result["items"] = annotate_publish_status(user["id"], result["items"])
     except Exception:
         logger.exception("Failed to annotate publish status for listing archive")
+    try:
+        result["items"] = email_marketing_db.annotate_campaign_status(
+            user["id"], result["items"]
+        )
+    except Exception:
+        logger.exception("Failed to annotate email campaign status for listing archive")
     return jsonify(result)
 
 
@@ -2300,6 +2318,15 @@ def listings_get_one(generation_id):
         generation = annotate_publish_status(user["id"], [generation])[0]
     except Exception:
         logger.exception("Failed to annotate publish status for listing %s", generation_id)
+    try:
+        generation = email_marketing_db.annotate_campaign_status(
+            user["id"], [generation]
+        )[0]
+    except Exception:
+        logger.exception(
+            "Failed to annotate email campaign status for listing %s",
+            generation_id,
+        )
     return jsonify({
         "generation": generation,
         "versions": [

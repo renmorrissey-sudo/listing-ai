@@ -206,6 +206,13 @@ LISTING_GENERATION_RETENTION_DAYS = int(_env("LISTING_GENERATION_RETENTION_DAYS"
 # Social Media Connections — OAuth token encryption + per-provider app credentials.
 # SOCIAL_TOKEN_ENCRYPTION_KEY must be a urlsafe-base64 Fernet key (cryptography.fernet.Fernet.generate_key()).
 SOCIAL_TOKEN_ENCRYPTION_KEY = _env_strip("SOCIAL_TOKEN_ENCRYPTION_KEY") or ""
+# Tenant-owned integration credentials (currently SendGrid Marketing). A
+# separate key is preferred; falling back preserves compatibility for
+# installations that already provisioned the social-token Fernet key.
+INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = (
+    _env_strip("INTEGRATION_CREDENTIAL_ENCRYPTION_KEY")
+    or SOCIAL_TOKEN_ENCRYPTION_KEY
+)
 APP_BASE_URL = (_env_strip("APP_BASE_URL") or _env_strip("APP_URL") or "http://localhost:8080").rstrip("/")
 
 LINKEDIN_CLIENT_ID = _env_strip("LINKEDIN_CLIENT_ID") or ""

@@ -5,86 +5,68 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Billing — {{ product_name }}</title>
   <meta name="robots" content="noindex, nofollow" />
+  {% include 'crm_base_styles.html' %}
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-      color: #1a1a2e;
-      min-height: 100vh;
-      background:
-        radial-gradient(ellipse at 12% 8%, rgba(79, 142, 247, 0.18), transparent 48%),
-        radial-gradient(ellipse at 88% 0%, rgba(26, 26, 46, 0.08), transparent 42%),
-        linear-gradient(180deg, #eef3fb 0%, #f7f8fb 55%, #f4f6f9 100%);
-      padding: 28px 16px 48px;
-    }
-    .wrap { max-width: 560px; margin: 0 auto; }
-    .brand {
-      font-size: 28px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 6px;
-    }
-    .brand span { color: #4f8ef7; }
-    .business { color: #667; font-size: 13px; margin-bottom: 22px; }
-    .panel {
-      background: rgba(255,255,255,0.92);
-      border: 1px solid #dde4f0;
-      border-radius: 14px;
-      padding: 28px;
-      box-shadow: 0 10px 30px rgba(26, 26, 46, 0.06);
-    }
-    h1 { font-size: 24px; line-height: 1.2; margin-bottom: 8px; }
-    .muted { color: #667; font-size: 14px; line-height: 1.55; margin-bottom: 18px; }
-    .row {
+    .billing-main { max-width: 760px; }
+    .billing-panel { padding: 24px; }
+    .billing-intro { color: #667; font-size: 14px; margin: 0 0 18px; }
+    .billing-row {
       display: flex; justify-content: space-between; gap: 12px;
       padding: 12px 0; border-bottom: 1px solid #eef1f6; font-size: 14px;
     }
-    .row:last-of-type { border-bottom: none; }
-    .label { color: #667; }
-    .value { font-weight: 600; text-align: right; }
+    .billing-row:last-of-type { border-bottom: none; }
+    .billing-label { color: #667; }
+    .billing-value { font-weight: 700; text-align: right; }
     .status-attention { color: #b45309; }
     .status-ok { color: #065f46; }
-    .notice {
+    .billing-notice {
       background: #ecfdf5; border: 1.5px solid #6ee7b7; color: #065f46;
       border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px;
     }
-    .error {
+    .billing-error {
       background: #fff5f5; border: 1.5px solid #fca5a5; color: #dc2626;
       border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px;
     }
-    .attention {
+    .billing-attention {
       background: #fffbeb; border: 1.5px solid #fcd34d; color: #92400e;
       border-radius: 8px; padding: 10px 12px; font-size: 13px; margin: 14px 0;
     }
-    .btn {
-      width: 100%; padding: 12px; background: #4f8ef7; color: white; border: none;
-      border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 10px;
-      display: inline-block; text-align: center; text-decoration: none;
+    .billing-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+    .billing-actions form { margin: 0; }
+    .billing-actions .btn { min-height: 40px; display: inline-flex; align-items: center; justify-content: center; }
+    @media (max-width: 560px) {
+      .billing-row { align-items: flex-start; }
+      .billing-actions, .billing-actions form, .billing-actions .btn { width: 100%; }
     }
-    .btn:hover { background: #3a7de0; }
-    .btn.secondary {
-      background: white; color: #1d4ed8; border: 1.5px solid #cfe0ff;
-    }
-    .footer { margin-top: 16px; font-size: 13px; color: #667; text-align: center; }
-    a { color: #4f8ef7; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="brand">TopAI <span>Real Estate Tools</span></div>
-    <div class="business">Signed in as {{ email }}</div>
+  {% set page_tagline = 'Billing' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
 
-    <section class="panel" aria-label="Subscription billing">
-      <h1>Subscription</h1>
-      <p class="muted">Manage your TopAI plan and payment method.</p>
+  <main class="billing-main">
+    <div class="page-header">
+      <div class="page-header-titles">
+        <h1>Billing</h1>
+        <p class="muted">Manage your TopAI subscription and payment method.</p>
+      </div>
+    </div>
+
+    <section class="card billing-panel" aria-label="Subscription billing">
+      <h2>Subscription</h2>
+      <p class="billing-intro">Your current plan, billing status, and saved payment method.</p>
 
       {% if notice == 'payment_method_updated' %}
-      <div class="notice" role="status">Payment method updated. Your subscription is in good standing.</div>
+      <div class="billing-notice" role="status">Payment method updated. Your subscription is in good standing.</div>
       {% elif notice == 'card_saved_pending' %}
-      <div class="notice" role="status">Card saved. If payment is still pending, use Manage subscription or try Update payment method again.</div>
+      <div class="billing-notice" role="status">Card saved. If payment is still pending, use Manage subscription or try Update payment method again.</div>
       {% elif notice == 'cancelled' %}
-      <div class="notice" role="status">Payment method update cancelled. No changes were made.</div>
+      <div class="billing-notice" role="status">Payment method update cancelled. No changes were made.</div>
       {% endif %}
 
       {% if error %}
-      <div class="error" role="alert">
+      <div class="billing-error" role="alert">
         {% if error == 'session_mismatch' %}
         That billing session doesn't belong to this account.
         {% elif error == 'setup_incomplete' %}
@@ -98,28 +80,29 @@
       {% endif %}
 
       {% if summary.attention_message %}
-      <div class="attention" role="status">{{ summary.attention_message }}</div>
+      <div class="billing-attention" role="status">{{ summary.attention_message }}</div>
       {% endif %}
 
-      <div class="row">
-        <span class="label">Plan</span>
-        <span class="value">{{ summary.plan_name }}</span>
+      <div class="billing-row">
+        <span class="billing-label">Plan</span>
+        <span class="billing-value">{{ summary.plan_name }}</span>
       </div>
-      <div class="row">
-        <span class="label">Price</span>
-        <span class="value">{{ summary.price_label or subscription_price }}</span>
+      <div class="billing-row">
+        <span class="billing-label">Price</span>
+        <span class="billing-value">{{ summary.price_label or subscription_price }}</span>
       </div>
-      <div class="row">
-        <span class="label">Status</span>
-        <span class="value {% if summary.needs_payment_method_update or summary.show_update_payment_method %}status-attention{% else %}status-ok{% endif %}">
+      <div class="billing-row">
+        <span class="billing-label">Status</span>
+        <span class="billing-value {% if summary.needs_payment_method_update or summary.show_update_payment_method %}status-attention{% else %}status-ok{% endif %}">
           {{ summary.status_label }}
         </span>
       </div>
-      <div class="row">
-        <span class="label">Payment method</span>
-        <span class="value">{{ summary.payment_method.label if summary.payment_method else 'Unavailable' }}</span>
+      <div class="billing-row">
+        <span class="billing-label">Payment method</span>
+        <span class="billing-value">{{ summary.payment_method.label if summary.payment_method else 'Unavailable' }}</span>
       </div>
 
+      <div class="billing-actions">
       {% if summary.show_update_payment_method or summary.needs_payment_method_update %}
       <form method="post" action="/billing/update-payment-method">
         <button class="btn" type="submit">Update payment method</button>
@@ -133,13 +116,10 @@
       {% if summary.show_manage_subscription or summary.has_stripe_customer %}
       <a class="btn secondary" href="/billing/portal">Manage subscription</a>
       {% endif %}
-
-      <p class="footer">
-        <a href="/app">Open tools</a> ·
-        <a href="/subscribe">Subscription status</a> ·
-        <a href="/logout">Log out</a>
-      </p>
+      </div>
     </section>
-  </div>
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
 </body>
 </html>

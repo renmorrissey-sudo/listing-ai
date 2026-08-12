@@ -23,10 +23,26 @@
     .billing-link:hover { background: #4f8ef7; color: white; }
     .logout-btn { background: none; border: 1.5px solid #445; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #aab; cursor: pointer; transition: all 0.15s; }
     .logout-btn:hover { border-color: #aab; color: white; }
-    .tool-nav { background: #232344; display: flex; padding: 0 32px; gap: 4px; }
-    .tool-nav-btn { padding: 12px 20px; font-size: 13px; font-weight: 600; color: #8899bb; background: none; border: none; cursor: pointer; border-bottom: 3px solid transparent; transition: all 0.15s; }
-    .tool-nav-btn:hover { color: #ccd; }
-    .tool-nav-btn.active { color: #4f8ef7; border-bottom-color: #4f8ef7; }
+    .account-menu { position: relative; }
+    .account-menu summary { list-style: none; border: 1.5px solid #445; border-radius: 7px; padding: 7px 11px; color: #dce3ef; font-size: 12px; font-weight: 700; cursor: pointer; user-select: none; }
+    .account-menu summary::-webkit-details-marker { display: none; }
+    .account-menu summary:hover, .account-menu[open] summary { border-color: #71809a; color: white; }
+    .account-menu summary:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 2px; }
+    .account-menu-panel { position: absolute; right: 0; top: calc(100% + 8px); z-index: 200; min-width: 210px; padding: 7px; background: white; border: 1px solid #dfe5ef; border-radius: 10px; box-shadow: 0 14px 36px rgba(15,23,42,0.24); }
+    .account-menu-panel a, .account-menu-panel button { display: block; width: 100%; padding: 9px 10px; border: 0; border-radius: 7px; background: transparent; color: #334; font: inherit; font-size: 13px; font-weight: 600; text-align: left; text-decoration: none; cursor: pointer; }
+    .account-menu-panel a:hover, .account-menu-panel button:hover, .account-menu-panel [aria-current="page"] { background: #eef5ff; color: #1d4ed8; }
+    .account-menu-panel form { margin: 0; }
+    .account-menu-divider { height: 1px; margin: 5px 3px; background: #e8edf4; }
+    .tool-nav-bar { background: #232344; padding: 0 32px; }
+    .tool-nav-toggle { display: none; align-items: center; gap: 8px; width: 100%; background: transparent; border: none; color: #ccd; font-size: 13px; font-weight: 700; padding: 10px 0; cursor: pointer; }
+    .tool-nav-toggle-icon { width: 18px; height: 2px; background: #ccd; position: relative; display: inline-block; }
+    .tool-nav-toggle-icon::before, .tool-nav-toggle-icon::after { content: ''; position: absolute; left: 0; width: 18px; height: 2px; background: #ccd; }
+    .tool-nav-toggle-icon::before { top: -6px; }
+    .tool-nav-toggle-icon::after { top: 6px; }
+    .tool-nav { display: flex; gap: 4px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .tool-nav a { padding: 12px 16px; font-size: 13px; font-weight: 600; color: #8899bb; text-decoration: none; border-bottom: 3px solid transparent; white-space: nowrap; flex: 0 0 auto; }
+    .tool-nav a:hover { color: #ccd; }
+    .tool-nav a.active { color: #4f8ef7; border-bottom-color: #4f8ef7; }
     .tool-page { display: none; }
     .tool-page.active { display: block; }
     main { max-width: 960px; margin: 32px auto; padding: 0 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
@@ -83,6 +99,12 @@
     .recent-listing-address { font-weight: 600; font-size: 13.5px; }
     .recent-listing-meta { color: #889; font-size: 12px; margin-top: 2px; }
     .social-post-area { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eef2f7; }
+    .email-campaign-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    .email-campaign-actions .copy-btn { margin-top: 0; }
+    #email-campaign-area { display: flex; align-items: center; gap: 10px; flex: 1 1 320px; flex-wrap: wrap; }
+    .email-campaign-status { width: 100%; font-size: 12px; line-height: 1.45; color: #667; }
+    .email-campaign-status.success { color: #15803d; }
+    .email-campaign-status.error { color: #b91c1c; }
     .social-destinations { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: #556; margin-bottom: 10px; }
     .post-result-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; font-size: 13px; }
     @media (max-width: 720px) { .recent-listing-row { flex-direction: column; align-items: flex-start; } }
@@ -149,6 +171,14 @@
     .public-nav { background: #eef2f7; border-bottom: 1px solid #dde4f0; padding: 9px 32px; font-size: 13px; }
     .public-nav a { color: #445; text-decoration: none; margin-right: 18px; font-weight: 600; }
     .public-nav a:hover { color: #4f8ef7; }
+    @media (max-width: 900px) {
+      .tool-nav-bar { padding-left: 16px; padding-right: 16px; }
+      .tool-nav-toggle { display: flex; }
+      .tool-nav { display: none; flex-direction: column; overflow-x: visible; padding-bottom: 8px; }
+      .tool-nav-bar.is-open .tool-nav { display: flex; }
+      .tool-nav a { border-bottom: none; border-left: 3px solid transparent; padding: 10px 8px; }
+      .tool-nav a.active { border-left-color: #4f8ef7; }
+    }
     @media (max-width: 640px) {
       header { padding: 14px 16px; display: block; }
       header .logo { font-size: 21px; line-height: 1.05; max-width: 190px; }
@@ -158,11 +188,9 @@
       #header-right { margin-top: 12px; }
       .subscriber-info { justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
       .subscriber-email { flex: 1 1 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-      .billing-link, .logout-btn, .subscribe-btn { padding: 7px 10px; font-size: 12px; }
+      .logout-btn, .subscribe-btn { padding: 7px 10px; font-size: 12px; }
       .public-nav { padding: 8px 16px; display: flex; gap: 14px; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
       .public-nav a { margin-right: 0; flex: 0 0 auto; }
-      .tool-nav { padding: 0 8px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-      .tool-nav-btn { flex: 0 0 auto; padding: 11px 14px; min-width: 118px; white-space: normal; line-height: 1.15; text-align: center; }
       main { margin: 20px auto; padding: 0 12px; }
       .card { padding: 20px; border-radius: 10px; }
       .form-row { grid-template-columns: 1fr; gap: 0; }
@@ -211,46 +239,12 @@
   </div>
 </div>
 
-<header>
-  <div>
-    <a class="logo" href="/dashboard" aria-label="TopAI Real Estate Tools — Dashboard" id="header-logo">TopAI <span>Real Estate Tools</span></a>
-    <div class="tagline">AI-powered content for real estate agents</div>
-    <div class="business-note">Operated by {{ legal_entity_name }}</div>
-  </div>
-  <div id="header-right">
-    <a class="subscribe-btn" href="{{ registration_cta_href }}">{% if registration_can_signup %}Get 50% off your first month{% else %}Private beta{% endif %}</a>
-  </div>
-</header>
+{% set page_tagline = 'AI-powered content for real estate agents' %}
+{% include 'subscriber_header.html' %}
 {% if subscribe_notice %}
 <div class="subscribe-notice" role="status" style="margin:12px 20px 0;padding:10px 14px;background:#ecfdf5;border:1px solid #6ee7b7;color:#065f46;border-radius:8px;font-size:14px;">{{ subscribe_notice }}</div>
 {% endif %}
-<div class="public-nav" id="public-nav">
-  <a class="nav-marketing" href="/">Home</a>
-  <a class="nav-marketing" href="/features">Features</a>
-  <a class="nav-marketing" href="/how-it-works">How It Works</a>
-  <a class="nav-marketing" href="/pricing">Pricing</a>
-  <a class="nav-subscriber" href="/dashboard" style="display:none;">Dashboard</a>
-  <a class="nav-subscriber" href="/tutorial" style="display:none;">Tutorial</a>
-  <a href="/terms">Terms</a>
-  <a href="/privacy">Privacy</a>
-  <a href="/refund-policy">Refund Policy</a>
-  <a href="/contact">Contact</a>
-</div>
-<nav class="tool-nav">
-  <button class="tool-nav-btn active" data-tool="listing" onclick="switchTool('listing', this)">&#128221; Listing Generator</button>
-  <button class="tool-nav-btn" data-tool="coldcall" onclick="switchTool('coldcall', this)">&#128222; Cold Call Scripts</button>
-  <button class="tool-nav-btn" data-tool="voice" onclick="switchTool('voice', this)">AI Calling Assistant</button>
-  <button class="tool-nav-btn" data-tool="sms" onclick="switchTool('sms', this)">AI SMS Assistant</button>
-  <a class="tool-nav-btn nav-subscriber" id="dashboard-tool-link" href="/dashboard" style="display:none; text-decoration:none;">Dashboard</a>
-  <a class="tool-nav-btn nav-subscriber" id="crm-leads-tool-link" href="/crm/leads" style="display:none; text-decoration:none;">Leads</a>
-  <a class="tool-nav-btn nav-subscriber" id="crm-calendar-tool-link" href="/crm/calendar" style="display:none; text-decoration:none;">Leads Calendar</a>
-  <a class="tool-nav-btn nav-subscriber" id="crm-followups-tool-link" href="/crm/follow-ups" style="display:none; text-decoration:none;">Follow-ups</a>
-  <a class="tool-nav-btn nav-subscriber" id="crm-tasks-tool-link" href="/crm/tasks" style="display:none; text-decoration:none;">Tasks</a>
-  <a class="tool-nav-btn nav-subscriber" id="crm-needs-tool-link" href="/crm/needs-attention" style="display:none; text-decoration:none;">Needs Attention</a>
-  <a class="tool-nav-btn nav-subscriber" id="listing-archive-tool-link" href="/listings/archive" style="display:none; text-decoration:none;">Listing Archive</a>
-  <a class="tool-nav-btn nav-subscriber" id="social-connections-tool-link" href="/social/connections" style="display:none; text-decoration:none;">Social Media</a>
-  <a class="tool-nav-btn nav-subscriber" id="tutorial-tool-link" href="/tutorial" style="display:none; text-decoration:none;">Tutorial</a>
-</nav>
+{% include 'subscriber_tool_nav.html' %}
 
 <div id="tool-listing" class="tool-page active">
   <main>
@@ -290,7 +284,15 @@
         <button class="copy-btn" data-target="out-social">Copy</button>
         <div class="social-post-area" id="social-post-area"></div>
       </div>
-      <div class="tab-content" id="tab-lemail"><div class="output-box" id="out-email"></div><button class="copy-btn" data-target="out-email">Copy</button></div>
+      <div class="tab-content" id="tab-lemail">
+        <div class="output-box" id="out-email"></div>
+        <div class="email-campaign-actions">
+          <button class="copy-btn" data-target="out-email">Copy</button>
+          <div id="email-campaign-area">
+            <button type="button" class="btn primary" disabled>Add to Email Campaign</button>
+          </div>
+        </div>
+      </div>
     </div></div>
     <div class="card recent-listings-card">
       <div class="recent-listings-header">
@@ -482,6 +484,7 @@
   </nav>
 </footer>
 
+{% include 'subscriber_nav_script.html' %}
 <script>
   let voiceCallsRefreshTimer = null;
 
@@ -507,13 +510,10 @@
     });
   }
 
-  function showLoggedIn(email, hasBillingPortal) {
+  function showLoggedIn(email) {
     document.getElementById('gate').classList.add('hidden');
-    const billingLink = hasBillingPortal
-      ? '<a class="billing-link" href="/billing/portal">Manage billing</a>'
-      : '';
-    document.getElementById('header-right').innerHTML =
-      `<div class="subscriber-info"><span class="subscriber-email">&#10003; ${email}</span>${billingLink}<button class="logout-btn" onclick="doLogout()">Sign out</button></div>`;
+    const emailEl = document.querySelector('.subscriber-email');
+    if (emailEl && email) emailEl.textContent = '\u2713 ' + email;
     setSubscriberNav(true);
     loadVoiceData();
     loadSmsData();
@@ -1150,30 +1150,26 @@
 
   async function doLogout() {
     await fetch('/logout', {method:'POST'});
-    document.getElementById('header-right').innerHTML =
-      `<a class="subscribe-btn" href="{{ registration_cta_href }}">{% if registration_can_signup %}Get 50% off your first month{% else %}Private beta{% endif %}</a>`;
-    document.getElementById('gate').classList.remove('hidden');
-    document.getElementById('gate-error').textContent = '';
-    document.getElementById('gate-email').value = '';
-    setSubscriberNav(false);
+    window.location.href = '/';
   }
 
   function switchTool(tool, btn) {
     const page = document.getElementById('tool-' + tool);
     if (!page) return;
     document.querySelectorAll('.tool-page').forEach(p => p.classList.remove('active'));
-    document.querySelectorAll('.tool-nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tool-nav a[href^="/app"]').forEach(link => link.classList.remove('active'));
     page.classList.add('active');
     if (btn) {
       btn.classList.add('active');
     } else {
-      const match = document.querySelector(`.tool-nav-btn[data-tool="${tool}"]`);
+      const href = tool === 'listing' ? '/app' : '/app#' + tool;
+      const match = document.querySelector(`.tool-nav a[href="${href}"]`);
       if (match) match.classList.add('active');
     }
     if (tool === 'voice') loadVoiceData();
     if (tool === 'sms') loadSmsData();
-    if (tool === 'listing') history.replaceState(null, '', '/');
-    else history.replaceState(null, '', '/#' + tool);
+    if (tool === 'listing') history.replaceState(null, '', '/app');
+    else history.replaceState(null, '', '/app#' + tool);
   }
 
   function applyToolHash() {
@@ -1258,6 +1254,7 @@
       if (res.ok) {
         document.getElementById('listing-save-warning').style.display = 'none';
         showListingSaved(result.generation_id, result.created_at);
+        renderEmailCampaignArea({ id: result.generation_id });
         loadRecentListings();
       } else {
         retryBtn.textContent = 'Retry save';
@@ -1308,6 +1305,7 @@
         });
       }
       renderSocialPostArea(gen);
+      renderEmailCampaignArea(gen);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch { /* non-fatal: leave current view as-is */ }
   }
@@ -1360,9 +1358,11 @@
         if (result.generation_id) {
           showListingSaved(result.generation_id, result.created_at);
           renderSocialPostArea({ id: result.generation_id, social_content: result.social_content });
+          renderEmailCampaignArea({ id: result.generation_id });
           loadRecentListings();
         } else if (result.save_warning) {
           showListingSaveWarning(result.save_retry_payload);
+          renderEmailCampaignArea(null);
         }
       }
     } catch { errEl.textContent = 'Network error.'; errEl.style.display = 'block'; }
@@ -1392,6 +1392,61 @@
       document.getElementById('social-post-btn').addEventListener('click', () => runSocialPost(generation.id));
     } catch {
       area.innerHTML = '<p class="muted" style="font-size:12px;">Couldn\'t load connected destinations.</p>';
+    }
+  }
+
+  function renderEmailCampaignArea(generation) {
+    const area = document.getElementById('email-campaign-area');
+    if (!area) return;
+    if (!generation || !generation.id) {
+      area.innerHTML = '<button type="button" class="btn primary" disabled>Add to Email Campaign</button><span class="email-campaign-status">Save this generation before adding it to SendGrid.</span>';
+      return;
+    }
+    const campaign = generation.email_campaign || null;
+    if (!campaign) {
+      area.innerHTML = '<button type="button" class="btn primary" id="email-campaign-btn">Add to Email Campaign</button><span class="email-campaign-status">Creates an unscheduled SendGrid draft. Nothing is sent.</span>';
+      document.getElementById('email-campaign-btn').addEventListener('click', () => runEmailCampaignExport(generation.id, false));
+      return;
+    }
+    if (campaign.status === 'draft_created') {
+      area.innerHTML = `<span class="email-campaign-status success">&#10003; Added to Email Campaigns &middot; SendGrid draft created${campaign.created_at ? ' ' + escapeHtmlText(formatListingDate(campaign.created_at)) : ''}.</span><button type="button" class="btn secondary btn-sm" id="email-campaign-another-btn">Create Another Draft</button>`;
+      document.getElementById('email-campaign-another-btn').addEventListener('click', () => runEmailCampaignExport(generation.id, true));
+      return;
+    }
+    if (campaign.status === 'creating') {
+      area.innerHTML = '<button type="button" class="btn primary" disabled>Adding to SendGrid...</button><span class="email-campaign-status">Draft creation is in progress.</span>';
+      return;
+    }
+    const uncertain = campaign.status === 'unknown';
+    const message = campaign.error_summary || (uncertain
+      ? 'TopAI could not confirm whether SendGrid created the draft. Check SendGrid before creating another.'
+      : 'TopAI could not create the SendGrid draft.');
+    area.innerHTML = `<span class="email-campaign-status error">${escapeHtmlText(message)}</span><a class="btn secondary btn-sm" href="/integrations/email-marketing">Email Marketing Settings</a><button type="button" class="btn secondary btn-sm" id="email-campaign-another-btn">Create Another Draft</button>`;
+    document.getElementById('email-campaign-another-btn').addEventListener('click', () => runEmailCampaignExport(generation.id, true));
+  }
+
+  async function runEmailCampaignExport(generationId, createAnother) {
+    const area = document.getElementById('email-campaign-area');
+    area.innerHTML = '<button type="button" class="btn primary" disabled>Adding to SendGrid...</button><span class="email-campaign-status">Creating an unscheduled draft...</span>';
+    try {
+      const res = await fetch(`/listings/${generationId}/email-campaigns`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ create_another: Boolean(createAnother) })
+      });
+      if (res.status === 401) { handle401(); return; }
+      const data = await res.json();
+      if (data.status) {
+        renderEmailCampaignArea({ id: generationId, email_campaign: data });
+        if (data.status === 'draft_created' && data.has_recipients === false) {
+          const status = area.querySelector('.email-campaign-status');
+          if (status) status.textContent += ' Choose recipients in SendGrid before sending.';
+        }
+      } else {
+        area.innerHTML = `<span class="email-campaign-status error">${escapeHtmlText(data.error || 'TopAI could not create the SendGrid draft.')}</span><a class="btn secondary btn-sm" href="/integrations/email-marketing">Email Marketing Settings</a>`;
+      }
+    } catch {
+      area.innerHTML = '<span class="email-campaign-status error">Network error. TopAI could not confirm the draft state. Check SendGrid before trying again.</span>';
     }
   }
 
