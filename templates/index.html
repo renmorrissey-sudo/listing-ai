@@ -58,6 +58,34 @@
     .copy-btn.copied { border-color: #22c55e; color: #22c55e; }
     .placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 280px; color: #aab; text-align: center; gap: 12px; }
     .placeholder svg { opacity: 0.35; }
+    .btn { display: inline-block; background: #eef2f7; color: #334; border: 1.5px solid #dde3ee; border-radius: 7px; padding: 7px 14px; font-size: 12px; font-weight: 700; text-decoration: none; cursor: pointer; }
+    .btn:hover { border-color: #4f8ef7; color: #3a7de0; }
+    .btn.primary { background: #4f8ef7; color: white; border-color: #4f8ef7; }
+    .btn.primary:hover { background: #3a7de0; }
+    .btn.secondary { background: white; }
+    .btn.btn-sm { padding: 4px 10px; font-size: 11px; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .pill { display: inline-block; border-radius: 999px; padding: 2px 9px; font-size: 11px; font-weight: 700; background: #eef5ff; color: #1d4ed8; }
+    .pill.success { background: #ecfdf5; color: #15803d; }
+    .pill.warn { background: #fff7ed; color: #c2410c; }
+    .pill.danger { background: #fef2f2; color: #b91c1c; }
+    .pill.muted { background: #f1f5f9; color: #556; }
+    .listing-output-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; font-size: 12px; color: #667; }
+    .listing-saved-note { color: #15803d; font-weight: 600; }
+    .listing-save-warning { color: #c2410c; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .listing-version-select { margin-left: auto; padding: 6px 10px; font-size: 12px; border-radius: 7px; border: 1.5px solid #e0e4ed; }
+    .recent-listings-card { grid-column: 1 / -1; }
+    .recent-listings-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .recent-listings-header a { font-size: 13px; font-weight: 600; color: #4f8ef7; text-decoration: none; }
+    .recent-listings-header a:hover { text-decoration: underline; }
+    .recent-listing-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 0; border-bottom: 1px solid #eef2f7; flex-wrap: wrap; }
+    .recent-listing-row:last-child { border-bottom: none; }
+    .recent-listing-address { font-weight: 600; font-size: 13.5px; }
+    .recent-listing-meta { color: #889; font-size: 12px; margin-top: 2px; }
+    .social-post-area { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eef2f7; }
+    .social-destinations { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: #556; margin-bottom: 10px; }
+    .post-result-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; font-size: 13px; }
+    @media (max-width: 720px) { .recent-listing-row { flex-direction: column; align-items: flex-start; } }
     .placeholder p { font-size: 14px; }
     .error-msg { background: #fff5f5; border: 1.5px solid #fca5a5; color: #dc2626; border-radius: 8px; padding: 12px 16px; font-size: 13px; margin-top: 12px; display: none; }
     .notice { background: #fff8e6; border: 1.5px solid #f0d98c; color: #7a5c00; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.45; margin-bottom: 14px; }
@@ -219,6 +247,8 @@
   <a class="tool-nav-btn nav-subscriber" id="crm-followups-tool-link" href="/crm/follow-ups" style="display:none; text-decoration:none;">Follow-ups</a>
   <a class="tool-nav-btn nav-subscriber" id="crm-tasks-tool-link" href="/crm/tasks" style="display:none; text-decoration:none;">Tasks</a>
   <a class="tool-nav-btn nav-subscriber" id="crm-needs-tool-link" href="/crm/needs-attention" style="display:none; text-decoration:none;">Needs Attention</a>
+  <a class="tool-nav-btn nav-subscriber" id="listing-archive-tool-link" href="/listings/archive" style="display:none; text-decoration:none;">Listing Archive</a>
+  <a class="tool-nav-btn nav-subscriber" id="social-connections-tool-link" href="/social/connections" style="display:none; text-decoration:none;">Social Media</a>
   <a class="tool-nav-btn nav-subscriber" id="tutorial-tool-link" href="/tutorial" style="display:none; text-decoration:none;">Tutorial</a>
 </nav>
 
@@ -247,7 +277,28 @@
         <button type="submit" class="btn-generate" id="listing-btn"><div class="spinner" id="listing-spinner"></div><span id="listing-btn-label">Generate Content</span></button>
       </form>
     </div>
-    <div class="card results-panel"><div class="placeholder" id="listing-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg><p>Fill in the property details<br/>and click Generate Content</p></div><div id="listing-output" style="display:none;"><div class="tabs"><div class="tab active" data-group="listing" data-tab="ldesc">Listing</div><div class="tab" data-group="listing" data-tab="lsocial">Social Posts</div><div class="tab" data-group="listing" data-tab="lemail">Email</div></div><div class="tab-content active" id="tab-ldesc"><div class="output-box" id="out-listing"></div><button class="copy-btn" data-target="out-listing">Copy</button></div><div class="tab-content" id="tab-lsocial"><div class="output-box" id="out-social"></div><button class="copy-btn" data-target="out-social">Copy</button></div><div class="tab-content" id="tab-lemail"><div class="output-box" id="out-email"></div><button class="copy-btn" data-target="out-email">Copy</button></div></div></div>
+    <div class="card results-panel"><div class="placeholder" id="listing-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg><p>Fill in the property details<br/>and click Generate Content</p></div><div id="listing-output" style="display:none;">
+      <div class="listing-output-meta" id="listing-output-meta">
+        <span id="listing-saved-note" class="listing-saved-note" style="display:none;"></span>
+        <span id="listing-save-warning" class="listing-save-warning" style="display:none;">Couldn't save this listing to your history. <button type="button" class="btn secondary btn-sm" id="listing-save-retry-btn">Retry save</button></span>
+        <select id="listing-version-select" class="listing-version-select" style="display:none;" aria-label="Version"></select>
+      </div>
+      <div class="tabs"><div class="tab active" data-group="listing" data-tab="ldesc">Listing</div><div class="tab" data-group="listing" data-tab="lsocial">Social Posts</div><div class="tab" data-group="listing" data-tab="lemail">Email</div></div>
+      <div class="tab-content active" id="tab-ldesc"><div class="output-box" id="out-listing"></div><button class="copy-btn" data-target="out-listing">Copy</button></div>
+      <div class="tab-content" id="tab-lsocial">
+        <div class="output-box" id="out-social"></div>
+        <button class="copy-btn" data-target="out-social">Copy</button>
+        <div class="social-post-area" id="social-post-area"></div>
+      </div>
+      <div class="tab-content" id="tab-lemail"><div class="output-box" id="out-email"></div><button class="copy-btn" data-target="out-email">Copy</button></div>
+    </div></div>
+    <div class="card recent-listings-card">
+      <div class="recent-listings-header">
+        <h2>Recent Listings</h2>
+        <a href="/listings/archive">View Archive &rarr;</a>
+      </div>
+      <div id="recent-listings-list"><p class="muted" style="font-size:13px;">Loading...</p></div>
+    </div>
   </main>
 </div>
 
@@ -466,7 +517,9 @@
     setSubscriberNav(true);
     loadVoiceData();
     loadSmsData();
+    loadRecentListings();
     applyToolHash();
+    openListingFromQueryParam();
   }
 
   function handle401() {
@@ -1154,6 +1207,139 @@
     });
   });
 
+  let currentListingGenerationId = null;
+  let currentListingSaveRetryPayload = null;
+
+  function escapeHtmlText(str) {
+    return (str || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function formatListingDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  function resetListingOutputMeta() {
+    document.getElementById('listing-saved-note').style.display = 'none';
+    document.getElementById('listing-save-warning').style.display = 'none';
+    document.getElementById('listing-version-select').style.display = 'none';
+    currentListingSaveRetryPayload = null;
+  }
+
+  function showListingSaved(generationId, createdAt) {
+    currentListingGenerationId = generationId || null;
+    const note = document.getElementById('listing-saved-note');
+    if (generationId) {
+      note.textContent = 'Saved to your listing history' + (createdAt ? ' \u00b7 ' + formatListingDate(createdAt) : '');
+      note.style.display = 'inline';
+    } else {
+      note.style.display = 'none';
+    }
+  }
+
+  function showListingSaveWarning(payload) {
+    currentListingSaveRetryPayload = payload;
+    document.getElementById('listing-save-warning').style.display = 'flex';
+  }
+
+  async function retryListingSave() {
+    if (!currentListingSaveRetryPayload) return;
+    const retryBtn = document.getElementById('listing-save-retry-btn');
+    retryBtn.disabled = true; retryBtn.textContent = 'Saving...';
+    try {
+      const res = await fetch('/listings/save-retry', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(currentListingSaveRetryPayload)
+      });
+      if (res.status === 401) { handle401(); return; }
+      const result = await res.json();
+      if (res.ok) {
+        document.getElementById('listing-save-warning').style.display = 'none';
+        showListingSaved(result.generation_id, result.created_at);
+        loadRecentListings();
+      } else {
+        retryBtn.textContent = 'Retry save';
+      }
+    } catch {
+      retryBtn.textContent = 'Retry save';
+    }
+    retryBtn.disabled = false;
+    if (retryBtn.textContent === 'Saving...') retryBtn.textContent = 'Retry save';
+  }
+  document.getElementById('listing-save-retry-btn').addEventListener('click', retryListingSave);
+
+  function renderVersionSelect(versions, activeId) {
+    const select = document.getElementById('listing-version-select');
+    if (!versions || versions.length < 2) { select.style.display = 'none'; return; }
+    select.innerHTML = versions.map(v =>
+      `<option value="${v.id}"${String(v.id) === String(activeId) ? ' selected' : ''}>${formatListingDate(v.created_at)}</option>`
+    ).join('');
+    select.style.display = 'inline-block';
+  }
+
+  function fillListingOutput(snapshot) {
+    document.getElementById('out-listing').textContent = snapshot.listing || '';
+    document.getElementById('out-social').textContent = snapshot.social || '';
+    document.getElementById('out-email').textContent = snapshot.email || '';
+    document.getElementById('listing-placeholder').style.display = 'none';
+    document.getElementById('listing-output').style.display = 'block';
+  }
+
+  async function openListing(id) {
+    try {
+      const res = await fetch('/listings/' + id);
+      if (res.status === 401) { handle401(); return; }
+      if (!res.ok) return;
+      const data = await res.json();
+      const gen = data.generation;
+      if (!gen) return;
+      switchTool('listing');
+      resetListingOutputMeta();
+      fillListingOutput(gen.output_snapshot || {});
+      showListingSaved(gen.id, gen.created_at);
+      renderVersionSelect(data.versions, gen.id);
+      if (gen.input_snapshot) {
+        const form = document.getElementById('listing-form');
+        Object.entries(gen.input_snapshot).forEach(([key, value]) => {
+          const field = form.elements[key];
+          if (field && value != null) field.value = value;
+        });
+      }
+      renderSocialPostArea(gen);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch { /* non-fatal: leave current view as-is */ }
+  }
+  window.openListing = openListing;
+
+  document.getElementById('listing-version-select').addEventListener('change', e => {
+    if (e.target.value) openListing(e.target.value);
+  });
+
+  async function loadRecentListings() {
+    const listEl = document.getElementById('recent-listings-list');
+    try {
+      const res = await fetch('/listings/recent');
+      if (!res.ok) { listEl.innerHTML = ''; return; }
+      const data = await res.json();
+      const items = data.items || [];
+      if (!items.length) {
+        listEl.innerHTML = '<p class="muted" style="font-size:13px;">No listings generated yet. Fill in the form above to create your first one.</p>';
+        return;
+      }
+      listEl.innerHTML = items.map(item => `
+        <div class="recent-listing-row">
+          <div>
+            <div class="recent-listing-address">${escapeHtmlText(item.display_address)}</div>
+            <div class="recent-listing-meta">Generated ${formatListingDate(item.created_at)}</div>
+          </div>
+          <button type="button" class="btn secondary" onclick="openListing(${item.id})">Open</button>
+        </div>
+      `).join('');
+    } catch { listEl.innerHTML = ''; }
+  }
+
   document.getElementById('listing-form').addEventListener('submit', async e => {
     e.preventDefault();
     const btn = document.getElementById('listing-btn');
@@ -1169,15 +1355,122 @@
       const result = await res.json();
       if (!res.ok) { errEl.textContent = result.error; errEl.style.display = 'block'; }
       else {
-        document.getElementById('out-listing').textContent = result.listing;
-        document.getElementById('out-social').textContent = result.social;
-        document.getElementById('out-email').textContent = result.email;
-        document.getElementById('listing-placeholder').style.display = 'none';
-        document.getElementById('listing-output').style.display = 'block';
+        resetListingOutputMeta();
+        fillListingOutput(result);
+        if (result.generation_id) {
+          showListingSaved(result.generation_id, result.created_at);
+          renderSocialPostArea({ id: result.generation_id, social_content: result.social_content });
+          loadRecentListings();
+        } else if (result.save_warning) {
+          showListingSaveWarning(result.save_retry_payload);
+        }
       }
     } catch { errEl.textContent = 'Network error.'; errEl.style.display = 'block'; }
     btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Generate Content';
   });
+
+  async function renderSocialPostArea(generation) {
+    const area = document.getElementById('social-post-area');
+    if (!generation || !generation.id) { area.innerHTML = ''; return; }
+    area.innerHTML = '<p class="muted" style="font-size:12px;">Loading connected destinations...</p>';
+    try {
+      const res = await fetch('/social/default-channels');
+      if (res.status === 401) { handle401(); return; }
+      const data = await res.json();
+      const channels = data.channels || [];
+      const destLabel = channels.length
+        ? channels.map(c => `${escapeHtmlText(c.display_name || c.provider)} &#10003;`).join(', ')
+        : 'No social accounts connected yet.';
+      area.innerHTML = `
+        <div class="social-destinations">
+          <strong>Connected destinations:</strong> <span id="social-dest-list">${destLabel}</span>
+          ${!channels.length ? '<a href="/social/connections" style="margin-left:6px;">Connect an account &rarr;</a>' : ''}
+        </div>
+        <button type="button" class="btn primary" id="social-post-btn" ${channels.length ? '' : 'disabled'}>Post</button>
+        <div id="social-post-results"></div>
+      `;
+      document.getElementById('social-post-btn').addEventListener('click', () => runSocialPost(generation.id));
+    } catch {
+      area.innerHTML = '<p class="muted" style="font-size:12px;">Couldn\'t load connected destinations.</p>';
+    }
+  }
+
+  function socialOperationId() {
+    return (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : 'op-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+  }
+
+  function renderSocialPostResults(generationId, results) {
+    const resultsEl = document.getElementById('social-post-results');
+    if (!resultsEl) return;
+    if (!results.length) { resultsEl.innerHTML = ''; return; }
+    const succeeded = results.filter(r => r.status === 'published').length;
+    const summary = succeeded === results.length
+      ? `<p class="muted" style="font-size:12px;">Posted to ${succeeded} of ${results.length} channel${results.length > 1 ? 's' : ''}.</p>`
+      : `<p class="muted" style="font-size:12px;">Posted to ${succeeded} of ${results.length} channel${results.length > 1 ? 's' : ''}.</p>`;
+    resultsEl.innerHTML = summary + results.map(r => {
+      const name = escapeHtmlText(r.connection_display_name || r.provider);
+      if (r.status === 'published') {
+        const link = r.provider_post_url ? ` &middot; <a href="${r.provider_post_url}" target="_blank" rel="noopener">View post</a>` : '';
+        return `<div class="post-result-row"><span class="pill success">${name} &#10003;</span>${link}</div>`;
+      }
+      return `<div class="post-result-row"><span class="pill danger">${name} &#10007;</span> <span class="muted" style="font-size:12px;">${escapeHtmlText(r.error_summary || 'Failed to post.')}</span> <button type="button" class="btn secondary btn-sm" onclick="retrySocialPost(${generationId}, '${r.provider}')">Retry</button></div>`;
+    }).join('');
+  }
+
+  async function runSocialPost(generationId) {
+    const btn = document.getElementById('social-post-btn');
+    btn.disabled = true;
+    const originalLabel = btn.textContent;
+    btn.textContent = 'Posting...';
+    try {
+      const res = await fetch(`/listings/${generationId}/post`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ operation_id: socialOperationId() })
+      });
+      if (res.status === 401) { handle401(); return; }
+      const data = await res.json();
+      if (!res.ok) {
+        document.getElementById('social-post-results').innerHTML =
+          `<p class="muted" style="font-size:12px;color:#b91c1c;">${escapeHtmlText(data.error || 'Could not post.')}</p>`;
+      } else {
+        renderSocialPostResults(generationId, data.results || []);
+      }
+    } catch {
+      document.getElementById('social-post-results').innerHTML = '<p class="muted" style="font-size:12px;color:#b91c1c;">Network error.</p>';
+    }
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+  }
+  window.runSocialPost = runSocialPost;
+
+  async function retrySocialPost(generationId, provider) {
+    try {
+      const res = await fetch(`/listings/${generationId}/post/${provider}/retry`, {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ operation_id: socialOperationId() })
+      });
+      if (res.status === 401) { handle401(); return; }
+      const data = await res.json();
+      if (res.ok) {
+        const resultsEl = document.getElementById('social-post-results');
+        const rows = Array.from(resultsEl.querySelectorAll('.post-result-row'));
+        // Simplest correct redraw: just show the single updated result inline; full
+        // history remains visible above via existing rows for other providers.
+        const name = escapeHtmlText(data.connection_display_name || data.provider);
+        const html = data.status === 'published'
+          ? `<div class="post-result-row"><span class="pill success">${name} &#10003;</span>${data.provider_post_url ? ` &middot; <a href="${data.provider_post_url}" target="_blank" rel="noopener">View post</a>` : ''}</div>`
+          : `<div class="post-result-row"><span class="pill danger">${name} &#10007;</span> <span class="muted" style="font-size:12px;">${escapeHtmlText(data.error_summary || 'Failed to post.')}</span> <button type="button" class="btn secondary btn-sm" onclick="retrySocialPost(${generationId}, '${provider}')">Retry</button></div>`;
+        rows.forEach(row => { if (row.textContent.includes(name)) row.outerHTML = html; });
+      }
+    } catch { /* leave prior state visible */ }
+  }
+  window.retrySocialPost = retrySocialPost;
+
+  function openListingFromQueryParam() {
+    const params = new URLSearchParams(window.location.search);
+    const listingId = params.get('listing');
+    if (listingId) openListing(listingId);
+  }
 
   document.getElementById('script-form').addEventListener('submit', async e => {
     e.preventDefault();

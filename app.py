@@ -14,12 +14,15 @@ import crm_db
 import db
 from datetime import datetime, timedelta, timezone
 
+import listing_generations_db as listing_db
 import sms_coach
 from crm import crm_bp
 from crm_constants import status_label
 from external_leads_routes import external_leads_bp
 from sms_campaigns import sms_campaigns_bp
+from social_routes import social_bp
 from sms_prompts import build_sms_prompt
+from social_content import build_social_content_snapshot
 from sms_provider import (
     SmsProviderError,
     get_sms_provider,
@@ -70,6 +73,7 @@ db.init_db()
 app.register_blueprint(crm_bp)
 app.register_blueprint(external_leads_bp)
 app.register_blueprint(sms_campaigns_bp)
+app.register_blueprint(social_bp)
 client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 if config.STRIPE_SECRET_KEY:
@@ -2091,16 +2095,184 @@ def generate():
             messages=[{"role": "user", "content": build_listing_prompt(cleaned)}],
         )
         raw = message.content[0].text
-        listing = _extract_section(raw, "LISTING DESCRIPTION", "SOCIAL POSTS")
-        social = _extract_section(raw, "SOCIAL POSTS", "PROSPECT EMAIL")
-        email = _extract_section(raw, "PROSPECT EMAIL", None)
+        listing = _extract_section(raw, "LISTING DESCRIPTION", "SOCIAL POSTS").strip()
+        social = _extract_section(raw, "SOCIAL POSTS", "PROSPECT EMAIL").strip()
+        email = _extract_section(raw, "PROSPECT EMAIL", None).strip()
         user = auth.get_current_user()
+        output_snapshot = {"listing": listing, "social": social, "email": email}
+        response_body = dict(output_snapshot)
         if user:
             db.record_tool_usage(user["id"], "listing_generator", "generated")
-        return jsonify({"listing": listing.strip(), "social": social.strip(), "email": email.strip()})
+            try:
+                generation = listing_db.create_generation(
+                    user["id"],
+                    display_address=cleaned.get("address", ""),
+                    input_snapshot=cleaned,
+                    output_snapshot=output_snapshot,
+                    social_content=build_social_content_snapshot(social),
+                )
+                response_body["generation_id"] = generation["id"]
+                response_body["created_at"] = generation["created_at"]
+            except Exception:
+                # Generated content is still returned to the user — persistence
+                # failure must never destroy or hide work that already succeeded.
+                logger.exception("Failed to auto-save listing generation for user %s", user["id"])
+                response_body["save_warning"] = (
+                    "Couldn't save this listing to your history. You can retry saving below."
+                )
+                response_body["save_retry_payload"] = {
+                    "address": cleaned.get("address", ""),
+                    "input_snapshot": cleaned,
+                    "output_snapshot": output_snapshot,
+                    "social_content": build_social_content_snapshot(social),
+                }
+        return jsonify(response_body)
     except Exception:
         logger.exception("Listing generation failed")
         return jsonify({"error": "Generation failed. Please try again."}), 500
+
+
+@app.route("/listings/recent", methods=["GET"])
+@auth.subscription_required
+def listings_recent():
+    user = auth.get_current_user()
+    items = listing_db.list_recent(user["id"], limit=20)
+    return jsonify({"items": items})
+
+
+@app.route("/listings/archive", methods=["GET"])
+def listings_archive_page():
+    user = auth.get_current_user()
+    if not user:
+        return redirect(url_for("login", next="/listings/archive"))
+    if config.SUBSCRIPTION_REQUIRED and not auth.user_has_active_subscription(user):
+        return redirect(url_for("subscribe"))
+    return render_template(
+        "listing_archive.html",
+        email=user["email"],
+        has_billing_portal=bool(user.get("stripe_customer_id")),
+        active_nav="listing-archive",
+        product_name=config.PRODUCT_NAME,
+        retention_days=config.LISTING_GENERATION_RETENTION_DAYS,
+    )
+
+
+@app.route("/listings/archive/search", methods=["GET"])
+@auth.subscription_required
+def listings_archive_search():
+    user = auth.get_current_user()
+    query = request.args.get("q", "")
+    try:
+        page = int(request.args.get("page", "1"))
+    except (TypeError, ValueError):
+        page = 1
+    result = listing_db.search_archive(user["id"], query=query, page=page, page_size=20)
+    try:
+        from listing_publish import annotate_publish_status
+
+        result["items"] = annotate_publish_status(user["id"], result["items"])
+    except Exception:
+        logger.exception("Failed to annotate publish status for listing archive")
+    return jsonify(result)
+
+
+@app.route("/listings/<int:generation_id>", methods=["GET"])
+@auth.subscription_required
+def listings_get_one(generation_id):
+    user = auth.get_current_user()
+    generation = listing_db.get_by_id(user["id"], generation_id)
+    if not generation:
+        return jsonify({"error": "Listing not found or no longer retained."}), 404
+    versions = listing_db.list_versions_for_address(user["id"], generation["normalized_address"])
+    try:
+        from listing_publish import annotate_publish_status
+
+        generation = annotate_publish_status(user["id"], [generation])[0]
+    except Exception:
+        logger.exception("Failed to annotate publish status for listing %s", generation_id)
+    return jsonify({
+        "generation": generation,
+        "versions": [
+            {"id": v["id"], "created_at": v["created_at"], "display_address": v["display_address"]}
+            for v in versions
+        ],
+    })
+
+
+@app.route("/listings/save-retry", methods=["POST"])
+@auth.subscription_required
+@limiter.limit("20 per minute", key_func=_user_rate_limit_key)
+def listings_save_retry():
+    """Persist an already-generated snapshot again — no AI call, no extra cost."""
+    user = auth.get_current_user()
+    data = request.get_json(silent=True) or {}
+    address = (data.get("address") or "").strip()
+    output_snapshot = data.get("output_snapshot")
+    if not address or not output_snapshot:
+        return jsonify({"error": "Missing generated content to save."}), 400
+    try:
+        generation = listing_db.create_generation(
+            user["id"],
+            display_address=address,
+            input_snapshot=data.get("input_snapshot"),
+            output_snapshot=output_snapshot,
+            social_content=data.get("social_content"),
+        )
+    except Exception:
+        logger.exception("Retry save of listing generation failed for user %s", user["id"])
+        return jsonify({"error": "Still couldn't save. Please try again shortly."}), 500
+    return jsonify({"generation_id": generation["id"], "created_at": generation["created_at"]})
+
+
+@app.route("/listings/<int:generation_id>/post", methods=["POST"])
+@auth.subscription_required
+@limiter.limit("20 per minute", key_func=_user_rate_limit_key)
+def listings_post(generation_id):
+    """One-click Post: publish to the tenant's default-enabled+ready channels."""
+    from listing_publish import publish_listing
+
+    user = auth.get_current_user()
+    data = request.get_json(silent=True) or {}
+    try:
+        result = publish_listing(
+            user["id"],
+            generation_id,
+            operation_id=data.get("operation_id"),
+            connection_ids=data.get("connection_ids"),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except Exception:
+        logger.exception("Listing publish failed for generation %s", generation_id)
+        return jsonify({"error": "Couldn't publish this post. Please try again."}), 500
+    if not result["results"]:
+        return jsonify({
+            "error": "No social accounts are connected and enabled for one-click posting.",
+            "operation_id": result["operation_id"],
+            "results": [],
+        }), 400
+    return jsonify(result)
+
+
+@app.route("/listings/<int:generation_id>/post/<provider>/retry", methods=["POST"])
+@auth.subscription_required
+@limiter.limit("20 per minute", key_func=_user_rate_limit_key)
+def listings_post_retry(generation_id, provider):
+    """Retry exactly one provider's publication without reposting the others."""
+    from listing_publish import retry_publish
+
+    user = auth.get_current_user()
+    data = request.get_json(silent=True) or {}
+    try:
+        result = retry_publish(
+            user["id"], generation_id, provider, operation_id=data.get("operation_id")
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except Exception:
+        logger.exception("Listing publish retry failed for generation %s provider %s", generation_id, provider)
+        return jsonify({"error": "Couldn't publish this post. Please try again."}), 500
+    return jsonify(result)
 
 
 @app.route("/generate-script", methods=["POST"])

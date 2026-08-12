@@ -20,6 +20,13 @@ logger = logging.getLogger("sms_campaign_worker")
 
 _RUNNING = True
 
+# Listing Generator 60-day retention cleanup piggybacks on this worker's idle
+# loop rather than adding a second Railway process. Defense-in-depth #2 —
+# application read queries already filter expires_at > now (#1); this is the
+# hard-delete sweep. A daily cadence is enough for a 60-day retention window.
+_LAST_LISTING_CLEANUP = None
+LISTING_CLEANUP_INTERVAL = timedelta(hours=24)
+
 
 def _handle_signal(signum, frame):
     global _RUNNING
@@ -29,6 +36,24 @@ def _handle_signal(signum, frame):
 
 def _now():
     return datetime.now(timezone.utc)
+
+
+def _maybe_cleanup_expired_listings():
+    global _LAST_LISTING_CLEANUP
+    now = _now()
+    if _LAST_LISTING_CLEANUP is not None and now - _LAST_LISTING_CLEANUP < LISTING_CLEANUP_INTERVAL:
+        return
+    _LAST_LISTING_CLEANUP = now
+    try:
+        import listing_generations_db as listing_db
+        import social_connections_db as social_db
+
+        deleted = listing_db.cleanup_expired()
+        social_db.cleanup_expired_oauth_states()
+        if deleted:
+            logger.info("Listing retention cleanup removed %s expired listing_generations row(s)", deleted)
+    except Exception:
+        logger.exception("Listing retention cleanup failed")
 
 
 def _render(template, merge_fields, defaults=None):
@@ -297,6 +322,7 @@ def main():
                     loops,
                     worker_id,
                 )
+            _maybe_cleanup_expired_listings()
             worked = process_one(worker_id)
             if worked:
                 idle_sleep = 1
