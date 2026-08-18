@@ -17,6 +17,7 @@ from sms_authorization import (
 )
 from sms_provider import sms_status_callback_url
 from sms_providers import SmsProviderError, get_sms_provider
+from sms_quiet_hours import is_quiet_hours_block, quiet_hours_schedule_info
 
 logger = logging.getLogger(__name__)
 
@@ -103,10 +104,14 @@ def send_authorized_sms(
     persona_id=None,
     message_id=None,
     skip_quiet_hours=False,
+    schedule_if_quiet=False,
 ):
     """
     Record attestation (if confirmed), authorize, send via active provider.
     Returns (result_dict, error_str, http_status).
+
+    If the only block is quiet hours and schedule_if_quiet is True, persist a
+    scheduled outbound row instead of sending or returning an error.
     """
     correlation_id = _correlation_id()
     provider_name = (config.SMS_PROVIDER or "unknown").lower()
@@ -208,6 +213,88 @@ def send_authorized_sms(
             skip_quiet_hours=skip_quiet_hours,
         )
         if not allowed:
+            if is_quiet_hours_block(block_msg):
+                info = quiet_hours_schedule_info(
+                    user_id, phone=to_number, lead=lead
+                )
+                if schedule_if_quiet:
+                    if message_id is None:
+                        message_id = db.create_sms_message(
+                            user_id=user_id,
+                            persona_id=persona_id,
+                            provider=config.SMS_PROVIDER,
+                            data={
+                                "lead_name": lead.get("name"),
+                                "phone_number": to_number,
+                                "lead_type": lead.get("lead_type"),
+                                "property_interest": lead.get("property_interest"),
+                                "message_body": message_body,
+                            },
+                            status="scheduled",
+                            lead_id=lead_id,
+                            direction="outbound",
+                            consent_status="confirmed",
+                            opt_out_status=lead.get("opt_out_status") or "active",
+                        )
+                    db.schedule_sms_message(message_id, info["scheduled_for"])
+                    _safe_audit(
+                        user_id,
+                        "message_scheduled_quiet_hours",
+                        lead_id=lead_id,
+                        metadata={
+                            "correlation_id": correlation_id,
+                            "message_id": message_id,
+                            "to_number": to_number,
+                            "scheduled_for": info["scheduled_for"],
+                            "timezone": info["timezone"],
+                        },
+                    )
+                    return {
+                        "id": message_id,
+                        "lead_id": lead_id,
+                        "status": "scheduled",
+                        "scheduled": True,
+                        "message_body": message_body,
+                        "to_number": to_number,
+                        "correlation_id": correlation_id,
+                        "send_status": "scheduled",
+                        "can_schedule": True,
+                        "scheduled_for": info["scheduled_for"],
+                        "scheduled_for_local": info["scheduled_for_local"],
+                        "timezone": info["timezone"],
+                        "timezone_source": info["timezone_source"],
+                    }, None, 201
+                payload, status = _error_payload(
+                    error=info["error"],
+                    stage=STAGE_VALIDATION,
+                    correlation_id=correlation_id,
+                    category="quiet_hours",
+                    http_status=409,
+                    lead_id=lead_id,
+                    to_number=to_number,
+                    provider=provider_name,
+                    extra={
+                        "can_schedule": True,
+                        "scheduled_for": info["scheduled_for"],
+                        "scheduled_for_local": info["scheduled_for_local"],
+                        "timezone": info["timezone"],
+                        "timezone_source": info["timezone_source"],
+                    },
+                )
+                _safe_audit(
+                    user_id,
+                    "message_send_blocked",
+                    lead_id=lead_id,
+                    metadata={
+                        "correlation_id": correlation_id,
+                        "stage": STAGE_VALIDATION,
+                        "to_number": to_number,
+                        "error": info["error"],
+                        "error_category": "quiet_hours",
+                        "compliance_confirmed": True,
+                    },
+                )
+                return payload, payload["error"], status
             payload, status = _error_payload(
                 error=block_msg,
                 stage=STAGE_VALIDATION,

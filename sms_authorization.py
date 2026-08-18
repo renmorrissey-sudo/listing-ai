@@ -8,6 +8,7 @@ import config
 import db
 import tenant_sms_db as tdb
 from sms_consent import outbound_sms_blocked_for_phone
+from sms_quiet_hours import QUIET_HOURS_MSG, in_quiet_hours
 from sms_validation import validate_e164_phone
 
 BLOCKED_EXTERNAL_MSG = (
@@ -23,7 +24,6 @@ NO_CERT_MSG = (
     "SMS cannot be sent until you certify that this contact consented to receive messages "
     "from you or your business."
 )
-QUIET_HOURS_MSG = "SMS cannot be sent during quiet hours for this account."
 RATE_LIMIT_MSG = "SMS rate limit reached for this account. Try again later."
 
 USER_CERTIFIED = "user_certified"
@@ -201,19 +201,9 @@ def _provider_credentials_ok():
     return False
 
 
-def _in_quiet_hours(user_id, now=None):
-    """Quiet hours evaluated on the account's local wall clock, never server/UTC time."""
-    from crm_time import resolve_zone
-
-    tz = resolve_zone(db.get_user_timezone(user_id))
-    hour = (now or datetime.now(timezone.utc)).astimezone(tz).hour
-    start = config.SMS_QUIET_HOURS_START
-    end = config.SMS_QUIET_HOURS_END
-    if start == end:
-        return False
-    if start > end:
-        return hour >= start or hour < end
-    return start <= hour < end
+def _in_quiet_hours(user_id, now=None, *, phone=None, lead=None):
+    """Quiet hours on the recipient local clock when known, else the account timezone."""
+    return in_quiet_hours(user_id, now=now, phone=phone, lead=lead)
 
 
 def _rate_limited(user_id, phone_number):
@@ -292,7 +282,7 @@ def can_send_sms(
     if inquiry_block:
         return False, inquiry_block
 
-    if not skip_quiet_hours and _in_quiet_hours(tenant_id):
+    if not skip_quiet_hours and _in_quiet_hours(tenant_id, phone=cleaned, lead=lead):
         return False, QUIET_HOURS_MSG
 
     if _rate_limited(tenant_id, cleaned):

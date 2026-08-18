@@ -54,7 +54,7 @@ def test_helper_keeps_real_inbound_and_sent_outbound_only():
         assert db.is_visible_conversation_sms(
             {"direction": "outbound", "status": status}
         ), status
-    for status in ("suggested", "dismissed", "cancelled", "draft"):
+    for status in ("suggested", "dismissed", "cancelled", "draft", "scheduled"):
         assert not db.is_visible_conversation_sms(
             {"direction": "outbound", "status": status}
         ), status
