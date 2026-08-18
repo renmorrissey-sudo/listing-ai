@@ -1496,7 +1496,31 @@ def send_sms_suggestion(insight_id):
         return jsonify({"error": "Certify contact SMS consent before sending."}), 400
 
     insight = db.get_insight(insight_id, user["id"])
-    if not insight or insight.get("status") != "pending":
+    if not insight:
+        return jsonify({"error": "Suggestion not found."}), 404
+
+    existing_ai = db.get_sent_ai_outbound_for_inbound(insight.get("inbound_message_id"))
+    if existing_ai:
+        db.consume_pending_suggestion_after_auto_reply(
+            user["id"],
+            insight_id,
+            insight.get("suggested_message_id"),
+        )
+        lead = db.get_lead(insight["lead_id"], user["id"]) or {}
+        return jsonify({
+            "ok": True,
+            "already_sent": True,
+            "id": existing_ai.get("id"),
+            "lead_id": insight.get("lead_id"),
+            "status": existing_ai.get("status"),
+            "provider_message_id": existing_ai.get("provider_message_id"),
+            "message_body": existing_ai.get("message_body"),
+            "consent_status": "confirmed",
+            "opt_out_status": lead.get("opt_out_status") or "active",
+            "sent_at": existing_ai.get("sent_at") or existing_ai.get("created_at"),
+        }), 200
+
+    if insight.get("status") != "pending":
         return jsonify({"error": "Suggestion not found or already handled."}), 404
 
     if insight.get("requires_manual_review") and not data.get("force_send_after_review"):
