@@ -1696,14 +1696,49 @@ def find_sms_user_by_phone(phone_number):
         return row["user_id"] if row else None
 
 
-def list_sms_messages(user_id, limit=20):
+_HIDDEN_OUTBOUND_HISTORY_STATUSES = frozenset(
+    {"suggested", "dismissed", "cancelled", "draft"}
+)
+
+
+def is_visible_conversation_sms(msg):
+    """True for real inbound SMS and actually sent/attempted outbound SMS.
+
+    Suggested AI drafts stay in sms_messages for coaching/approval; they are
+    not part of the visible conversation history.
+    """
+    if not msg:
+        return False
+    direction = str(msg.get("direction") or "").strip().lower()
+    status = str(msg.get("status") or "").strip().lower()
+    if direction == "inbound":
+        return True
+    if direction != "outbound":
+        return False
+    return status not in _HIDDEN_OUTBOUND_HISTORY_STATUSES
+
+
+def _visible_conversation_sms_sql(alias="sm"):
+    prefix = f"{alias}." if alias else ""
+    direction = f"{prefix}direction"
+    status = f"{prefix}status"
+    return (
+        f"(LOWER(COALESCE({direction}, '')) = 'inbound'"
+        f" OR (LOWER(COALESCE({direction}, 'outbound')) = 'outbound'"
+        f" AND LOWER(COALESCE({status}, '')) NOT IN "
+        f"('suggested', 'dismissed', 'cancelled', 'draft')))"
+    )
+
+
+def list_sms_messages(user_id, limit=20, *, visible_only=False):
+    extra = f" AND {_visible_conversation_sms_sql('sm')}" if visible_only else ""
     with get_db() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT sm.*, vp.name AS persona_name
             FROM sms_messages sm
             LEFT JOIN voice_personas vp ON vp.id = sm.persona_id
-            WHERE sm.user_id = ?
+            WHERE sm.user_id = ?{extra}
             ORDER BY sm.created_at DESC
             LIMIT ?
             """,
@@ -1731,14 +1766,15 @@ def latest_failed_sms_error(user_id):
         return dict(row) if row else None
 
 
-def list_lead_messages(user_id, lead_id, limit=100):
+def list_lead_messages(user_id, lead_id, limit=100, *, visible_only=False):
+    extra = f" AND {_visible_conversation_sms_sql('sm')}" if visible_only else ""
     with get_db() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT sm.*, vp.name AS persona_name
             FROM sms_messages sm
             LEFT JOIN voice_personas vp ON vp.id = sm.persona_id
-            WHERE sm.user_id = ? AND sm.lead_id = ?
+            WHERE sm.user_id = ? AND sm.lead_id = ?{extra}
             ORDER BY sm.created_at ASC
             LIMIT ?
             """,
@@ -1929,10 +1965,11 @@ def get_dashboard_metrics(user_id):
         ).fetchone()
         sms_last = sms_last["created_at"] if sms_last else None
         recent_sms = conn.execute(
-            """
+            f"""
             SELECT lead_name, phone_number, status, message_body, created_at
             FROM sms_messages
             WHERE user_id = ?
+              AND {_visible_conversation_sms_sql("")}
             ORDER BY created_at DESC
             LIMIT 5
             """,
