@@ -759,15 +759,31 @@
   let smsSendConfigured = false;
   let smsTollFreeVerified = false;
   let smsVerificationBlockMessage = "SMS sending isn't available yet while your number completes toll-free verification. Contact support if this is taking longer than expected.";
+  let selectedSmsLeadId = '';
+  let smsRecentLoadGen = 0;
+
+  function selectedSmsLeadQuery() {
+    const select = document.getElementById('sms-lead-select');
+    const fromSelect = select && select.value ? String(select.value) : '';
+    return selectedSmsLeadId || fromSelect;
+  }
 
   async function loadSmsMessages() {
     const history = document.getElementById('sms-history');
     const placeholder = document.getElementById('sms-placeholder');
     const verifyNote = document.getElementById('sms-verification-block');
     if (!history || !placeholder) return;
+    const leadId = selectedSmsLeadQuery();
+    const url = leadId
+      ? `/sms/messages?lead_id=${encodeURIComponent(leadId)}`
+      : '/sms/messages';
+    const emptyCopy = leadId
+      ? 'No SMS history for this lead yet.'
+      : 'Generate or send an SMS<br/>to see recent messages here.';
+    const gen = ++smsRecentLoadGen;
     try {
-      const data = await fetchJson('/sms/messages', {cache: 'no-store'});
-      if (!data) return;
+      const data = await fetchJson(url, {cache: 'no-store'});
+      if (!data || gen !== smsRecentLoadGen) return;
       const statusPayload = data.provider_status || data.twilio_status || {};
       smsTollFreeVerified = !data.toll_free_verification_blocked && (
         statusPayload.toll_free_verified === true
@@ -796,6 +812,7 @@
       if (!data.messages.length) {
         history.style.display = 'none';
         placeholder.style.display = 'flex';
+        placeholder.innerHTML = `<p>${emptyCopy}</p>`;
         return;
       }
       const recent = (data.messages || []).filter(msg => {
@@ -805,6 +822,7 @@
       if (!recent.length) {
         history.style.display = 'none';
         placeholder.style.display = 'flex';
+        placeholder.innerHTML = `<p>${emptyCopy}</p>`;
         return;
       }
       history.innerHTML = recent.map(msg => {
@@ -924,9 +942,22 @@
       select.innerHTML = '<option value="">Select a lead...</option>' + data.leads.map(lead =>
         `<option value="${lead.id}">${escapeHtml(lead.name || 'Lead')} · ${escapeHtml(lead.phone_number)} · ${escapeHtml(lead.status)}</option>`
       ).join('');
-      if (current) select.value = current;
+      const restore = selectedSmsLeadId || current;
+      if (restore) select.value = restore;
       select.onchange = () => {
-        if (select.value) openSmsLead(select.value);
+        if (select.value) {
+          openSmsLead(select.value);
+        } else {
+          selectedSmsLeadId = '';
+          const thread = document.getElementById('sms-thread');
+          const threadPlaceholder = document.getElementById('sms-thread-placeholder');
+          if (thread) thread.style.display = 'none';
+          if (threadPlaceholder) {
+            threadPlaceholder.style.display = 'flex';
+            threadPlaceholder.innerHTML = '<p>Select a lead to view<br/>conversation history.</p>';
+          }
+          loadSmsMessages();
+        }
       };
     } catch (err) {
       select.innerHTML = '<option value="">Leads unavailable</option>';
@@ -979,11 +1010,19 @@
     const select = document.getElementById('sms-lead-select');
     const thread = document.getElementById('sms-thread');
     const placeholder = document.getElementById('sms-thread-placeholder');
-    if (select) select.value = String(leadId);
-    if (!thread || !placeholder) return;
+    selectedSmsLeadId = leadId ? String(leadId) : '';
+    if (select && selectedSmsLeadId) select.value = selectedSmsLeadId;
+    const recentPromise = loadSmsMessages();
+    if (!thread || !placeholder) {
+      await recentPromise;
+      return;
+    }
     try {
       const data = await fetchJson(`/sms/leads/${leadId}/messages`, {cache: 'no-store'});
-      if (!data) return;
+      if (!data) {
+        await recentPromise;
+        return;
+      }
       const messages = (data.messages || []).filter(msg => {
         const direction = (msg.direction || '').toLowerCase();
         return direction === 'inbound' || direction === 'outbound';
@@ -992,6 +1031,7 @@
         thread.style.display = 'none';
         placeholder.style.display = 'flex';
         placeholder.innerHTML = '<p>No messages for this lead yet.</p>';
+        await recentPromise;
         return;
       }
       thread.innerHTML = messages.map(msg => {
@@ -1009,6 +1049,7 @@
       placeholder.style.display = 'flex';
       placeholder.innerHTML = `<p>${err.message}</p>`;
     }
+    await recentPromise;
   }
 
   async function dismissSmsSuggestion(insightId) {

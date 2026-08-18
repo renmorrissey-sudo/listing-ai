@@ -1919,11 +1919,16 @@ def _visible_conversation_sms_sql(alias="sm"):
     )
 
 
-def list_sms_messages(user_id, limit=20, *, visible_only=False):
+def list_sms_messages(user_id, limit=20, *, visible_only=False, lead_id=None):
     fetch_limit = max(int(limit or 20), 1)
     if visible_only:
         fetch_limit = min(fetch_limit * 3, 60)
     extra = f" AND {_visible_conversation_sms_sql('sm')}" if visible_only else ""
+    params = [user_id]
+    if lead_id is not None:
+        extra += " AND sm.lead_id = ?"
+        params.append(lead_id)
+    params.append(fetch_limit)
     with get_db() as conn:
         rows = conn.execute(
             f"""
@@ -1934,7 +1939,7 @@ def list_sms_messages(user_id, limit=20, *, visible_only=False):
             ORDER BY sm.created_at DESC, sm.id DESC
             LIMIT ?
             """,
-            (user_id, fetch_limit),
+            tuple(params),
         ).fetchall()
         messages = [dict(row) for row in rows]
     if visible_only:

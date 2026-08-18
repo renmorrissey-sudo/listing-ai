@@ -1241,7 +1241,18 @@ def start_voice_call():
 @auth.subscription_required
 def sms_messages():
     user = auth.get_current_user()
-    messages = db.list_sms_messages(user["id"], visible_only=True)
+    filtered_lead_id = None
+    lead_id_raw = request.args.get("lead_id")
+    if lead_id_raw not in (None, ""):
+        try:
+            filtered_lead_id = int(lead_id_raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid lead_id."}), 400
+        if not db.get_lead(filtered_lead_id, user["id"]):
+            return jsonify({"error": "Lead not found."}), 404
+    messages = db.list_sms_messages(
+        user["id"], visible_only=True, lead_id=filtered_lead_id
+    )
     provider = get_sms_provider()
     latest = db.latest_failed_sms_error(user["id"])
     latest_code = parse_provider_code_from_error_message(
@@ -1286,6 +1297,7 @@ def sms_messages():
         "provider_status": status,
         # Legacy key retained for older clients; UI prefers provider_status.
         "twilio_status": status if status.get("provider") == "twilio" else None,
+        "filtered_lead_id": filtered_lead_id,
         "messages": [
             {
                 "id": m["id"],
