@@ -1088,6 +1088,28 @@ def update_insight_status(insight_id, user_id, status):
         )
 
 
+def consume_pending_suggestion_after_auto_reply(user_id, insight_id, suggested_message_id=None):
+    """Mark the coaching insight non-actionable after an AI auto-reply was sent.
+
+    The suggested draft row stays direction='suggested' (hidden from history).
+    Already-converted outbound rows are left unchanged.
+    """
+    if insight_id:
+        update_insight_status(insight_id, user_id, "sent")
+    if not suggested_message_id:
+        return
+    row = get_sms_message(suggested_message_id, user_id)
+    if not row:
+        return
+    if str(row.get("direction") or "").strip().lower() != "suggested":
+        return
+    update_sms_message_send_result(
+        suggested_message_id,
+        status="dismissed",
+        error_message="Superseded by AI auto-reply.",
+    )
+
+
 def create_sms_message(
     user_id,
     persona_id,
@@ -1637,6 +1659,36 @@ def create_ai_reply_message(
         raise
 
 
+def get_sms_reply_to_inbound(inbound_message_id):
+    """Return the unique outbound row claimed for this inbound message, if any."""
+    if not inbound_message_id:
+        return None
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM sms_messages WHERE reply_to_message_id = ? LIMIT 1",
+            (inbound_message_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+_AI_OUTBOUND_ALREADY_SENT_STATUSES = frozenset(
+    {"sending", "submitted", "queued", "sent", "delivered"}
+)
+
+
+def get_sent_ai_outbound_for_inbound(inbound_message_id):
+    """AI auto-reply that was actually submitted/sent for this inbound, if any."""
+    row = get_sms_reply_to_inbound(inbound_message_id)
+    if not row:
+        return None
+    if str(row.get("direction") or "").strip().lower() != "outbound":
+        return None
+    status = str(row.get("status") or "").strip().lower()
+    if status not in _AI_OUTBOUND_ALREADY_SENT_STATUSES:
+        return None
+    return row
+
+
 def count_ai_replies_to_contact_since(user_id, phone_number, since_iso):
     with get_db() as conn:
         row = conn.execute(
@@ -1718,6 +1770,78 @@ def is_visible_conversation_sms(msg):
     return status not in _HIDDEN_OUTBOUND_HISTORY_STATUSES
 
 
+def _sms_ai_generated(msg):
+    val = msg.get("ai_generated") if msg else None
+    return val in (True, 1, "1", "t", "true", "TRUE")
+
+
+def _norm_sms_body(text):
+    return " ".join(str(text or "").split()).strip()
+
+
+def _norm_sms_phone(phone):
+    return "".join(ch for ch in str(phone or "") if ch.isdigit())
+
+
+def _same_logical_outbound(prev, msg):
+    """True when two adjacent visible outbound rows are the same logical send.
+
+    The auto-reply + Approve&Send bug creates an AI outbound and a converted
+    suggested outbound with the same body. Two manual sends with the same text
+    are kept (neither is AI-generated).
+    """
+    if str(prev.get("direction") or "").strip().lower() != "outbound":
+        return False
+    if str(msg.get("direction") or "").strip().lower() != "outbound":
+        return False
+    if _norm_sms_phone(prev.get("phone_number")) != _norm_sms_phone(msg.get("phone_number")):
+        return False
+    if not _norm_sms_body(prev.get("message_body")):
+        return False
+    if _norm_sms_body(prev.get("message_body")) != _norm_sms_body(msg.get("message_body")):
+        return False
+    prev_lead = prev.get("lead_id")
+    msg_lead = msg.get("lead_id")
+    if prev_lead not in (None, "") and msg_lead not in (None, "") and prev_lead != msg_lead:
+        return False
+    return _sms_ai_generated(prev) or _sms_ai_generated(msg)
+
+
+def _canonical_outbound_row(left, right):
+    """Prefer the AI-generated row, then stronger provider/delivery metadata."""
+    status_rank = {
+        "delivered": 4,
+        "sent": 3,
+        "queued": 2,
+        "submitted": 2,
+        "sending": 1,
+    }
+
+    def score(row):
+        return (
+            1 if _sms_ai_generated(row) else 0,
+            1 if str(row.get("provider_message_id") or "").strip() else 0,
+            status_rank.get(str(row.get("status") or "").strip().lower(), 0),
+            int(row.get("id") or 0),
+        )
+
+    return left if score(left) >= score(right) else right
+
+
+def collapse_duplicate_outbound_sms(messages):
+    """Display-only: drop consecutive duplicate outbound copies of one AI send.
+
+    Never deletes rows. Adjacent non-AI outbound with the same text is kept.
+    """
+    collapsed = []
+    for msg in messages or []:
+        if collapsed and _same_logical_outbound(collapsed[-1], msg):
+            collapsed[-1] = _canonical_outbound_row(collapsed[-1], msg)
+            continue
+        collapsed.append(msg)
+    return collapsed
+
+
 def _visible_conversation_sms_sql(alias="sm"):
     prefix = f"{alias}." if alias else ""
     direction = f"{prefix}direction"
@@ -1731,6 +1855,9 @@ def _visible_conversation_sms_sql(alias="sm"):
 
 
 def list_sms_messages(user_id, limit=20, *, visible_only=False):
+    fetch_limit = max(int(limit or 20), 1)
+    if visible_only:
+        fetch_limit = min(fetch_limit * 3, 60)
     extra = f" AND {_visible_conversation_sms_sql('sm')}" if visible_only else ""
     with get_db() as conn:
         rows = conn.execute(
@@ -1739,12 +1866,15 @@ def list_sms_messages(user_id, limit=20, *, visible_only=False):
             FROM sms_messages sm
             LEFT JOIN voice_personas vp ON vp.id = sm.persona_id
             WHERE sm.user_id = ?{extra}
-            ORDER BY sm.created_at DESC
+            ORDER BY sm.created_at DESC, sm.id DESC
             LIMIT ?
             """,
-            (user_id, limit),
+            (user_id, fetch_limit),
         ).fetchall()
-        return [dict(row) for row in rows]
+        messages = [dict(row) for row in rows]
+    if visible_only:
+        messages = collapse_duplicate_outbound_sms(messages)
+    return messages[: max(int(limit or 20), 1)]
 
 
 def latest_failed_sms_error(user_id):
@@ -1767,6 +1897,9 @@ def latest_failed_sms_error(user_id):
 
 
 def list_lead_messages(user_id, lead_id, limit=100, *, visible_only=False):
+    fetch_limit = max(int(limit or 100), 1)
+    if visible_only:
+        fetch_limit = min(fetch_limit * 3, 300)
     extra = f" AND {_visible_conversation_sms_sql('sm')}" if visible_only else ""
     with get_db() as conn:
         rows = conn.execute(
@@ -1775,12 +1908,15 @@ def list_lead_messages(user_id, lead_id, limit=100, *, visible_only=False):
             FROM sms_messages sm
             LEFT JOIN voice_personas vp ON vp.id = sm.persona_id
             WHERE sm.user_id = ? AND sm.lead_id = ?{extra}
-            ORDER BY sm.created_at ASC
+            ORDER BY sm.created_at ASC, sm.id ASC
             LIMIT ?
             """,
-            (user_id, lead_id, limit),
+            (user_id, lead_id, fetch_limit),
         ).fetchall()
-        return [dict(row) for row in rows]
+        messages = [dict(row) for row in rows]
+    if visible_only:
+        messages = collapse_duplicate_outbound_sms(messages)
+    return messages[: max(int(limit or 100), 1)]
 
 
 def get_sms_message(message_id, user_id):
@@ -1964,17 +2100,21 @@ def get_dashboard_metrics(user_id):
             (user_id,),
         ).fetchone()
         sms_last = sms_last["created_at"] if sms_last else None
-        recent_sms = conn.execute(
+        recent_sms_rows = conn.execute(
             f"""
-            SELECT lead_name, phone_number, status, message_body, created_at
+            SELECT id, lead_id, lead_name, phone_number, status, message_body, created_at,
+                   direction, provider_message_id, ai_generated
             FROM sms_messages
             WHERE user_id = ?
               AND {_visible_conversation_sms_sql("")}
             ORDER BY created_at DESC
-            LIMIT 5
+            LIMIT 15
             """,
             (user_id,),
         ).fetchall()
+        recent_sms = collapse_duplicate_outbound_sms(
+            [dict(row) for row in recent_sms_rows]
+        )[:5]
 
         leads_total = conn.execute(
             "SELECT COUNT(*) AS count FROM leads WHERE user_id = ?",

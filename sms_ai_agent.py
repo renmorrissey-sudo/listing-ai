@@ -128,6 +128,13 @@ def process_inbound_ai(user_id, lead_id, inbound_id, inbound_body, receiving_num
             lead_id,
             user_id,
         )
+        existing = db.get_sent_ai_outbound_for_inbound(inbound_id)
+        if existing:
+            db.consume_pending_suggestion_after_auto_reply(
+                user_id,
+                coach.get("insight_id"),
+                coach.get("suggested_id"),
+            )
         return {"replied": False, "reason": "already_replied"}
 
     from sms_provider import sms_status_callback_url
@@ -210,6 +217,11 @@ def process_inbound_ai(user_id, lead_id, inbound_id, inbound_body, receiving_num
         provider_message_id,
         lead_id,
         user_id,
+    )
+    db.consume_pending_suggestion_after_auto_reply(
+        user_id,
+        coach.get("insight_id"),
+        coach.get("suggested_id"),
     )
     return {
         "replied": True,
