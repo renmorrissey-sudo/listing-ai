@@ -90,22 +90,30 @@ def test_api_create_lead_missing_phone_returns_400(app_client, two_users):
     assert "error" in res.get_json()
 
 
-def test_api_create_lead_duplicate_phone_updates_not_duplicates(app_client, two_users):
+def test_api_create_lead_duplicate_phone_does_not_overwrite(app_client, two_users):
     u1, _ = two_users
     _login(app_client, u1)
     first = app_client.post(
         "/api/crm/leads",
         json={"first_name": "Dana", "last_name": "One", "phone": "+15551239004"},
-    ).get_json()
+    )
+    first_json = first.get_json()
+    assert first.status_code == 201
     second = app_client.post(
         "/api/crm/leads",
         json={"first_name": "Dana", "last_name": "Two", "phone": "+15551239004"},
-    ).get_json()
-    assert second["lead_id"] == first["lead_id"]
-    assert second["duplicate"] is True
+    )
+    second_json = second.get_json()
+    assert second.status_code == 409
+    assert second_json["duplicate"] is True
+    assert second_json["lead_id"] == first_json["lead_id"]
+    assert "Dana One" in second_json["error"]
+    lead = db.get_lead(first_json["lead_id"], u1)
+    assert lead["name"] == "Dana One"
     all_leads = crm_filter_leads_helper(u1)
     matches = [l for l in all_leads if l["phone_number"] == "+15551239004"]
     assert len(matches) == 1
+    assert matches[0]["name"] == "Dana One"
 
 
 def crm_filter_leads_helper(user_id):

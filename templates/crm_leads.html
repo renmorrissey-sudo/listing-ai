@@ -203,8 +203,10 @@
         <input id="nl-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="(555) 123-4567" required />
         <span class="field-error" id="nl-phone-error">A valid 10-digit mobile phone number is required.</span>
         <div class="duplicate-warning" id="nl-duplicate-warning" role="alert">
-          A lead with this number already exists: <strong id="nl-duplicate-name"></strong>.
-          <a href="#" id="nl-duplicate-link">Open existing lead</a>
+          <span id="nl-duplicate-message">A lead with this phone number already exists.</span>
+          <div style="margin-top:8px;display:flex;gap:10px;flex-wrap:wrap;">
+            <a href="#" id="nl-duplicate-link">Open Existing Lead</a>
+          </div>
         </div>
       </div>
       <div class="form-field">
@@ -261,11 +263,13 @@
       return '';
     }
 
+    let newLeadIsDuplicate = false;
+
     function validateNewLeadForm() {
       const first = document.getElementById('nl-first').value.trim();
       const last = document.getElementById('nl-last').value.trim();
       const phoneDigits = document.getElementById('nl-phone').value.replace(/\D/g, '');
-      const valid = first.length > 0 && last.length > 0 && phoneDigits.length === 10;
+      const valid = first.length > 0 && last.length > 0 && phoneDigits.length === 10 && !newLeadIsDuplicate;
       document.getElementById('nl-submit-btn').disabled = !valid;
       return valid;
     }
@@ -300,7 +304,9 @@
       const submitBtn = document.getElementById('nl-submit-btn');
       if (digits.length !== 10) {
         warn.classList.remove('show');
+        newLeadIsDuplicate = false;
         submitBtn.textContent = 'Create Lead';
+        validateNewLeadForm();
         return;
       }
       try {
@@ -308,14 +314,18 @@
         if (!res.ok) return;
         const data = await res.json();
         if (data.duplicate) {
-          document.getElementById('nl-duplicate-name').textContent = data.name || 'Lead';
+          document.getElementById('nl-duplicate-message').textContent =
+            data.message || ('A lead with this phone number already exists: ' + (data.name || 'Lead') + '.');
           document.getElementById('nl-duplicate-link').href = data.url;
           warn.classList.add('show');
-          submitBtn.textContent = 'Create anyway';
+          newLeadIsDuplicate = true;
+          submitBtn.textContent = 'Create Lead';
         } else {
           warn.classList.remove('show');
+          newLeadIsDuplicate = false;
           submitBtn.textContent = 'Create Lead';
         }
+        validateNewLeadForm();
       } catch (err) {
         // Non-blocking pre-check — ignore network hiccups.
       }
@@ -345,6 +355,17 @@
           body: JSON.stringify(payload),
         });
         const data = await res.json().catch(() => ({}));
+        if (res.status === 409 && data.duplicate) {
+          document.getElementById('nl-duplicate-message').textContent = data.error || 'A lead with this phone number already exists.';
+          if (data.url) document.getElementById('nl-duplicate-link').href = data.url;
+          document.getElementById('nl-duplicate-warning').classList.add('show');
+          newLeadIsDuplicate = true;
+          errorBox.textContent = data.error || 'A lead with this phone number already exists.';
+          errorBox.style.display = 'block';
+          btn.textContent = 'Create Lead';
+          validateNewLeadForm();
+          return;
+        }
         if (!res.ok) {
           errorBox.textContent = data.error || 'Could not create lead. Please try again.';
           errorBox.style.display = 'block';
@@ -390,6 +411,7 @@
       document.getElementById('new-lead-backdrop').classList.add('open');
       document.getElementById('nl-error').style.display = 'none';
       document.getElementById('nl-duplicate-warning').classList.remove('show');
+      newLeadIsDuplicate = false;
       document.getElementById('nl-submit-btn').textContent = 'Create Lead';
       document.addEventListener('keydown', handleDrawerKeydown);
       setTimeout(() => document.getElementById('nl-first').focus(), 30);

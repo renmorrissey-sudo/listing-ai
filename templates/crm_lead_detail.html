@@ -23,6 +23,18 @@
     <div class="card">
       <h1>{{ lead.name or 'Lead' }}</h1>
       <div class="muted">{{ lead.phone_number }} · {{ lead.lead_type or 'N/A' }} · {{ lead.source or 'sms' }}</div>
+      <form id="lead-identity-form" style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+        <label class="muted" style="font-size:12px;">Name
+          <input id="lead-name-input" name="name" value="{{ lead.name or '' }}" maxlength="200" required style="display:block;min-width:220px;padding:8px 10px;border:1px solid #e0e4ed;border-radius:8px;" />
+        </label>
+        <button class="btn secondary" type="submit">Save name</button>
+      </form>
+      {% if historical_sms_name and historical_sms_name != (lead.name or '') %}
+      <div class="flash" style="display:block;background:#fff7ed;border-color:#fdba74;color:#9a3412;">
+        SMS history used the name “{{ historical_sms_name }}”.
+        <button class="btn secondary" type="button" id="restore-name-btn">Restore {{ historical_sms_name }}</button>
+      </div>
+      {% endif %}
       <div class="status-hero">{{ status_label(lead.status) }}</div>
       {% if lead.opt_out_status == 'opted_out' %}<span class="pill danger">Opted out — Do Not Contact</span>{% endif %}
       <div class="card" style="margin-top:12px;background:#f8fafc;">
@@ -402,6 +414,29 @@
       modal.style.display = 'none';
       modal.hidden = true;
       document.getElementById('transcript-modal-body').textContent = '';
+    }
+    document.getElementById('lead-identity-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = document.getElementById('lead-name-input').value.trim();
+      const res = await fetch(`/api/crm/leads/${leadId}`, {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name}),
+      });
+      const data = await res.json();
+      if (!res.ok) return showFlash(data.error || 'Could not save name.', true);
+      location.reload();
+    });
+    const restoreBtn = document.getElementById('restore-name-btn');
+    if (restoreBtn) {
+      restoreBtn.addEventListener('click', async () => {
+        const res = await fetch(`/api/crm/leads/${leadId}/restore-name-from-history`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({}),
+        });
+        const data = await res.json();
+        if (!res.ok) return showFlash(data.error || 'Could not restore name.', true);
+        location.reload();
+      });
     }
     async function setStatus() {
       const status = document.getElementById('status-select').value;

@@ -21,7 +21,7 @@ def find_duplicate(user_id, *, phone=None, email=None, external_source_id=None, 
     if phone:
         normalized = normalize_phone_e164(phone)
         if normalized:
-            lead = db.get_lead_by_phone(user_id, normalized)
+            lead = db.find_lead_by_phone_normalized(user_id, normalized)
             if lead:
                 return lead, "phone"
 

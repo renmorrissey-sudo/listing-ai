@@ -29,6 +29,37 @@ def normalize_phone_e164(phone_number: str) -> str:
     return "+" + digits_only if digits_only else ""
 
 
+def format_phone_display(phone_number: str) -> str:
+    """Human-readable US number, e.g. +1 303-870-3107."""
+    normalized = normalize_phone_e164(phone_number)
+    digits = re.sub(r"\D", "", normalized)
+    if len(digits) == 11 and digits.startswith("1"):
+        national = digits[1:]
+        return f"+1 {national[0:3]}-{national[3:6]}-{national[6:]}"
+    return normalized or str(phone_number or "").strip()
+
+
+def is_placeholder_lead_name(name) -> bool:
+    return (name or "").strip() in {"", "Lead", "External Lead"}
+
+
+def duplicate_phone_message(lead) -> str:
+    name = (lead or {}).get("name") or "Lead"
+    phone = format_phone_display((lead or {}).get("phone_number") or "")
+    return f"A lead with this phone number already exists: {name} ({phone})."
+
+
+def _fill_if_blank(existing_value, incoming, *, placeholder_ok=False):
+    """Return incoming only when the stored field is empty (never overwrite identity)."""
+    current = (existing_value or "").strip()
+    if placeholder_ok and is_placeholder_lead_name(current):
+        incoming_s = (incoming or "").strip()
+        return incoming if incoming_s and not is_placeholder_lead_name(incoming_s) else None
+    if current:
+        return None
+    return incoming
+
+
 def _now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -72,16 +103,19 @@ def upsert_crm_lead(
     existing = db.find_lead_by_phone_normalized(user_id, phone)
     if existing:
         lead_id = existing["id"]
+        # Match by phone for conversation continuity, but never silently replace
+        # the existing lead's name or other CRM identity fields.
         db.update_lead_contact_fields(
             lead_id,
             user_id,
-            name=name if name != "Lead" else None,
-            lead_type=lead_type,
-            property_interest=property_interest,
+            name=_fill_if_blank(existing.get("name"), name, placeholder_ok=True),
+            lead_type=_fill_if_blank(existing.get("lead_type"), lead_type),
+            property_interest=_fill_if_blank(
+                existing.get("property_interest"), property_interest
+            ),
             notes=notes,
             touch_call=touch_call,
             touch_sms=touch_sms,
-            # Preserve existing source; never overwrite with a different channel source.
             bump_status_from_new_to=status if status == "attempting_contact" else None,
         )
         lead = db.get_lead(lead_id, user_id)
@@ -111,6 +145,38 @@ def upsert_crm_lead(
     )
     lead = db.get_lead(lead_id, user_id)
     return lead_id, True, lead
+
+
+def earliest_sms_lead_name(user_id, lead_id):
+    """Oldest stored SMS lead_name for this CRM row, if any. Never invents a name."""
+    return db.earliest_sms_lead_name(user_id, lead_id)
+
+
+def restore_lead_name_from_sms_history(user_id, lead_id):
+    """
+    Restore leads.name from the earliest SMS row for this lead when it differs.
+
+    Only updates the name column. Does not delete, reassign, or rewrite SMS rows.
+    """
+    lead = db.get_lead(lead_id, user_id)
+    if not lead:
+        return None, "Lead not found."
+    historical = earliest_sms_lead_name(user_id, lead_id)
+    if not historical:
+        return lead, "No historical SMS name is available to restore."
+    current = (lead.get("name") or "").strip()
+    if current == historical:
+        return lead, None
+    db.update_lead_contact_fields(lead_id, user_id, name=historical)
+    crm_db.add_lead_activity(
+        lead_id,
+        user_id,
+        "lead_name_restored",
+        f"Lead name restored to {historical} from SMS history",
+        {"previous_name": current, "restored_name": historical, "source": "sms_history"},
+        actor_user_id=user_id,
+    )
+    return db.get_lead(lead_id, user_id), None
 
 
 def link_voice_call_to_lead(call_id, lead_id, user_id):
