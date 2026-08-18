@@ -51,7 +51,7 @@ from external_leads.csv_import import (
 from external_leads.duplicates import find_duplicate
 from external_leads.ingest import ingest_external_lead
 from external_leads.webhook import generate_webhook_secret, hash_webhook_secret
-from lead_service import normalize_phone_e164
+from lead_service import duplicate_phone_message, format_phone_display, normalize_phone_e164
 
 # Popular real-estate lead providers with zero direct API/OAuth/webhook-vendor
 # integration in this codebase today (see external_leads/adapters.py stubs).
@@ -264,18 +264,38 @@ def api_create_lead():
         return jsonify({"error": result["error"]}), 400
 
     lead_id = result["lead_id"]
+    if result.get("action") != "created":
+        existing = db.get_lead(lead_id, user["id"]) or {}
+        return jsonify(
+            {
+                "ok": False,
+                "error": duplicate_phone_message(existing),
+                "duplicate": True,
+                "lead_id": lead_id,
+                "name": existing.get("name") or "Lead",
+                "phone_number": existing.get("phone_number"),
+                "url": url_for("crm.crm_lead_detail_page", lead_id=lead_id),
+                "existing_lead": {
+                    "id": lead_id,
+                    "name": existing.get("name") or "Lead",
+                    "phone_number": existing.get("phone_number"),
+                    "status": existing.get("status"),
+                },
+            }
+        ), 409
+
     return (
         jsonify(
             {
                 "ok": True,
                 "lead_id": lead_id,
-                "created": result.get("action") == "created",
-                "duplicate": result.get("action") in {"updated", "skipped_opted_out"},
+                "created": True,
+                "duplicate": False,
                 "duplicate_match": result.get("duplicate_match"),
                 "redirect_url": url_for("crm.crm_lead_detail_page", lead_id=lead_id),
             }
         ),
-        201 if result.get("action") == "created" else 200,
+        201,
     )
 
 
@@ -299,6 +319,8 @@ def api_check_duplicate_lead():
             "lead_id": existing["id"],
             "name": existing.get("name") or "Lead",
             "phone_number": existing.get("phone_number"),
+            "phone_display": format_phone_display(existing.get("phone_number") or ""),
+            "message": duplicate_phone_message(existing),
             "url": url_for("crm.crm_lead_detail_page", lead_id=existing["id"]),
         }
     )
@@ -311,6 +333,7 @@ def external_lead_new():
         return _unauth_redirect()
     sources = xdb.list_external_lead_sources(user["id"], active_only=True)
     error = None
+    existing_lead_url = None
     if request.method == "POST":
         source_id = request.form.get("external_source_id")
         source_row = None
@@ -344,6 +367,10 @@ def external_lead_new():
         )
         if result.get("error"):
             error = result["error"]
+        elif result.get("action") != "created":
+            existing = db.get_lead(result["lead_id"], user["id"]) or {}
+            error = duplicate_phone_message(existing)
+            existing_lead_url = url_for("crm.crm_lead_detail_page", lead_id=result["lead_id"])
         else:
             flash(
                 "Lead saved as Unverified + SMS Blocked. "
@@ -355,6 +382,7 @@ def external_lead_new():
         sources=sources,
         pond_statuses=POND_STATUSES,
         error=error,
+        existing_lead_url=existing_lead_url,
         form=request.form,
         **_nav(user, "leads"),
     )

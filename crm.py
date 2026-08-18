@@ -372,6 +372,7 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
         "consent_evidence": evidence,
         "consent_audit": audit,
         "external_source": external_source,
+        "historical_sms_name": db.earliest_sms_lead_name(user["id"], lead_id),
         **_nav_context(user, "leads"),
     }
 
@@ -628,6 +629,59 @@ def api_lead_detail(lead_id):
             n for n in crm_db.list_needs_attention(user["id"]) if n.get("lead_id") == lead_id
         ],
     })
+
+
+@crm_bp.route("/api/crm/leads/<int:lead_id>", methods=["PATCH"])
+@auth.subscription_required
+def api_patch_lead(lead_id):
+    """Explicit identity edit. Never used as the default for duplicate-phone creates."""
+    user = auth.get_current_user()
+    lead = db.get_lead(lead_id, user["id"])
+    if not lead:
+        return jsonify({"error": "Lead not found."}), 404
+    data = request.get_json(silent=True) or {}
+    name = data.get("name")
+    if name is not None:
+        name = str(name).strip()[:200]
+        if not name:
+            return jsonify({"error": "Lead name is required."}), 400
+    lead_type = data.get("lead_type")
+    if lead_type is not None:
+        lead_type = str(lead_type).strip()[:80] or None
+    property_interest = data.get("property_interest")
+    if property_interest is not None:
+        property_interest = str(property_interest).strip()[:500] or None
+    db.update_lead_contact_fields(
+        lead_id,
+        user["id"],
+        name=name,
+        lead_type=lead_type,
+        property_interest=property_interest,
+    )
+    crm_db.add_lead_activity(
+        lead_id,
+        user["id"],
+        "lead_updated",
+        "Lead details updated",
+        {"fields": [key for key in ("name", "lead_type", "property_interest") if key in data]},
+        actor_user_id=user["id"],
+    )
+    updated = db.get_lead(lead_id, user["id"])
+    return jsonify({"ok": True, "lead": updated})
+
+
+@crm_bp.route("/api/crm/leads/<int:lead_id>/restore-name-from-history", methods=["POST"])
+@auth.subscription_required
+def api_restore_lead_name_from_history(lead_id):
+    from lead_service import restore_lead_name_from_sms_history
+
+    user = auth.get_current_user()
+    lead, err = restore_lead_name_from_sms_history(user["id"], lead_id)
+    if not lead:
+        return jsonify({"error": err or "Lead not found."}), 404
+    if err:
+        return jsonify({"ok": True, "unchanged": True, "message": err, "lead": lead})
+    return jsonify({"ok": True, "restored": True, "lead": lead})
 
 
 @crm_bp.route("/api/crm/leads/<int:lead_id>/status", methods=["POST"])

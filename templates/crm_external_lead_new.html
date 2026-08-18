@@ -15,7 +15,14 @@
     <p class="muted"><a href="/crm/leads">← Leads</a> · <a href="/crm/external-sources">Lead Sources</a></p>
     <h1>New Lead</h1>
     <p class="muted">Creates the lead as Unverified + SMS Blocked. Imported consent claims become pending evidence only. Prefer the quick <a href="/crm/leads">+ New Lead</a> drawer on the Leads page for a faster flow — this full-page form is kept for detailed external-lead metadata.</p>
-    {% if error %}<div class="flash err" style="display:block;">{{ error }}</div>{% endif %}
+    {% if error %}
+    <div class="flash err" style="display:block;" role="alert">
+      {{ error }}
+      {% if existing_lead_url %}
+      <div style="margin-top:8px;"><a href="{{ existing_lead_url }}">Open Existing Lead</a></div>
+      {% endif %}
+    </div>
+    {% endif %}
     <div class="card">
       <form method="post">
         <label>Source

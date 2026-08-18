@@ -22,11 +22,14 @@ def ingest_external_lead(
     method: str = "manual",
     import_batch_id=None,
     actor_user_id=None,
+    allow_identity_update: bool = False,
 ):
     """
     Create or update an externally sourced lead.
     Always results in sms_consent_status=not_certified and sms_sending_blocked=true
-    for *new* leads. Updates never upgrade consent or clear opt-out.
+    for *new* leads. Duplicate phone matches never silently replace CRM identity
+    unless allow_identity_update is True (explicit CSV update mode) or the match
+    is the same external source record on a webhook replay.
     """
     result = {
         "action": None,
@@ -96,13 +99,14 @@ def ingest_external_lead(
         # Never overwrite certified consent or clear opted_out via import
         result["duplicate_match"] = match
         result["lead_id"] = existing["id"]
-        result["action"] = "updated"
-        if (existing.get("sms_consent_status") or "") == "opted_out" or (
+        opted_out = (existing.get("sms_consent_status") or "") == "opted_out" or (
             existing.get("opt_out_status") or ""
-        ) == "opted_out":
-            # Append activity only; do not change consent
+        ) == "opted_out"
+        same_source_record = match == "external_record_id" and method == "webhook"
+        if opted_out:
             result["action"] = "skipped_opted_out"
-        else:
+        elif allow_identity_update or same_source_record:
+            result["action"] = "updated"
             xdb.update_external_lead_fields(
                 existing["id"],
                 user_id,
@@ -134,6 +138,8 @@ def ingest_external_lead(
                     source=method,
                     metadata={"reason": "external_ingest_duplicate"},
                 )
+        else:
+            result["action"] = "duplicate"
         crm_db.add_lead_activity(
             existing["id"],
             user_id,

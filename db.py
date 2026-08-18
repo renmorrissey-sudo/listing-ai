@@ -865,6 +865,25 @@ def get_lead(lead_id, user_id):
         return dict(row) if row else None
 
 
+def earliest_sms_lead_name(user_id, lead_id):
+    """Return the oldest non-empty sms_messages.lead_name for this lead, or None."""
+    if not lead_id:
+        return None
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT lead_name FROM sms_messages
+            WHERE user_id = ? AND lead_id = ?
+              AND lead_name IS NOT NULL AND TRIM(lead_name) != ''
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (user_id, lead_id),
+        ).fetchone()
+    name = (row["lead_name"] or "").strip() if row else ""
+    return name or None
+
+
 def get_lead_by_phone(user_id, phone_number):
     with get_db() as conn:
         row = conn.execute(

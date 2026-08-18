@@ -290,6 +290,7 @@ def commit_csv(
             method="csv",
             import_batch_id=batch_id,
             actor_user_id=actor_user_id or user_id,
+            allow_identity_update=(mode == "update"),
         )
         if result.get("error"):
             stats["invalid"] += 1
