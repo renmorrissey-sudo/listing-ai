@@ -1241,7 +1241,7 @@ def start_voice_call():
 @auth.subscription_required
 def sms_messages():
     user = auth.get_current_user()
-    messages = db.list_sms_messages(user["id"])
+    messages = db.list_sms_messages(user["id"], visible_only=True)
     provider = get_sms_provider()
     latest = db.latest_failed_sms_error(user["id"])
     latest_code = parse_provider_code_from_error_message(
@@ -1394,7 +1394,7 @@ def sms_lead_messages(lead_id):
     lead = db.get_lead(lead_id, user["id"])
     if not lead:
         return jsonify({"error": "Lead not found."}), 404
-    messages = db.list_lead_messages(user["id"], lead_id)
+    messages = db.list_lead_messages(user["id"], lead_id, visible_only=True)
     return jsonify({
         "lead": {
             "id": lead["id"],

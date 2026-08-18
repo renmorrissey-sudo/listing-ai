@@ -301,7 +301,7 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
     tasks = [t for t in crm_db.list_tasks(user["id"], bucket="all") if t.get("lead_id") == lead_id]
     appointments = crm_db.list_appointments(user["id"], lead_id=lead_id)
     needs = [n for n in crm_db.list_needs_attention(user["id"]) if n.get("lead_id") == lead_id]
-    messages = db.list_lead_messages(user["id"], lead_id)
+    messages = db.list_lead_messages(user["id"], lead_id, visible_only=True)
     follow_ups = crm_db.list_lead_follow_ups(user["id"], lead_id, include_completed=True)
     user_timezone = db.get_user_timezone(user["id"])
     windows = crm_db._follow_up_windows(user["id"], timezone_name=user_timezone)

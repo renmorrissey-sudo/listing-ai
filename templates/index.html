@@ -790,7 +790,16 @@
         placeholder.style.display = 'flex';
         return;
       }
-      history.innerHTML = data.messages.map(msg => {
+      const recent = (data.messages || []).filter(msg => {
+        const direction = (msg.direction || '').toLowerCase();
+        return direction === 'inbound' || direction === 'outbound';
+      });
+      if (!recent.length) {
+        history.style.display = 'none';
+        placeholder.style.display = 'flex';
+        return;
+      }
+      history.innerHTML = recent.map(msg => {
         const err = msg.error_message ? `<div class="call-meta">${escapeHtml(msg.error_message)}</div>` : '';
         return `<div class="call-item">
           <strong>${escapeHtml(msg.lead_name || 'Lead')} - ${escapeHtml(msg.status)}</strong>
@@ -967,14 +976,18 @@
     try {
       const data = await fetchJson(`/sms/leads/${leadId}/messages`, {cache: 'no-store'});
       if (!data) return;
-      if (!data.messages.length) {
+      const messages = (data.messages || []).filter(msg => {
+        const direction = (msg.direction || '').toLowerCase();
+        return direction === 'inbound' || direction === 'outbound';
+      });
+      if (!messages.length) {
         thread.style.display = 'none';
         placeholder.style.display = 'flex';
         placeholder.innerHTML = '<p>No messages for this lead yet.</p>';
         return;
       }
-      thread.innerHTML = data.messages.map(msg => {
-        const who = msg.direction === 'inbound' ? 'Lead' : (msg.direction === 'suggested' ? 'Suggested' : 'You');
+      thread.innerHTML = messages.map(msg => {
+        const who = msg.direction === 'inbound' ? 'Lead' : 'You';
         return `<div class="call-item">
           <strong>${who} · ${escapeHtml(msg.status)}</strong>
           <div class="call-meta">${escapeHtml((msg.created_at || '').slice(0, 16).replace('T', ' '))} UTC</div>
