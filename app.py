@@ -1566,6 +1566,7 @@ def send_sms_suggestion(insight_id):
         source_page="sms_suggestion",
         compliance_confirmed=True,
         message_id=suggested_id,
+        schedule_if_quiet=bool(data.get("schedule_if_quiet") or data.get("schedule_quiet_hours")),
     )
     if err:
         return jsonify({"error": err, **(result or {})}), status
@@ -1713,6 +1714,9 @@ def send_sms_message():
         source_page="ai_sms_compose",
         compliance_confirmed=True,
         persona_id=persona["id"],
+        schedule_if_quiet=bool(
+            (data or {}).get("schedule_if_quiet") or (data or {}).get("schedule_quiet_hours")
+        ),
     )
     if err:
         body = {"error": err, **(result or {})}

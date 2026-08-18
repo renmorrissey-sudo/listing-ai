@@ -87,6 +87,127 @@ def _wrap_tracking_links(user_id, text, *, campaign_id=None, lead_id=None):
     return re.sub(r"https?://[^\s]+", repl, text or "")
 
 
+def _is_ai_generated_row(row):
+    val = (row or {}).get("ai_generated")
+    return val in (True, 1, "1", "t", "true", "TRUE")
+
+
+def _reschedule_quiet_hours(row):
+    from sms_quiet_hours import next_permitted_send_at
+
+    lead = db.get_lead(row.get("lead_id"), row.get("user_id")) or {}
+    send_at = next_permitted_send_at(
+        row.get("user_id"),
+        phone=row.get("phone_number") or lead.get("phone_number"),
+        lead=lead,
+    )
+    db.schedule_sms_message(row["id"], send_at.isoformat())
+
+
+def _send_scheduled_ai_reply(row):
+    """Deliver a quiet-hours-deferred AI auto-reply using the same gates as live auto-reply."""
+    from sms_consent import outbound_sms_blocked_for_phone
+    from sms_provider import sms_status_callback_url
+    from sms_providers import SmsProviderError, get_sms_provider
+    from sms_quiet_hours import in_quiet_hours
+
+    user_id = row.get("user_id")
+    lead_id = row.get("lead_id")
+    lead = db.get_lead(lead_id, user_id) or {}
+    phone = row.get("phone_number") or lead.get("phone_number")
+    body = row.get("message_body") or ""
+    if (lead.get("opt_out_status") or "active") == "opted_out":
+        db.update_sms_message_send_result(
+            row["id"], status="failed", error_message="This lead opted out. Do not send SMS."
+        )
+        return
+    if tdb.is_suppressed(user_id, phone) or outbound_sms_blocked_for_phone(phone):
+        db.update_sms_message_send_result(
+            row["id"], status="failed", error_message="SMS cannot be sent due to consent or opt-out restrictions."
+        )
+        return
+    if in_quiet_hours(user_id, phone=phone, lead=lead):
+        _reschedule_quiet_hours(row)
+        return
+    provider = get_sms_provider()
+    from_number = None
+    sender, _err = require_tenant_sender(user_id)
+    if sender:
+        from_number = sender.get("sender_number")
+    try:
+        result = provider.send_sms(
+            phone,
+            body,
+            status_callback=sms_status_callback_url(),
+            from_number=from_number or None,
+        )
+    except SmsProviderError as exc:
+        db.update_sms_message_send_result(
+            row["id"], status="failed", error_message=str(exc)[:500]
+        )
+        return
+    except Exception:
+        logger.exception("scheduled AI SMS send failed message_id=%s", row.get("id"))
+        db.update_sms_message_send_result(
+            row["id"],
+            status="failed",
+            error_message="AI reply could not be sent due to an internal error.",
+        )
+        return
+    db.update_sms_message_send_result(
+        row["id"],
+        provider_message_id=str(result.get("provider_message_id") or "") or None,
+        status=result.get("status") or "queued",
+    )
+    db.touch_lead_outbound(lead_id, user_id)
+
+
+def process_due_scheduled_messages(limit=10):
+    """Send quiet-hours-deferred one-to-one / AI SMS. Returns True if any work ran."""
+    from sms_outbound import send_authorized_sms
+    from sms_quiet_hours import is_quiet_hours_block
+
+    rows = db.list_due_scheduled_sms(limit=limit)
+    if not rows:
+        return False
+    worked = False
+    for row in rows:
+        if not db.claim_scheduled_sms(row["id"]):
+            continue
+        worked = True
+        lead_id = row.get("lead_id")
+        user_id = row.get("user_id")
+        body = row.get("message_body") or ""
+        if not lead_id or not user_id:
+            db.update_sms_message_send_result(
+                row["id"],
+                status="failed",
+                error_message="Missing lead for scheduled SMS.",
+            )
+            continue
+        if _is_ai_generated_row(row):
+            _send_scheduled_ai_reply(row)
+            continue
+        _result, err, _status = send_authorized_sms(
+            user_id,
+            lead_id,
+            body,
+            source_page="scheduled_quiet_hours",
+            compliance_confirmed=True,
+            persona_id=row.get("persona_id"),
+            message_id=row["id"],
+            skip_quiet_hours=False,
+        )
+        if err and is_quiet_hours_block(err):
+            _reschedule_quiet_hours(row)
+            continue
+        if err:
+            db.update_sms_message_send_result(
+                row["id"], status="failed", error_message=str(err)[:500]
+            )
+    return worked
+
+
 def process_one(worker_id: str) -> bool:
     job = tdb.claim_next_job(worker_id)
     if not job:
@@ -161,8 +282,25 @@ def process_one(worker_id: str) -> bool:
     )
     if not allowed:
         status = "opted_out" if "opt" in (msg or "").lower() else "suppressed"
-        if "quiet" in (msg or "").lower() or "rate" in (msg or "").lower():
-            # requeue
+        if "quiet" in (msg or "").lower():
+            from sms_quiet_hours import next_permitted_send_at
+
+            lead = db.get_lead(lead_id, job["user_id"]) or {}
+            send_at = next_permitted_send_at(
+                job["user_id"],
+                phone=lead.get("phone_number") or (recip["phone_number"] if recip else None),
+                lead=lead,
+            )
+            tdb.update_job(
+                job["id"],
+                status="pending",
+                next_attempt_at=send_at.isoformat(),
+                claimed_at=None,
+                claimed_by=None,
+                failure_message=msg,
+            )
+            return True
+        if "rate" in (msg or "").lower():
             delay = min(2 ** int(job.get("attempts") or 1), 60)
             tdb.update_job(
                 job["id"],
@@ -323,7 +461,9 @@ def main():
                     worker_id,
                 )
             _maybe_cleanup_expired_listings()
-            worked = process_one(worker_id)
+            worked = process_due_scheduled_messages()
+            if process_one(worker_id):
+                worked = True
             if worked:
                 idle_sleep = 1
             else:

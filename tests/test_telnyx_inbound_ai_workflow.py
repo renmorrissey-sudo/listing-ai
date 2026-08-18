@@ -59,6 +59,8 @@ def _setup_tenant(user_id, monkeypatch, sender_number=None):
     monkeypatch.setattr(config, "TELNYX_TRIAL_MODE", False)
     monkeypatch.setattr(config, "TELNYX_TOLL_FREE_VERIFICATION_STATUS", "verified")
     monkeypatch.setattr(config, "SMS_AI_AUTO_REPLY_ENABLED", True)
+    monkeypatch.setattr(config, "SMS_QUIET_HOURS_START", 0)
+    monkeypatch.setattr(config, "SMS_QUIET_HOURS_END", 0)
     tdb.upsert_tenant_sender(
         user_id,
         sender_number=account,

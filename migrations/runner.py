@@ -46,6 +46,7 @@ MIGRATION_MODULES = [
     "migrations.versions.019_listing_generations_and_social",
     "migrations.versions.020_listing_email_campaigns",
     "migrations.versions.021_billing_subscription_fields",
+    "migrations.versions.022_sms_scheduled_send_at",
 ]
 
 # Required after 001_baseline. App has no separate accounts/tenants/subscriptions

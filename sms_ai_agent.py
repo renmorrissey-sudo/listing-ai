@@ -137,6 +137,30 @@ def process_inbound_ai(user_id, lead_id, inbound_id, inbound_body, receiving_num
             )
         return {"replied": False, "reason": "already_replied"}
 
+    from sms_quiet_hours import in_quiet_hours, next_permitted_send_at
+
+    if in_quiet_hours(user_id, phone=to_number, lead=lead):
+        send_at = next_permitted_send_at(user_id, phone=to_number, lead=lead)
+        db.schedule_sms_message(message_id, send_at.isoformat())
+        db.consume_pending_suggestion_after_auto_reply(
+            user_id,
+            coach.get("insight_id"),
+            coach.get("suggested_id"),
+        )
+        logger.info(
+            "SMS_AI_REPLY_SCHEDULED inbound_id=%s message_id=%s scheduled_for=%s tenant=%s",
+            inbound_id,
+            message_id,
+            send_at.isoformat(),
+            user_id,
+        )
+        return {
+            "replied": True,
+            "scheduled": True,
+            "message_id": message_id,
+            "scheduled_for": send_at.isoformat(),
+        }
+
     from sms_provider import sms_status_callback_url
     from sms_providers import SmsProviderError, get_sms_provider
 

@@ -1543,6 +1543,52 @@ def update_sms_message_send_result(message_id, provider_message_id=None, status=
         )
 
 
+def schedule_sms_message(message_id, scheduled_send_at):
+    """Mark an outbound row as scheduled for a future quiet-hours-safe send."""
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE sms_messages
+            SET status = 'scheduled',
+                scheduled_send_at = ?,
+                error_message = NULL
+            WHERE id = ?
+            """,
+            (scheduled_send_at, message_id),
+        )
+
+
+def list_due_scheduled_sms(now_iso=None, limit=10):
+    now_iso = now_iso or datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM sms_messages
+            WHERE status = 'scheduled'
+              AND scheduled_send_at IS NOT NULL
+              AND scheduled_send_at <= ?
+            ORDER BY scheduled_send_at ASC, id ASC
+            LIMIT ?
+            """,
+            (now_iso, int(limit)),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def claim_scheduled_sms(message_id):
+    """Atomically claim a scheduled row for sending. Returns True if this caller won."""
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            UPDATE sms_messages
+            SET status = 'sending'
+            WHERE id = ? AND status = 'scheduled'
+            """,
+            (message_id,),
+        )
+        return int(cur.rowcount or 0) == 1
+
+
 _DELIVERY_FINAL_FAILURE_STATUSES = {"failed", "delivery_failed", "rejected", "expired"}
 _DELIVERY_PROGRESS_ORDER = {
     "queued": 1,
@@ -1672,7 +1718,7 @@ def get_sms_reply_to_inbound(inbound_message_id):
 
 
 _AI_OUTBOUND_ALREADY_SENT_STATUSES = frozenset(
-    {"sending", "submitted", "queued", "sent", "delivered"}
+    {"scheduled", "sending", "submitted", "queued", "sent", "delivered"}
 )
 
 
@@ -1749,7 +1795,7 @@ def find_sms_user_by_phone(phone_number):
 
 
 _HIDDEN_OUTBOUND_HISTORY_STATUSES = frozenset(
-    {"suggested", "dismissed", "cancelled", "draft"}
+    {"suggested", "dismissed", "cancelled", "draft", "scheduled"}
 )
 
 
@@ -1850,7 +1896,7 @@ def _visible_conversation_sms_sql(alias="sm"):
         f"(LOWER(COALESCE({direction}, '')) = 'inbound'"
         f" OR (LOWER(COALESCE({direction}, 'outbound')) = 'outbound'"
         f" AND LOWER(COALESCE({status}, '')) NOT IN "
-        f"('suggested', 'dismissed', 'cancelled', 'draft')))"
+        f"('suggested', 'dismissed', 'cancelled', 'draft', 'scheduled')))"
     )
 
 

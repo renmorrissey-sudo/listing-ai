@@ -111,6 +111,9 @@
     .placeholder p { font-size: 14px; }
     .error-msg { background: #fff5f5; border: 1.5px solid #fca5a5; color: #dc2626; border-radius: 8px; padding: 12px 16px; font-size: 13px; margin-top: 12px; display: none; }
     .notice { background: #fff8e6; border: 1.5px solid #f0d98c; color: #7a5c00; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.45; margin-bottom: 14px; }
+    .quiet-hours-notice { margin-top: 12px; margin-bottom: 0; display: none; }
+    .quiet-hours-notice .quiet-hours-when { margin: 8px 0 0; font-size: 13px; }
+    .quiet-hours-notice #sms-schedule-btn { margin-top: 10px; }
     .checkbox-row { display: flex; gap: 9px; align-items: flex-start; margin: 12px 0; font-size: 13px; color: #556; line-height: 1.45; }
     .checkbox-row input { width: auto; margin-top: 3px; }
     .field-section-label { font-size: 11px; font-weight: 800; color: #8899aa; text-transform: uppercase; letter-spacing: 0.6px; margin: 20px 0 10px; padding-top: 16px; border-top: 1px solid #eef2f7; }
@@ -436,6 +439,11 @@
         <div id="sms-trial-banner" class="notice" style="margin-top:4px;font-size:12px;display:none;border-color:#c45c26;color:#7a3410;" aria-live="polite"></div>
         <p class="muted" id="sms-verification-block" style="font-size:12px;margin-top:4px;display:none;color:#7a3410;" aria-live="polite"></p>
         <button type="submit" class="btn-generate" id="sms-send-btn" style="margin-top:14px;" disabled><div class="spinner" id="sms-send-spinner"></div><span id="sms-send-label">Send SMS</span></button>
+        <div class="notice quiet-hours-notice" id="sms-quiet-hours" aria-live="polite">
+          <div id="sms-quiet-hours-msg"></div>
+          <p class="quiet-hours-when" id="sms-quiet-hours-when"></p>
+          <button type="button" class="btn-generate" id="sms-schedule-btn">Schedule SMS</button>
+        </div>
         <div class="error-msg" id="sms-error" aria-live="polite"></div>
         <div class="success-msg" id="sms-success" aria-live="polite"></div>
       </form>
@@ -1037,7 +1045,7 @@
     }
   }
 
-  async function sendSmsSuggestion(insightId, usePitch, requiresManual) {
+  async function sendSmsSuggestion(insightId, usePitch, requiresManual, scheduleIfQuiet) {
     const consent = document.getElementById(`suggest-consent-${insightId}`);
     if (!consent || !consent.checked) {
       alert('Certify contact SMS consent before sending.');
@@ -1056,14 +1064,27 @@
           compliance_confirmed: true,
           message_body: bodyEl ? bodyEl.value : '',
           use_home_value_pitch: !!usePitch,
-          force_send_after_review: !!requiresManual
+          force_send_after_review: !!requiresManual,
+          schedule_if_quiet: !!scheduleIfQuiet
         })
       });
       if (res.status === 401) { handle401(); return; }
       const data = await res.json();
+      if (res.status === 409 && data && data.error_category === 'quiet_hours' && data.can_schedule) {
+        const when = data.scheduled_for_local || 'the next permitted sending time';
+        const ok = confirm((data.error || 'This recipient is currently within SMS quiet hours.') + '\n\nSchedule this reply for ' + when + '?');
+        if (ok) {
+          await sendSmsSuggestion(insightId, usePitch, requiresManual, true);
+        }
+        return;
+      }
       if (!res.ok) throw new Error(data.error || 'Send failed.');
       await loadSmsData();
-      alert('Reply sent.');
+      if (data.scheduled) {
+        alert('Reply scheduled for ' + (data.scheduled_for_local || data.scheduled_for || 'the next permitted sending time') + '.');
+      } else {
+        alert('Reply sent.');
+      }
     } catch (err) {
       alert(err.message);
     }
@@ -1621,6 +1642,7 @@
     const successEl = document.getElementById('sms-success');
     const form = document.getElementById('sms-form');
     errEl.style.display = 'none';
+    hideSmsQuietHours();
     if (successEl) successEl.style.display = 'none';
     btn.disabled = true; spinner.style.display = 'block'; label.textContent = 'Generating...';
     const data = Object.fromEntries(new FormData(form).entries());
@@ -1643,6 +1665,24 @@
 
   const smsCompliance = document.getElementById('sms-compliance-confirmed');
   const smsSendBtn = document.getElementById('sms-send-btn');
+  const smsQuietHoursEl = document.getElementById('sms-quiet-hours');
+  const smsQuietHoursMsg = document.getElementById('sms-quiet-hours-msg');
+  const smsQuietHoursWhen = document.getElementById('sms-quiet-hours-when');
+  const smsScheduleBtn = document.getElementById('sms-schedule-btn');
+  function hideSmsQuietHours() {
+    if (smsQuietHoursEl) smsQuietHoursEl.style.display = 'none';
+  }
+  function showSmsQuietHours(payload) {
+    if (!smsQuietHoursEl) return;
+    const when = (payload && payload.scheduled_for_local) || 'the next permitted sending time';
+    if (smsQuietHoursMsg) {
+      smsQuietHoursMsg.textContent = (payload && payload.error) || 'This recipient is currently within SMS quiet hours. You can schedule this message for the next permitted sending time.';
+    }
+    if (smsQuietHoursWhen) {
+      smsQuietHoursWhen.textContent = 'Next permitted sending time: ' + when;
+    }
+    smsQuietHoursEl.style.display = 'block';
+  }
   function syncSmsSendEnabled() {
     if (!smsSendBtn || !smsCompliance) return;
     // Consent alone never overrides toll-free verification or missing provider config.
@@ -1651,6 +1691,14 @@
   if (smsCompliance) {
     smsCompliance.addEventListener('change', syncSmsSendEnabled);
     syncSmsSendEnabled();
+  }
+
+  async function postSmsMessage(payload) {
+    return fetchJson('/sms/messages', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
   }
 
   document.getElementById('sms-form').addEventListener('submit', async e => {
@@ -1662,6 +1710,7 @@
     const successEl = document.getElementById('sms-success');
     const compliance = document.getElementById('sms-compliance-confirmed');
     errEl.style.display = 'none';
+    hideSmsQuietHours();
     if (successEl) successEl.style.display = 'none';
     if (!compliance || !compliance.checked) {
       errEl.textContent = 'Certify contact SMS consent before sending.';
@@ -1673,14 +1722,15 @@
     data.compliance_confirmed = Boolean(data.compliance_confirmed);
     data.send_now = true;
     try {
-      const result = await fetchJson('/sms/messages', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(data)
-      });
+      const result = await postSmsMessage(data);
       if (result && result.warning) {
         errEl.textContent = result.warning;
         errEl.style.display = 'block';
+      } else if (result && result.scheduled) {
+        if (successEl) {
+          successEl.textContent = 'SMS scheduled for ' + (result.scheduled_for_local || result.scheduled_for) + '.';
+          successEl.style.display = 'block';
+        }
       } else {
         if (successEl) {
           successEl.textContent = 'SMS sent.';
@@ -1691,8 +1741,13 @@
       }
       await loadSmsData();
     } catch (err) {
-      errEl.textContent = err.message;
-      errEl.style.display = 'block';
+      const payload = err.payload || {};
+      if (payload.error_category === 'quiet_hours' && payload.can_schedule) {
+        showSmsQuietHours(payload);
+      } else {
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+      }
       try {
         const status = await fetchJson('/sms/status', {cache: 'no-store'});
         if (status) updateSmsTrialBanner(status);
@@ -1701,6 +1756,36 @@
     spinner.style.display = 'none'; label.textContent = 'Send SMS';
     syncSmsSendEnabled();
   });
+
+  if (smsScheduleBtn) {
+    smsScheduleBtn.addEventListener('click', async () => {
+      const form = document.getElementById('sms-form');
+      const errEl = document.getElementById('sms-error');
+      const successEl = document.getElementById('sms-success');
+      errEl.style.display = 'none';
+      const data = Object.fromEntries(new FormData(form).entries());
+      data.compliance_confirmed = Boolean(data.compliance_confirmed);
+      data.send_now = true;
+      data.schedule_if_quiet = true;
+      smsScheduleBtn.disabled = true;
+      smsScheduleBtn.textContent = 'Scheduling...';
+      try {
+        const result = await postSmsMessage(data);
+        hideSmsQuietHours();
+        if (successEl) {
+          successEl.textContent = 'SMS scheduled for ' + (result.scheduled_for_local || result.scheduled_for) + '.';
+          successEl.style.display = 'block';
+        }
+        await loadSmsData();
+      } catch (err) {
+        hideSmsQuietHours();
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+      }
+      smsScheduleBtn.disabled = false;
+      smsScheduleBtn.textContent = 'Schedule SMS';
+    });
+  }
 
   checkSession();
 </script>
