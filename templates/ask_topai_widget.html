@@ -133,6 +133,7 @@
     <span class="ask-topai-fab-label">Ask TopAI</span>
   </button>
 </div>
+<script src="{{ url_for('static', filename='ask_topai/realtime.js') }}?v=20260819b"></script>
 <script>
 (function initAskTopAI() {
   if (window.__askTopAIInit) return;
@@ -164,18 +165,10 @@
     reconnectTimer: null,
     reconnectAttempts: 0,
     sessionId: null,
-    pc: null,
-    dc: null,
+    realtime: null,
     stream: null,
-    audio: null,
-    webrtcUrl: '/api/ask-topai/live/webrtc',
-    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-    pendingCalls: [],
-    flushing: false,
+    minted: null,
     turns: [],
-    assistantBuf: '',
-    assistantEl: null,
-    userEl: null,
     stage: null,
     lastRef: null
   };
@@ -253,18 +246,9 @@
     if (kind) statusEl.classList.add(kind);
   }
 
-  function looksLikeSdp(text) {
-    return String(text || '').replace(/^\uFEFF/, '').trimStart().indexOf('v=0') === 0;
-  }
-
-  function looksLikeHtml(text) {
-    const head = String(text || '').trimStart().slice(0, 400).toLowerCase();
-    return head.indexOf('<!doctype') === 0 || head.indexOf('<html') === 0 || head.indexOf('<html') !== -1;
-  }
-
   function liveError(stage, message, extra) {
     extra = extra || {};
-    const err = new Error(message || 'TopAI could not establish the Realtime session.');
+    const err = new Error(message || 'Could not establish the realtime audio connection.');
     err.stage = stage;
     err.code = extra.code;
     err.status = extra.status;
@@ -274,38 +258,22 @@
   }
 
   function formatLiveError(err) {
-    let message = (err && (err.userMessage || err.message)) || 'TopAI could not establish the Realtime session.';
+    let message = (err && (err.userMessage || err.message)) || 'Could not establish the realtime audio connection.';
     const ref = err && err.ref;
     if (ref) message += ' (ref ' + ref + ')';
     return message;
   }
 
   function logLive(reason, extra) {
+    const transport = live.realtime && live.realtime.transport;
     const payload = {
       stage: live.stage,
       ref: live.lastRef,
-      connection: live.pc && live.pc.connectionState,
-      ice: live.pc && live.pc.iceConnectionState,
-      signaling: live.pc && live.pc.signalingState,
-      dc: live.dc && live.dc.readyState
+      status: transport && transport.status,
+      connection: transport && transport.connectionState && transport.connectionState.status
     };
     if (extra) Object.keys(extra).forEach((key) => { payload[key] = extra[key]; });
     console.info('Ask TopAI live', reason, payload);
-  }
-
-  function waitForIce(pc, timeoutMs) {
-    if (!pc || pc.iceGatheringState === 'complete') return Promise.resolve();
-    return new Promise((resolve) => {
-      const finish = () => {
-        try { pc.removeEventListener('icegatheringstatechange', onChange); } catch (err) {}
-        resolve();
-      };
-      const onChange = () => {
-        if (pc.iceGatheringState === 'complete') finish();
-      };
-      pc.addEventListener('icegatheringstatechange', onChange);
-      setTimeout(finish, timeoutMs || 3000);
-    });
   }
 
   function setLiveMode(on) {
@@ -391,33 +359,12 @@
     }
   }
 
-  function sendEvent(event) {
-    if (live.dc && live.dc.readyState === 'open') {
-      live.dc.send(JSON.stringify(event));
-    }
-  }
-
-  function bargeIn() {
-    if (live.audio) live.audio.muted = true;
-    live.assistantBuf = '';
-    live.assistantEl = null;
-    sendEvent({ type: 'response.cancel' });
-    setConn('Listening', 'listening');
-  }
-
   function teardownPeer() {
-    try { if (live.dc) live.dc.close(); } catch (err) {}
-    live.dc = null;
-    if (live.pc) {
-      try { live.pc.getSenders().forEach((sender) => { try { live.pc.removeTrack(sender); } catch (err) {} }); } catch (err) {}
-      try { live.pc.close(); } catch (err) {}
+    if (live.realtime) {
+      try { live.realtime.close(); } catch (err) {}
     }
-    live.pc = null;
-    if (live.audio) {
-      try { live.audio.pause(); } catch (err) {}
-      live.audio.srcObject = null;
-      live.audio = null;
-    }
+    live.realtime = null;
+    live.minted = null;
   }
 
   function stopMicTracks() {
@@ -443,39 +390,71 @@
       try {
         await fetch('/api/ask-topai/live/end', {
           method: 'POST',
+          credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ session_id: sid, transcript: turns })
         });
       } catch (err) {}
     }
     live.sessionId = null;
-    live.pendingCalls = [];
-    live.flushing = false;
     live.ending = false;
     live.reconnecting = false;
     live.reconnectAttempts = 0;
   }
 
+  function messageForSessionFailure(res, data) {
+    if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
+      return liveError('redirect', 'Network connection to Ask TopAI was interrupted.', { status: res.status, code: 'redirect', ref: data.ref });
+    }
+    if (res.status === 401) {
+      return liveError('railway_auth', 'Please log in to continue.', { status: 401, code: 'login', ref: data.ref });
+    }
+    const code = data.code || '';
+    const stage = data.stage || 'backend_session';
+    if (code === 'not_configured' || stage === 'missing_key') {
+      return liveError(stage, 'Ask TopAI is not configured for live conversation.', { status: res.status, code: code, ref: data.ref });
+    }
+    if (code === 'openai_401' || code === 'openai_403' || stage === 'openai_auth') {
+      return liveError(stage, 'OpenAI authentication failed.', { status: res.status, code: code, ref: data.ref });
+    }
+    if (code === 'openai_429' || stage === 'openai_quota') {
+      return liveError(stage, 'OpenAI API quota is unavailable.', { status: res.status, code: code, ref: data.ref });
+    }
+    if (code === 'network' || stage === 'openai_network') {
+      return liveError(stage, 'Network connection to Ask TopAI was interrupted.', { status: res.status, code: code, ref: data.ref });
+    }
+    return liveError(stage, data.error || 'Could not establish the realtime audio connection.', {
+      status: res.status,
+      code: code,
+      ref: data.ref,
+      userMessage: data.error
+    });
+  }
+
   async function mintSession() {
     live.stage = 'backend_session';
-    const res = await fetch('/api/ask-topai/live/session', {
-      method: 'POST',
-      credentials: 'same-origin',
-      redirect: 'manual',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        session_id: live.sessionId,
-        context: askContext()
-      })
-    });
-    if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
-      throw liveError('redirect', 'TopAI could not establish the Realtime session.', { status: res.status, code: 'redirect' });
+    let res;
+    try {
+      res = await fetch('/api/ask-topai/live/session', {
+        method: 'POST',
+        credentials: 'same-origin',
+        redirect: 'manual',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: live.sessionId,
+          context: askContext()
+        })
+      });
+    } catch (err) {
+      throw liveError('backend_session', 'Network connection to Ask TopAI was interrupted.', { code: 'network' });
     }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.ok) {
-      throw liveError('backend_session', data.error || 'Ask TopAI could not start a live conversation.', {
-        status: res.status,
-        code: data.code,
+    live.lastRef = data.ref || live.lastRef;
+    if (!res.ok || !data.ok) throw messageForSessionFailure(res, data);
+    const secret = data.client_secret && data.client_secret.value;
+    if (!secret || String(secret).indexOf('ek_') !== 0) {
+      throw liveError('client_secret', 'Could not establish the realtime audio connection.', {
+        code: 'malformed',
         ref: data.ref
       });
     }
@@ -483,131 +462,58 @@
       live.sessionId = data.session_id;
       rememberSession(data.session_id);
     }
-    live.webrtcUrl = data.webrtc_url || live.webrtcUrl;
-    live.iceServers = data.ice_servers || live.iceServers;
+    live.minted = data;
     return data;
   }
 
-  async function readWebrtcAnswer(sdpResponse) {
-    const contentType = String(sdpResponse.headers.get('content-type') || '').toLowerCase();
-    const headerRef = sdpResponse.headers.get('x-ask-topai-ref') || '';
-    const sessionHeader = sdpResponse.headers.get('x-ask-topai-session-id') || '';
-    if (sdpResponse.type === 'opaqueredirect' || (sdpResponse.status >= 300 && sdpResponse.status < 400)) {
-      throw liveError('redirect', 'TopAI could not establish the Realtime session.', {
-        status: sdpResponse.status,
-        code: 'redirect',
-        ref: headerRef
+  async function executeCrmTool(name, args, details) {
+    setConn('Working...', 'working');
+    const callId = (details && (details.toolCallId || details.callId)) ||
+      (details && details.toolCall && (details.toolCall.callId || details.toolCall.call_id)) ||
+      ('call-' + Date.now());
+    try {
+      const res = await fetch('/api/ask-topai/live/tools', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: live.sessionId,
+          transcript: lastUserText(),
+          context: askContext(),
+          calls: [{ name: name, call_id: callId, arguments: args || {} }]
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      refreshAffectedUI(data.refresh);
+      const output = (data.results && data.results[0] && data.results[0].output) || {
+        ok: false,
+        status: 'error',
+        message: 'The CRM update failed. Do not claim success.'
+      };
+      if (output.ok) setConn('Listening', 'listening');
+      else if (output.message) setError(String(output.message).slice(0, 220));
+      return JSON.stringify(output);
+    } catch (err) {
+      setConn('Listening', 'listening');
+      return JSON.stringify({
+        ok: false,
+        status: 'error',
+        message: 'The CRM update failed. Do not claim success.'
       });
     }
-    const text = await sdpResponse.text();
-    let data = {};
-    if (contentType.indexOf('application/json') !== -1 || looksLikeHtml(text) || (text && text.trim().charAt(0) === '{')) {
-      try { data = JSON.parse(text); } catch (err) { data = {}; }
-    }
-    const ref = data.ref || headerRef || live.lastRef;
-    live.lastRef = ref;
-    if (sdpResponse.status === 401) {
-      throw liveError('auth', 'Please log in to continue.', { status: 401, code: 'login', ref: ref });
-    }
-    if (!sdpResponse.ok) {
-      throw liveError(data.stage || 'backend_webrtc', data.error || 'TopAI could not establish the Realtime session.', {
-        status: sdpResponse.status,
-        code: data.code,
-        ref: ref,
-        userMessage: data.error
-      });
-    }
-    if (contentType.indexOf('text/html') !== -1 || looksLikeHtml(text) || !looksLikeSdp(text)) {
-      throw liveError('invalid_sdp', 'TopAI could not establish the Realtime session.', {
-        status: sdpResponse.status,
-        code: 'invalid_sdp',
-        ref: ref
-      });
-    }
-    if (sessionHeader) {
-      live.sessionId = sessionHeader;
-      rememberSession(sessionHeader);
-    }
-    return { sdp: text, ref: ref };
   }
 
-  async function attachPeer() {
-    live.stage = 'pc_create';
-    teardownPeer();
-    live.pc = new RTCPeerConnection({ iceServers: live.iceServers });
-    live.audio = document.createElement('audio');
-    live.audio.autoplay = true;
-    live.audio.setAttribute('playsinline', '');
-    live.pc.ontrack = (event) => {
-      live.stage = 'remote_track';
-      logLive('remote-track');
-      live.audio.srcObject = event.streams[0];
-      live.audio.muted = false;
-      live.audio.play().catch(() => {});
-    };
-    live.stage = 'local_track';
-    if (live.stream) {
-      live.stream.getTracks().forEach((track) => live.pc.addTrack(track, live.stream));
-    }
-    live.dc = live.pc.createDataChannel('oai-events');
-    live.dc.addEventListener('open', () => {
-      live.reconnectAttempts = 0;
-      live.reconnecting = false;
-      logLive('datachannel-open');
-      setConn('Listening', 'listening');
-      if (live.pendingCalls.length) flushTools();
-    });
-    live.dc.addEventListener('error', () => logLive('datachannel-error'));
-    live.dc.addEventListener('close', () => logLive('datachannel-close'));
-    live.dc.addEventListener('message', onRealtimeMessage);
-    live.pc.onconnectionstatechange = () => {
-      logLive('connectionstatechange');
-      if (live.ending || !live.active) return;
-      const state = live.pc && live.pc.connectionState;
-      if (state === 'disconnected' || state === 'failed') scheduleReconnect();
-    };
-    live.pc.oniceconnectionstatechange = () => logLive('iceconnectionstatechange');
-    live.pc.onsignalingstatechange = () => logLive('signalingstatechange');
-    live.stage = 'offer';
-    const offer = await live.pc.createOffer();
-    live.stage = 'set_local';
-    await live.pc.setLocalDescription(offer);
-    live.stage = 'ice_gather';
-    await waitForIce(live.pc, 3000);
-    const localSdp = (live.pc.localDescription && live.pc.localDescription.sdp) || offer.sdp;
-    if (!looksLikeSdp(localSdp)) {
-      throw liveError('offer', 'TopAI could not establish the Realtime session.', { code: 'invalid_offer' });
-    }
-    live.stage = 'backend_webrtc';
-    logLive('post-sdp');
-    const context = askContext();
-    const sdpResponse = await fetch(live.webrtcUrl, {
-      method: 'POST',
-      credentials: 'same-origin',
-      redirect: 'manual',
-      body: localSdp,
-      headers: {
-        'Content-Type': 'application/sdp',
-        'X-Ask-TopAI-Session': live.sessionId || '',
-        'X-Ask-TopAI-Page': context.page || '',
-        'X-Ask-TopAI-Lead-Id': context.lead_id ? String(context.lead_id) : ''
-      }
-    });
-    const answer = await readWebrtcAnswer(sdpResponse);
-    live.stage = 'set_remote';
-    if (!looksLikeSdp(answer.sdp)) {
-      throw liveError('invalid_sdp', 'TopAI could not establish the Realtime session.', { ref: answer.ref, code: 'invalid_sdp' });
-    }
-    await live.pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
-    live.stage = 'ice_connect';
-    logLive('remote-description-set');
+  function renderHistoryTurns(turns) {
+    live.turns = turns || [];
+    logEl.innerHTML = '';
+    live.turns.forEach((turn) => appendTurn(turn.role, turn.text, false));
+    logEl.hidden = live.turns.length === 0 && !live.active;
   }
 
   function scheduleReconnect() {
     if (live.ending || live.reconnecting || !live.active) return;
     if (live.reconnectAttempts >= 3) {
       setError('The live connection dropped. You can start again or type a request.');
-      setConn('Reconnecting...', 'reconnecting');
       endLive(true);
       return;
     }
@@ -623,140 +529,39 @@
     }, wait);
   }
 
-  function onRealtimeMessage(event) {
-    let payload;
-    try { payload = JSON.parse(event.data); } catch (err) { return; }
-    const type = payload.type || '';
-    if (type === 'input_audio_buffer.speech_started') {
-      bargeIn();
-    } else if (type === 'output_audio_buffer.started' || type === 'response.output_audio.started') {
-      if (live.audio) live.audio.muted = false;
-      setConn('TopAI is speaking', 'speaking');
-    } else if (type === 'response.output_audio_transcript.delta' || type === 'response.audio_transcript.delta') {
-      live.assistantBuf += payload.delta || '';
-      appendTurn('assistant', live.assistantBuf, true);
-      if (live.audio) live.audio.muted = false;
-      setConn('TopAI is speaking', 'speaking');
-    } else if (type === 'response.output_audio_transcript.done' || type === 'response.audio_transcript.done') {
-      const text = payload.transcript || live.assistantBuf;
-      live.assistantBuf = '';
-      live.assistantEl = null;
-      if (text) {
-        appendTurn('assistant', text, false);
-        rememberTurn('assistant', text);
-      }
-    } else if (type === 'conversation.item.input_audio_transcription.completed') {
-      const text = payload.transcript || '';
-      if (text) {
-        appendTurn('user', text, false);
-        rememberTurn('user', text);
-      }
-    } else if (type === 'response.function_call_arguments.done') {
-      live.pendingCalls.push({
-        call_id: payload.call_id,
-        name: payload.name,
-        arguments: payload.arguments,
-        response_id: payload.response_id
-      });
-      setConn('Working...', 'working');
-    } else if (type === 'response.output_item.done' && payload.item && payload.item.type === 'function_call') {
-      const item = payload.item;
-      if (item.call_id && item.name && !live.pendingCalls.some((c) => c.call_id === item.call_id)) {
-        live.pendingCalls.push({
-          call_id: item.call_id,
-          name: item.name,
-          arguments: item.arguments,
-          response_id: payload.response_id
-        });
-        setConn('Working...', 'working');
-      }
-    } else if (type === 'response.done') {
-      const status = (payload.response && payload.response.status) || '';
-      const rid = payload.response && payload.response.id;
-      if (status === 'cancelled' || status === 'incomplete') {
-        live.pendingCalls = live.pendingCalls.filter((call) => call.response_id && call.response_id !== rid);
-        setConn('Listening', 'listening');
-        return;
-      }
-      flushTools();
-    } else if (type === 'response.cancelled' || type === 'output_audio_buffer.cleared') {
-      if (live.audio) live.audio.muted = true;
-      setConn('Listening', 'listening');
-    } else if (type === 'error') {
-      const msg = (payload.error && (payload.error.message || payload.error.code)) || 'Live conversation error.';
-      setError(String(msg).slice(0, 220));
+  async function connectLive() {
+    if (!window.AskTopAIRealtime || !window.AskTopAIRealtime.connect) {
+      throw liveError('realtime_connect', 'Could not establish the realtime audio connection.', { code: 'sdk_missing' });
     }
-  }
-
-  async function flushTools() {
-    if (live.flushing) return;
-    if (!live.pendingCalls.length) {
-      if (live.active && !live.reconnecting) setConn('Listening', 'listening');
-      return;
-    }
-    live.flushing = true;
-    const calls = live.pendingCalls.splice(0, live.pendingCalls.length);
-    setConn('Working...', 'working');
-    let results = [];
-    try {
-      const res = await fetch('/api/ask-topai/live/tools', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: live.sessionId,
-          calls: calls,
-          context: askContext(),
-          transcript: lastUserText()
-        })
-      });
-      const data = await res.json().catch(() => ({}));
-      results = data.results || [];
-      refreshAffectedUI(data.refresh);
-    } catch (err) {
-      results = calls.map((call) => ({
-        call_id: call.call_id,
-        output: {
-          ok: false,
-          status: 'error',
-          message: 'The CRM update failed. Tell the agent you could not complete it, and do not claim success.'
+    const minted = await mintSession();
+    live.stage = 'realtime_connect';
+    teardownPeer();
+    live.realtime = await window.AskTopAIRealtime.connect({
+      apiKey: minted.client_secret.value,
+      model: minted.model || 'gpt-realtime-2.1',
+      voice: minted.voice || 'marin',
+      instructions: minted.instructions,
+      toolSpecs: minted.tools || [],
+      mediaStream: live.stream,
+      executeTool: executeCrmTool,
+      onHistory: function (turns) { renderHistoryTurns(turns); },
+      onEvent: function (name, payload) {
+        logLive(name, payload && typeof payload === 'object' ? payload : { value: payload });
+        if (name === 'agent_start') setConn('TopAI is speaking', 'speaking');
+        if (name === 'agent_end' || name === 'audio_interrupted') setConn('Listening', 'listening');
+        if (name === 'connection_change' && (payload === 'disconnected' || payload === 'failed') && live.active && !live.ending) {
+          scheduleReconnect();
         }
-      }));
-    }
-    results.forEach((item) => {
-      sendEvent({
-        type: 'conversation.item.create',
-        item: {
-          type: 'function_call_output',
-          call_id: item.call_id,
-          output: JSON.stringify(item.output || {})
-        }
-      });
-    });
-    calls.forEach((call) => {
-      if (!results.some((item) => item.call_id === call.call_id)) {
-        sendEvent({
-          type: 'conversation.item.create',
-          item: {
-            type: 'function_call_output',
-            call_id: call.call_id,
-            output: JSON.stringify({
-              ok: false,
-              status: 'error',
-              message: 'The CRM update failed. Do not claim success.'
-            })
-          }
-        });
+      },
+      onError: function (error) {
+        logLive('session-error', { message: error && (error.message || error.error) });
       }
     });
-    sendEvent({ type: 'response.create' });
-    live.flushing = false;
-    if (live.pendingCalls.length) flushTools();
-  }
-
-  async function connectLive(isReconnect) {
-    await mintSession();
-    await attachPeer();
+    live.stage = 'connected';
     live.reconnecting = false;
+    live.reconnectAttempts = 0;
+    setConn('Listening', 'listening');
+    logLive('connected');
   }
 
   async function startLive() {
@@ -771,7 +576,7 @@
     live.stage = 'microphone';
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw liveError('microphone', 'This browser cannot start a live microphone session. Type your request instead.', { code: 'no_mic' });
+        throw liveError('microphone', 'Microphone access is blocked.', { code: 'no_mic' });
       }
       live.stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -779,15 +584,15 @@
       });
       await connectLive(false);
     } catch (err) {
-      logLive('connect-failed', { name: err && err.name, code: err && err.code, message: err && err.message });
+      logLive('connect-failed', { name: err && err.name, code: err && err.code, message: err && err.message, status: err && err.status });
       const name = err && err.name;
       let message;
-      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
-        message = 'Microphone permission was denied. Allow the microphone or type your request.';
-      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError' || err.code === 'no_mic') {
-        message = 'No microphone was found. Plug one in or type your request.';
+      if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || err.code === 'no_mic') {
+        message = 'Microphone access is blocked.';
+      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+        message = 'Microphone access is blocked.';
       } else if (err.code === 'not_configured') {
-        message = 'Ask TopAI Live Conversation is not configured yet. You can still type a request.';
+        message = 'Ask TopAI is not configured for live conversation.';
       } else {
         message = formatLiveError(err);
       }
@@ -796,18 +601,13 @@
     }
   }
 
+
   async function sendTypedToLive(text) {
     appendTurn('user', text, false);
     rememberTurn('user', text);
-    sendEvent({
-      type: 'conversation.item.create',
-      item: {
-        type: 'message',
-        role: 'user',
-        content: [{ type: 'input_text', text: text }]
-      }
-    });
-    sendEvent({ type: 'response.create' });
+    if (live.realtime && typeof live.realtime.sendMessage === 'function') {
+      live.realtime.sendMessage(text);
+    }
     textEl.value = '';
   }
 
@@ -820,7 +620,7 @@
     statusEl.classList.remove('clarify');
     renderChoices([]);
     if (!text) { setError('Enter a request first.'); return; }
-    if (live.active && live.dc && live.dc.readyState === 'open') {
+    if (live.active && live.realtime) {
       lastInputSource = 'text';
       return sendTypedToLive(text);
     }
