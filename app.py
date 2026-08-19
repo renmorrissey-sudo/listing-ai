@@ -20,6 +20,7 @@ import sms_coach
 from ask_topai import ask_topai_bp
 from crm import crm_bp
 from crm_constants import status_label
+from lead_display import is_hidden_lead_source, public_lead_source, show_external_source_badge
 from external_leads_routes import external_leads_bp
 from email_marketing_routes import email_marketing_bp
 from sms_campaigns import sms_campaigns_bp
@@ -90,6 +91,12 @@ limiter = Limiter(
     default_limits=["200 per day"],
     storage_uri="memory://",
 )
+
+
+app.jinja_env.filters["public_lead_source"] = public_lead_source
+app.jinja_env.globals["public_lead_source"] = public_lead_source
+app.jinja_env.globals["is_hidden_lead_source"] = is_hidden_lead_source
+app.jinja_env.globals["show_external_source_badge"] = show_external_source_badge
 
 
 @app.context_processor
