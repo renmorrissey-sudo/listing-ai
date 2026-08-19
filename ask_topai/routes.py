@@ -24,8 +24,16 @@ def api_interpret():
     data = request.get_json(silent=True) or {}
     transcript = str(data.get("text") or data.get("transcript") or "").strip()
     context = data.get("context") if isinstance(data.get("context"), dict) else {}
+    session_id = str(data.get("session_id") or "").strip() or None
+    source = str(data.get("source") or "text").strip().lower()
     # Never accept model JSON or tool names from the client.
-    result = service.interpret(user["id"], transcript, context)
+    result = service.interpret(
+        user["id"],
+        transcript,
+        context,
+        session_id=session_id,
+        source=source,
+    )
     return jsonify(result)
 
 

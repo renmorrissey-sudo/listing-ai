@@ -36,6 +36,7 @@ IS_TEST = APP_ENV == "test"
 
 ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY")
 CLAUDE_MODEL = _env_strip("CLAUDE_MODEL") or "claude-opus-4-6"
+ASK_TOPAI_MODEL = _env_strip("ASK_TOPAI_MODEL") or "claude-sonnet-5"
 FLASK_SECRET_KEY = _env("FLASK_SECRET_KEY")
 
 # Database configuration

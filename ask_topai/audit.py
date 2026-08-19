@@ -32,16 +32,22 @@ def record_command(
     result=None,
     confirmation_token=None,
     expires_at=None,
+    model=None,
+    input_source=None,
+    tools_invoked=None,
+    session_key=None,
 ):
     token_hash = hash_token(confirmation_token) if confirmation_token else None
     created = _now().isoformat()
+    tools_json = json.dumps(tools_invoked or [])[:2000] if tools_invoked is not None else None
     with get_db() as conn:
         cur = conn.execute(
             """
             INSERT INTO ask_topai_commands
                 (user_id, source, transcript, interpreted_json, confirmation_token_hash,
-                 status, lead_id, result_json, created_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 status, lead_id, result_json, created_at, expires_at,
+                 model, input_source, tools_invoked_json, session_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -54,9 +60,30 @@ def record_command(
                 json.dumps(result or {})[:4000] if result is not None else None,
                 created,
                 expires_at,
+                (str(model)[:80] if model else None),
+                (str(input_source)[:20] if input_source else None),
+                tools_json,
+                (str(session_key)[:80] if session_key else None),
             ),
         )
         return cur.lastrowid
+
+
+def get_by_token(user_id, token: str):
+    if not token:
+        return None
+    token_hash = hash_token(token)
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM ask_topai_commands
+            WHERE user_id = ? AND confirmation_token_hash = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (user_id, token_hash),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def get_pending_by_token(user_id, token: str):
@@ -131,7 +158,8 @@ def list_recent(user_id, limit=20):
         rows = conn.execute(
             """
             SELECT id, source, transcript, interpreted_json, status, lead_id,
-                   result_json, created_at, executed_at
+                   result_json, created_at, executed_at, model, input_source,
+                   tools_invoked_json, session_key
             FROM ask_topai_commands
             WHERE user_id = ?
             ORDER BY id DESC
