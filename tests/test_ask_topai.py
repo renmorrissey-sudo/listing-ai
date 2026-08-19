@@ -20,13 +20,87 @@ def _lead(user_id, name, phone):
     return lead_id, lead
 
 
-def test_authenticated_user_sees_ask_topai(app_client, two_users):
+AUTHENTICATED_PAGES = [
+    "/dashboard?local_date=2026-08-17&tz_offset_minutes=0",
+    "/crm/leads",
+    "/crm/tasks",
+    "/crm/follow-ups",
+    "/app",
+    "/billing",
+    "/tutorial",
+    "/social/connections",
+    "/integrations/email-marketing",
+    "/listings/archive",
+]
+
+
+def _assert_ask_topai_widget(html, path):
+    assert html.count('id="ask-topai-fab"') == 1, path
+    assert html.count('id="ask-topai-root"') == 1, path
+    assert "Ask TopAI" in html, path
+    assert "ask-topai-fab-label" in html, path
+    assert 'id="ask-topai-mic"' in html, path
+    assert 'id="ask-topai-text"' in html, path
+    assert "/api/ask-topai/interpret" in html, path
+    assert "ask-topai-confirm" in html, path
+    assert "SpeechRecognition" in html, path
+    assert "z-index: 10050" in html, path
+    assert "document.body.appendChild" in html, path
+
+
+def test_ask_topai_is_globally_mounted_on_authenticated_pages(app_client, two_users):
+    u1, _ = two_users
+    _login(app_client, u1)
+    for path in AUTHENTICATED_PAGES:
+        res = app_client.get(path)
+        assert res.status_code == 200, path
+        _assert_ask_topai_widget(res.get_data(as_text=True), path)
+
+
+def test_ask_topai_not_on_public_pages(app_client):
+    for path in ("/", "/login", "/features", "/pricing"):
+        html = app_client.get(path).get_data(as_text=True)
+        assert 'id="ask-topai-fab"' not in html, path
+
+
+def test_ask_topai_floats_from_shared_header_not_hidden_app_footer(app_client, two_users):
+    u1, _ = two_users
+    _login(app_client, u1)
+    html = app_client.get("/app").get_data(as_text=True)
+    fab_idx = html.find('id="ask-topai-fab"')
+    footer_idx = html.find('id="subscriber-footer"')
+    assert fab_idx != -1
+    assert footer_idx != -1
+    assert fab_idx < footer_idx
+
+
+def test_text_fallback_reaches_interpret_endpoint(app_client, two_users, monkeypatch):
     u1, _ = two_users
     _login(app_client, u1)
     html = app_client.get("/crm/leads").get_data(as_text=True)
-    assert "Ask TopAI" in html
-    assert 'id="ask-topai-fab"' in html
-    assert "/api/ask-topai/interpret" in html
+    assert "fetch('/api/ask-topai/interpret'" in html
+
+    def fake_llm(_text, _context):
+        return {
+            "status": "ok",
+            "commands": [
+                {
+                    "action": "create_lead",
+                    "arguments": {"name": "Ada Lopez", "phone": "303-555-0100"},
+                }
+            ],
+        }
+
+    monkeypatch.setattr("ask_topai.parser.call_llm", fake_llm)
+    res = app_client.post(
+        "/api/ask-topai/interpret",
+        json={"text": "Create a lead named Ada Lopez at 303-555-0100"},
+    )
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["status"] == "needs_confirmation"
+    assert data["confirmation_token"]
+    assert "Ada Lopez" in json.dumps(data["preview"])
 
 
 def test_unauthenticated_interpret_is_rejected(app_client):
