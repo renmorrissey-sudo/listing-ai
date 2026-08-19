@@ -90,7 +90,25 @@ def call_llm(transcript: str, context: dict) -> dict:
 
 def validate_model_payload(payload: dict, transcript: str) -> dict:
     status = str((payload or {}).get("status") or "ok").strip().lower()
+    if status in {"informational", "informational_response"}:
+        status = "informational"
+    if status in {"clarification_required", "needs_clarification"}:
+        status = "needs_clarification"
+    if status in {"unsupported_action", "unsupported"}:
+        status = "unsupported"
     message = str((payload or {}).get("message") or "").strip()
+    if status == "informational":
+        return {
+            "status": "informational",
+            "message": message or "I understood, and no CRM change is needed.",
+            "commands": [],
+        }
+    if status == "error":
+        return {
+            "status": "error",
+            "message": message or "Ask TopAI could not process that request.",
+            "commands": [],
+        }
     raw_commands = (payload or {}).get("commands")
     if raw_commands is None and payload.get("action"):
         raw_commands = [{"action": payload.get("action"), "arguments": payload.get("arguments") or {}}]

@@ -119,12 +119,23 @@ def number_grounded(transcript: str, value) -> bool:
         number = int(value)
     except (TypeError, ValueError):
         return False
+    text = (transcript or "").lower()
     digits = transcript_digits(transcript)
     if str(number) in digits:
         return True
-    compact = (transcript or "").lower().replace(",", "").replace(" ", "")
-    if number % 1000 == 0 and f"{number // 1000}k" in compact:
+    compact = text.replace(",", "").replace(" ", "").replace("$", "")
+    if str(number) in compact:
         return True
+    if number >= 1000 and number % 1000 == 0:
+        thousands = number // 1000
+        if str(thousands) in digits and (
+            "thousand" in text or f"{thousands}k" in compact
+        ):
+            return True
+    if number >= 1_000_000 and number % 1_000_000 == 0:
+        millions = number // 1_000_000
+        if str(millions) in digits and "million" in text:
+            return True
     return False
 
 
@@ -142,6 +153,29 @@ def count_grounded(transcript: str, value) -> bool:
         if n == number and re.search(rf"\b{word}\b", text):
             return True
     return False
+
+
+def alias_location_fields(arguments: dict) -> dict:
+    """Map location(s)/neighborhoods/property_types onto existing scalar fields."""
+    args = dict(arguments or {})
+
+    def _first(value):
+        if isinstance(value, (list, tuple)):
+            return str(value[0]).strip() if value else None
+        if value in (None, ""):
+            return None
+        return str(value).strip() or None
+
+    location = args.pop("location", None) or args.pop("locations", None)
+    if location and not args.get("city"):
+        args["city"] = _first(location)
+    neighborhoods = args.pop("neighborhoods", None)
+    if neighborhoods and not args.get("neighborhood"):
+        args["neighborhood"] = _first(neighborhoods)
+    property_types = args.pop("property_types", None)
+    if property_types and not args.get("property_type"):
+        args["property_type"] = _first(property_types)
+    return args
 
 
 def drop_ungrounded(transcript: str, arguments: dict) -> dict:
@@ -356,6 +390,7 @@ def sanitize_command(command: dict, transcript: str) -> tuple[dict | None, str |
     if action in BLOCKED_ACTIONS or action not in ALLOWED_ACTIONS:
         return None, "Ask TopAI cannot do that yet. Phase 1 supports creating leads, adding notes, creating tasks, and updating property criteria."
     arguments = command.get("arguments") if isinstance(command.get("arguments"), dict) else {}
+    arguments = alias_location_fields(arguments)
     if action == "create_lead":
         cleaned, err = sanitize_create_lead(arguments, transcript)
     elif action == "add_lead_note":
@@ -406,7 +441,7 @@ def preview_rows(command: dict) -> list[tuple[str, str]]:
         if args.get("priority"):
             rows.append(("Priority", args["priority"]))
     elif action == "update_property_criteria":
-        rows.append(("Action", "Update Property Criteria"))
+        rows.append(("Action", "Save Property Criteria"))
         if args.get("lead_name"):
             rows.append(("Lead", args["lead_name"]))
         interest = build_property_interest(args)

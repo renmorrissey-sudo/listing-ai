@@ -1,0 +1,234 @@
+"""Central Ask TopAI tool registry.
+
+Enabled Phase 1 tools are the only ones Claude can invoke. Future tools are
+declared here so they can be enabled later without redesigning the agent loop.
+"""
+
+from __future__ import annotations
+
+WRITE_TOOLS = frozenset(
+    {
+        "create_lead",
+        "add_lead_note",
+        "create_task",
+        "update_property_criteria",
+    }
+)
+
+READ_TOOLS = frozenset({"find_lead", "get_lead_context", "list_lead_tasks"})
+
+CONTROL_TOOLS = frozenset({"ask_clarification", "inform_user"})
+
+ENABLED_TOOLS = WRITE_TOOLS | READ_TOOLS | CONTROL_TOOLS
+
+FUTURE_TOOLS = (
+    "find_matching_listings",
+    "create_cma",
+    "draft_email",
+    "send_email",
+    "draft_sms",
+    "send_sms",
+    "schedule_appointment",
+    "initiate_ai_call",
+    "create_follow_up",
+    "generate_listing_content",
+)
+
+
+def _obj(properties: dict, required=None, extra=None):
+    schema = {
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": False,
+    }
+    if required:
+        schema["required"] = list(required)
+    if extra:
+        schema.update(extra)
+    return schema
+
+
+def anthropic_tools() -> list[dict]:
+    """Anthropic Messages API tool definitions for enabled tools only."""
+    return [
+        {
+            "name": "find_lead",
+            "description": (
+                "Find CRM leads that belong to this agent. Search by name, phone, "
+                "and/or email. Use before notes, tasks, or criteria updates when "
+                "the lead is not already selected. Never guess among multiple matches."
+            ),
+            "input_schema": _obj(
+                {
+                    "name": {"type": "string", "description": "Lead name or partial name."},
+                    "phone": {"type": "string", "description": "Phone number if the user provided one."},
+                    "email": {"type": "string", "description": "Email if the user provided one."},
+                }
+            ),
+        },
+        {
+            "name": "get_lead_context",
+            "description": (
+                "Load a single tenant-scoped lead: status, contact, property criteria, "
+                "notes, upcoming tasks/follow-ups, and SMS qualification. Requires lead_id."
+            ),
+            "input_schema": _obj(
+                {"lead_id": {"type": "integer", "description": "CRM lead id."}},
+                required=["lead_id"],
+            ),
+        },
+        {
+            "name": "list_lead_tasks",
+            "description": "List open tasks for one tenant-scoped lead.",
+            "input_schema": _obj(
+                {"lead_id": {"type": "integer", "description": "CRM lead id."}},
+                required=["lead_id"],
+            ),
+        },
+        {
+            "name": "create_lead",
+            "description": (
+                "Queue creating a new CRM lead. Requires a name and a valid mobile phone. "
+                "Does not run until the agent confirms. Do not invent a phone or email."
+            ),
+            "input_schema": _obj(
+                {
+                    "name": {"type": "string"},
+                    "phone": {"type": "string"},
+                    "email": {"type": "string"},
+                    "lead_type": {
+                        "type": "string",
+                        "enum": ["buyer", "seller", "renter", "investor", "other"],
+                    },
+                    "property_interest": {"type": "string"},
+                    "desired_outcome": {"type": "string"},
+                    "notes": {"type": "string"},
+                    "price_min": {"type": "integer"},
+                    "price_max": {"type": "integer"},
+                    "bedrooms": {"type": "integer"},
+                    "bathrooms": {"type": "integer"},
+                    "city": {"type": "string"},
+                    "neighborhood": {"type": "string"},
+                    "location": {"type": "string"},
+                    "locations": {"type": "array", "items": {"type": "string"}},
+                    "neighborhoods": {"type": "array", "items": {"type": "string"}},
+                    "property_type": {"type": "string"},
+                    "property_types": {"type": "array", "items": {"type": "string"}},
+                }
+            ),
+        },
+        {
+            "name": "add_lead_note",
+            "description": (
+                "Queue appending a note to an existing lead. Prefer lead_id from context "
+                "or find_lead. Do not guess if several leads match a name."
+            ),
+            "input_schema": _obj(
+                {
+                    "lead_id": {"type": "integer"},
+                    "lead_name": {"type": "string"},
+                    "note": {"type": "string"},
+                }
+            ),
+        },
+        {
+            "name": "create_task",
+            "description": (
+                "Queue a task or reminder for the agent. Attach lead_id when the reminder "
+                "is about a specific person."
+            ),
+            "input_schema": _obj(
+                {
+                    "lead_id": {"type": "integer"},
+                    "lead_name": {"type": "string"},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "due_date": {"type": "string", "description": "ISO date or relative phrase like tomorrow or Friday."},
+                    "due_time": {"type": "string", "description": "Optional time such as 3pm or afternoon."},
+                    "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
+                }
+            ),
+        },
+        {
+            "name": "update_property_criteria",
+            "description": (
+                "Queue a merge of buyer/seller search criteria onto an existing lead. "
+                "Only include fields the user asked to change. Do not clear unspecified fields."
+            ),
+            "input_schema": _obj(
+                {
+                    "lead_id": {"type": "integer"},
+                    "lead_name": {"type": "string"},
+                    "price_min": {"type": "integer"},
+                    "price_max": {"type": "integer"},
+                    "bedrooms": {"type": "integer"},
+                    "bathrooms": {"type": "integer"},
+                    "city": {"type": "string"},
+                    "neighborhood": {"type": "string"},
+                    "location": {"type": "string"},
+                    "locations": {"type": "array", "items": {"type": "string"}},
+                    "neighborhoods": {"type": "array", "items": {"type": "string"}},
+                    "property_type": {"type": "string"},
+                    "property_types": {"type": "array", "items": {"type": "string"}},
+                    "property_interest": {"type": "string"},
+                }
+            ),
+        },
+        {
+            "name": "ask_clarification",
+            "description": (
+                "Ask the agent a follow-up question when required information is missing "
+                "or several leads could match. Do not guess."
+            ),
+            "input_schema": _obj(
+                {
+                    "question": {"type": "string"},
+                    "choices": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": ["integer", "string"]},
+                                "label": {"type": "string"},
+                            },
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                required=["question"],
+            ),
+        },
+        {
+            "name": "inform_user",
+            "description": (
+                "Give a natural-language reply that is not a CRM mutation: an answer, "
+                "or a refusal for a capability that is not yet authorized (email, SMS send, calling)."
+            ),
+            "input_schema": _obj(
+                {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["informational", "unsupported"],
+                    },
+                    "message": {"type": "string"},
+                },
+                required=["kind", "message"],
+            ),
+        },
+    ]
+
+
+def is_write_tool(name: str) -> bool:
+    return name in WRITE_TOOLS
+
+
+def is_read_tool(name: str) -> bool:
+    return name in READ_TOOLS
+
+
+def is_enabled(name: str) -> bool:
+    return name in ENABLED_TOOLS
+
+
+def is_future_tool(name: str) -> bool:
+    return name in FUTURE_TOOLS

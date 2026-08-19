@@ -59,6 +59,12 @@
   .ask-topai-body { padding: 12px 14px 14px; }
   .ask-topai-status { font-size: 12px; color: #667; margin: 0 0 8px; }
   .ask-topai-status.listening { color: #b91c1c; font-weight: 700; }
+  .ask-topai-status.clarify { color: #1a1a2e; font-weight: 600; }
+  .ask-topai-choices { margin: 8px 0 0; padding-left: 18px; font-size: 13px; }
+  .ask-topai-plan { margin: 0; padding-left: 22px; }
+  .ask-topai-plan > li { margin: 0 0 10px; }
+  .ask-topai-plan strong { display: block; font-size: 13px; margin-bottom: 4px; }
+  .ask-topai-result.is-warn { color: #9a3412; }
   .ask-topai-transcript {
     width: 100%; min-height: 84px; resize: vertical; border: 1.5px solid #dde3f0; border-radius: 8px;
     padding: 8px; font: inherit; font-size: 14px;
@@ -93,6 +99,7 @@
     </div>
     <div class="ask-topai-body">
       <p class="ask-topai-status" id="ask-topai-status">Type a request or use the microphone.</p>
+      <div id="ask-topai-choices" hidden></div>
       <label class="muted" for="ask-topai-text" style="font-size:12px;">Request</label>
       <textarea id="ask-topai-text" class="ask-topai-transcript" placeholder="Create a buyer lead named John Smith at 303-555-1212..."></textarea>
       <div class="ask-topai-actions">
@@ -127,10 +134,34 @@
   const previewEl = document.getElementById('ask-topai-preview');
   const resultEl = document.getElementById('ask-topai-result');
   const errorEl = document.getElementById('ask-topai-error');
+  const choicesEl = document.getElementById('ask-topai-choices');
   const micBtn = document.getElementById('ask-topai-mic');
   let recognition = null;
   let listening = false;
   let confirmationToken = null;
+  let lastInputSource = 'text';
+
+  function sessionId() {
+    try {
+      let id = sessionStorage.getItem('askTopAISession');
+      if (!id) {
+        id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('sess-' + Date.now());
+        sessionStorage.setItem('askTopAISession', id);
+      }
+      return id;
+    } catch (err) {
+      return 'sess-local';
+    }
+  }
+
+  function rememberSession(id) {
+    if (!id) return;
+    try { sessionStorage.setItem('askTopAISession', id); } catch (err) {}
+  }
+
+  function resetSession() {
+    try { sessionStorage.removeItem('askTopAISession'); } catch (err) {}
+  }
 
   function askContext() {
     const page = window.location.pathname || '';
@@ -153,9 +184,10 @@
     errorEl.textContent = msg || '';
   }
 
-  function setResult(msg) {
+  function setResult(msg, kind) {
     resultEl.hidden = !msg;
-    resultEl.textContent = msg ? ('✓ ' + msg) : '';
+    resultEl.textContent = msg ? ((kind === 'warn' ? '' : '✓ ') + msg) : '';
+    resultEl.classList.toggle('is-warn', kind === 'warn');
   }
 
   function resetPreview() {
@@ -168,10 +200,24 @@
     stopMic();
     textEl.value = '';
     statusEl.textContent = 'Type a request or use the microphone.';
-    statusEl.classList.remove('listening');
+    statusEl.classList.remove('listening', 'clarify');
     resetPreview();
+    resetSession();
+    lastInputSource = 'text';
     setError('');
     setResult('');
+    renderChoices([]);
+  }
+
+  function actionTitle(command) {
+    const titles = {
+      create_lead: 'Create Lead',
+      add_lead_note: 'Add Note',
+      create_task: 'Create Task',
+      update_property_criteria: 'Save Property Criteria'
+    };
+    const fromRows = (command.rows || []).find((row) => row.label === 'Action');
+    return titles[command.action] || (fromRows && fromRows.value) || command.action || 'Action';
   }
 
   function renderPreview(preview, message) {
@@ -180,20 +226,41 @@
       return;
     }
     const blocks = (preview.commands || []).map((command) => {
-      const rows = (command.rows || []).map((row) => `<dt>${escapeAsk(row.label)}</dt><dd>${escapeAsk(row.value)}</dd>`).join('');
-      return `<dl>${rows}</dl>`;
+      const rows = (command.rows || [])
+        .filter((row) => row.label !== 'Action')
+        .map((row) => `<dt>${escapeAsk(row.label)}</dt><dd>${escapeAsk(row.value)}</dd>`)
+        .join('');
+      return `<li><strong>${escapeAsk(actionTitle(command))}</strong><dl>${rows}</dl></li>`;
     }).join('');
-    previewEl.innerHTML = `<h3>${escapeAsk(preview.title || 'I understood:')}</h3>${blocks}
+    previewEl.innerHTML = `<h3>${escapeAsk(preview.title || 'ASK TOPAI UNDERSTOOD:')}</h3>
+      <ol class="ask-topai-plan">${blocks}</ol>
       <div class="ask-topai-actions">
-        <button type="button" class="ask-topai-primary" id="ask-topai-confirm">Confirm</button>
+        <button type="button" class="ask-topai-primary" id="ask-topai-confirm">Confirm All</button>
         <button type="button" class="ask-topai-secondary" id="ask-topai-edit">Edit</button>
         <button type="button" class="ask-topai-danger" id="ask-topai-discard">Cancel</button>
       </div>`;
     previewEl.hidden = false;
     if (message) statusEl.textContent = message;
+    statusEl.classList.remove('clarify');
     document.getElementById('ask-topai-confirm').onclick = confirmCommand;
     document.getElementById('ask-topai-edit').onclick = () => { resetPreview(); textEl.focus(); };
     document.getElementById('ask-topai-discard').onclick = cancelPending;
+  }
+
+  function renderChoices(choices) {
+    if (!choicesEl) return;
+    if (!choices || !choices.length) {
+      choicesEl.hidden = true;
+      choicesEl.innerHTML = '';
+      return;
+    }
+    const items = choices.map((choice) => {
+      const label = choice.label || choice.name || ('Lead #' + (choice.id || ''));
+      const phone = choice.phone_number || choice.phone || '';
+      return `<li>${escapeAsk(label)}${phone ? ' — ' + escapeAsk(phone) : ''}</li>`;
+    }).join('');
+    choicesEl.innerHTML = `<ol class="ask-topai-choices">${items}</ol>`;
+    choicesEl.hidden = false;
   }
 
   function escapeAsk(value) {
@@ -204,27 +271,61 @@
 
   async function interpret() {
     const text = textEl.value.trim();
+    const original = textEl.value;
     setError('');
     setResult('');
+    statusEl.classList.remove('clarify');
+    renderChoices([]);
     if (!text) { setError('Enter or speak a request first.'); return; }
     try {
       const res = await fetch('/api/ask-topai/interpret', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ text, context: askContext() }),
+        body: JSON.stringify({
+          text,
+          context: askContext(),
+          session_id: sessionId(),
+          source: lastInputSource === 'voice' ? 'voice' : 'text'
+        }),
       });
       const data = await res.json().catch(() => ({}));
+      if (data.session_id) rememberSession(data.session_id);
       if (res.status === 401) { setError('Please log in to use Ask TopAI.'); return; }
-      if (!res.ok) { setError(data.error || 'Ask TopAI could not process that.'); return; }
-      if (data.status === 'needs_confirmation') {
+      if (!res.ok) { setError(data.error || 'Ask TopAI could not process that.'); textEl.value = original; return; }
+      const status = data.status || '';
+      if (status === 'action_plan' || status === 'needs_confirmation') {
         confirmationToken = data.confirmation_token;
         renderPreview(data.preview, data.message);
         return;
       }
       resetPreview();
+      if (status === 'clarification_required' || status === 'needs_clarification') {
+        statusEl.textContent = data.message || 'I need a bit more information.';
+        statusEl.classList.add('clarify');
+        renderChoices(data.choices);
+        textEl.value = '';
+        textEl.placeholder = 'Type your answer…';
+        textEl.focus();
+        return;
+      }
+      if (status === 'informational_response' || status === 'informational') {
+        setResult(data.message || 'I understood, and no CRM change is needed.');
+        return;
+      }
+      if (status === 'unsupported_action' || status === 'unsupported') {
+        setResult(data.message || 'Ask TopAI cannot do that yet.', 'warn');
+        return;
+      }
+      if (status === 'error') {
+        setError(data.message || 'Ask TopAI could not process that.');
+        textEl.value = original;
+        return;
+      }
       setError(data.message || 'I need more information.');
+      textEl.value = original;
     } catch (err) {
       setError(err.message || 'Network error.');
+      textEl.value = original;
     }
   }
 
@@ -238,6 +339,11 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setError(data.error || 'Could not complete that action.'); return; }
+      if (data.status === 'partial') {
+        resetPreview();
+        setResult(data.message || 'Some actions could not be completed.', 'warn');
+        return;
+      }
       resetPreview();
       setResult(data.message || 'Done.');
     } catch (err) {
@@ -287,6 +393,7 @@
         else interim += chunk;
       }
       textEl.value = (finalText + interim).trim();
+      lastInputSource = 'voice';
     };
     recognition.onerror = () => {
       stopMic();
@@ -307,6 +414,7 @@
   fab.addEventListener('click', () => setOpen(!root.classList.contains('is-open')));
   document.getElementById('ask-topai-close').addEventListener('click', () => setOpen(false));
   document.getElementById('ask-topai-submit').addEventListener('click', interpret);
+  textEl.addEventListener('input', () => { lastInputSource = 'text'; });
   document.getElementById('ask-topai-clear').addEventListener('click', resetAll);
   document.getElementById('ask-topai-cancel').addEventListener('click', cancelPending);
   micBtn.addEventListener('click', () => listening ? stopMic() : startMic());

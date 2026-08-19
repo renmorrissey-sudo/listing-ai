@@ -9,6 +9,22 @@ from ask_topai.parser import validate_model_payload
 from lead_service import upsert_crm_lead
 
 
+def _as_complete(fake_llm):
+    """Adapt old (transcript, context) stubs to agent.complete()."""
+
+    def complete(user_id, transcript, context, session_id=None, source="text"):
+        payload = fake_llm(transcript, context)
+        payload.setdefault("tools_invoked", [c.get("action") for c in payload.get("commands") or []])
+        payload.setdefault("model", "claude-sonnet-5")
+        payload.setdefault("session_id", session_id or "sess-test")
+        payload.setdefault("source", source)
+        payload.setdefault("choices", [])
+        payload.setdefault("grounding_transcript", transcript)
+        return payload
+
+    return complete
+
+
 def _login(client, user_id):
     with client.session_transaction() as sess:
         sess["user_id"] = user_id
@@ -42,7 +58,9 @@ def _assert_ask_topai_widget(html, path):
     assert 'id="ask-topai-mic"' in html, path
     assert 'id="ask-topai-text"' in html, path
     assert "/api/ask-topai/interpret" in html, path
-    assert "ask-topai-confirm" in html, path
+    assert "Confirm All" in html, path
+    assert "session_id" in html, path
+    assert "clarification_required" in html, path
     assert "SpeechRecognition" in html, path
     assert "z-index: 10050" in html, path
     assert "document.body.appendChild" in html, path
@@ -91,14 +109,14 @@ def test_text_fallback_reaches_interpret_endpoint(app_client, two_users, monkeyp
             ],
         }
 
-    monkeypatch.setattr("ask_topai.parser.call_llm", fake_llm)
+    monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake_llm))
     res = app_client.post(
         "/api/ask-topai/interpret",
         json={"text": "Create a lead named Ada Lopez at 303-555-0100"},
     )
     assert res.status_code == 200
     data = res.get_json()
-    assert data["status"] == "needs_confirmation"
+    assert data["status"] == "action_plan"
     assert data["confirmation_token"]
     assert "Ada Lopez" in json.dumps(data["preview"])
 
@@ -134,12 +152,12 @@ def test_create_lead_requires_confirmation_then_creates_one(app_client, two_user
             ],
         }
 
-    monkeypatch.setattr("ask_topai.parser.call_llm", fake_llm)
+    monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake_llm))
     before = len(db.list_leads(u1, limit=100))
     interpreted = app_client.post("/api/ask-topai/interpret", json={"text": transcript})
     assert interpreted.status_code == 200
     data = interpreted.get_json()
-    assert data["status"] == "needs_confirmation"
+    assert data["status"] == "action_plan"
     assert data["confirmation_token"]
     assert "John Smith" in json.dumps(data["preview"])
     assert len(db.list_leads(u1, limit=100)) == before
@@ -172,14 +190,14 @@ def test_duplicate_phone_does_not_overwrite(app_client, two_users, monkeypatch):
             ],
         }
 
-    monkeypatch.setattr("ask_topai.parser.call_llm", fake_llm)
+    monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake_llm))
     res = app_client.post(
         "/api/ask-topai/interpret",
         json={"text": "Create Ryan Serhant at +13035551212"},
     )
     assert res.status_code == 200
     data = res.get_json()
-    assert data["status"] == "needs_clarification"
+    assert data["status"] == "clarification_required"
     assert "Sarah Johnson" in data["message"]
     assert data["confirmation_token"] is None
     sarah = db.get_lead(sarah_id, u1)
@@ -200,7 +218,7 @@ def test_add_note_uses_current_lead_context(app_client, two_users, monkeypatch):
             "commands": [{"action": "add_lead_note", "arguments": {"note": "She wants to see the property Saturday."}}],
         }
 
-    monkeypatch.setattr("ask_topai.parser.call_llm", fake_llm)
+    monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake_llm))
     res = app_client.post(
         "/api/ask-topai/interpret",
         json={
@@ -230,10 +248,10 @@ def test_ambiguous_lead_name_does_not_guess(app_client, two_users, monkeypatch):
             "commands": [{"action": "add_lead_note", "arguments": {"lead_name": "John", "note": "Call back"}}],
         }
 
-    monkeypatch.setattr("ask_topai.parser.call_llm", fake_llm)
+    monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake_llm))
     res = app_client.post("/api/ask-topai/interpret", json={"text": "Add a note to John: Call back"})
     data = res.get_json()
-    assert data["status"] == "needs_clarification"
+    assert data["status"] == "clarification_required"
     assert "multiple leads named John" in data["message"]
     assert data["confirmation_token"] is None
     assert "Call back" not in (db.get_lead(john1, u1).get("notes") or "")
@@ -260,7 +278,7 @@ def test_create_task_creates_exactly_one(app_client, two_users, monkeypatch):
             ],
         }
 
-    monkeypatch.setattr("ask_topai.parser.call_llm", fake_llm)
+    monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake_llm))
     before = len(crm_db.list_tasks(u1))
     interpreted = app_client.post(
         "/api/ask-topai/interpret",
@@ -301,7 +319,7 @@ def test_property_criteria_updates_intended_lead_only(app_client, two_users, mon
             ],
         }
 
-    monkeypatch.setattr("ask_topai.parser.call_llm", fake_llm)
+    monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake_llm))
     interpreted = app_client.post(
         "/api/ask-topai/interpret",
         json={"text": "Sarah wants 3-bedroom townhomes in Littleton under $650,000."},
@@ -333,10 +351,10 @@ def test_missing_phone_asks_instead_of_inventing(app_client, two_users, monkeypa
             ],
         }
 
-    monkeypatch.setattr("ask_topai.parser.call_llm", fake_llm)
+    monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake_llm))
     res = app_client.post("/api/ask-topai/interpret", json={"text": "Create a lead named Michael."})
     data = res.get_json()
-    assert data["status"] == "needs_clarification"
+    assert data["status"] == "clarification_required"
     assert "phone" in data["message"].lower()
     assert data["confirmation_token"] is None
     assert db.list_leads(u1, limit=20) == []
@@ -349,17 +367,17 @@ def test_unsupported_and_arbitrary_actions_rejected(app_client, two_users, monke
     def send_sms(_text, _context):
         return {"status": "ok", "commands": [{"action": "send_sms", "arguments": {"body": "hi"}}]}
 
-    monkeypatch.setattr("ask_topai.parser.call_llm", send_sms)
+    monkeypatch.setattr("ask_topai.agent.complete", _as_complete(send_sms))
     unsupported = app_client.post("/api/ask-topai/interpret", json={"text": "Text Sarah that I am running late"})
-    assert unsupported.get_json()["status"] == "unsupported"
+    assert unsupported.get_json()["status"] == "unsupported_action"
     assert unsupported.get_json()["confirmation_token"] is None
 
     def drop_table(_text, _context):
         return {"status": "ok", "commands": [{"action": "drop_table", "arguments": {"name": "leads"}}]}
 
-    monkeypatch.setattr("ask_topai.parser.call_llm", drop_table)
+    monkeypatch.setattr("ask_topai.agent.complete", _as_complete(drop_table))
     arbitrary = app_client.post("/api/ask-topai/interpret", json={"text": "Drop the leads table"})
-    assert arbitrary.get_json()["status"] == "unsupported"
+    assert arbitrary.get_json()["status"] == "unsupported_action"
 
     payload = validate_model_payload(
         {"action": "execute_sql", "arguments": {"sql": "DELETE FROM leads"}},
@@ -378,8 +396,11 @@ def test_executed_command_is_audited(app_client, two_users, monkeypatch):
             "commands": [{"action": "create_task", "arguments": {"title": "Call Ryan"}}],
         }
 
-    monkeypatch.setattr("ask_topai.parser.call_llm", fake_llm)
-    interpreted = app_client.post("/api/ask-topai/interpret", json={"text": "Remind me to call Ryan"})
+    monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake_llm))
+    interpreted = app_client.post(
+        "/api/ask-topai/interpret",
+        json={"text": "Remind me to call Ryan", "source": "voice"},
+    )
     app_client.post(
         "/api/ask-topai/confirm",
         json={"confirmation_token": interpreted.get_json()["confirmation_token"]},
@@ -391,6 +412,10 @@ def test_executed_command_is_audited(app_client, two_users, monkeypatch):
     assert "call Ryan" in (rows[0].get("transcript") or "")
     interpreted_json = json.loads(rows[0]["interpreted_json"])
     assert interpreted_json["commands"][0]["action"] == "create_task"
+    pending_or_exec = [row for row in rows if row["status"] in {"executed", "pending_confirmation"}]
+    assert pending_or_exec
+    assert rows[0].get("model") == "claude-sonnet-5"
+    assert rows[0].get("input_source") == "voice"
 
 
 def test_client_cannot_inject_model_payload(app_client, two_users, monkeypatch):
@@ -404,7 +429,7 @@ def test_client_cannot_inject_model_payload(app_client, two_users, monkeypatch):
             "commands": [],
         }
 
-    monkeypatch.setattr("ask_topai.parser.call_llm", fake_llm)
+    monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake_llm))
     res = app_client.post(
         "/api/ask-topai/interpret",
         json={
@@ -415,5 +440,5 @@ def test_client_cannot_inject_model_payload(app_client, two_users, monkeypatch):
             },
         },
     )
-    assert res.get_json()["status"] == "needs_clarification"
+    assert res.get_json()["status"] == "clarification_required"
     assert db.list_leads(u1, limit=20) == []
