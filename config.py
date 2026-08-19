@@ -37,6 +37,9 @@ IS_TEST = APP_ENV == "test"
 ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY")
 CLAUDE_MODEL = _env_strip("CLAUDE_MODEL") or "claude-opus-4-6"
 ASK_TOPAI_MODEL = _env_strip("ASK_TOPAI_MODEL") or "claude-sonnet-5"
+OPENAI_API_KEY = _env("OPENAI_API_KEY")
+ASK_TOPAI_REALTIME_MODEL = _env_strip("ASK_TOPAI_REALTIME_MODEL") or "gpt-realtime-2.1"
+ASK_TOPAI_REALTIME_VOICE = _env_strip("ASK_TOPAI_REALTIME_VOICE") or "marin"
 FLASK_SECRET_KEY = _env("FLASK_SECRET_KEY")
 
 # Database configuration
@@ -370,5 +373,11 @@ def validate_config():
         f"account_sid_starts_with_AC={account_sid_ok} "
         f"auth_token_present={auth_token_present} "
         f"anthropic_api_key_present={bool(ANTHROPIC_API_KEY)}",
+        file=sys.stderr,
+    )
+    print(
+        "Ask TopAI realtime check: "
+        f"openai_api_key_present={bool(OPENAI_API_KEY)} "
+        f"realtime_model={ASK_TOPAI_REALTIME_MODEL}",
         file=sys.stderr,
     )

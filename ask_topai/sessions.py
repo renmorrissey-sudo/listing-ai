@@ -59,7 +59,7 @@ def save_session(user_id, session_key: str, messages: list, *, pending=None, sta
     now = _now().isoformat()
     trimmed = list(messages or [])[-MAX_MESSAGES:]
     payload = json.dumps(trimmed)[:MAX_JSON]
-    pending_json = json.dumps(pending)[:4000] if pending is not None else None
+    pending_json = json.dumps(pending)[:12000] if pending is not None else None
     existing = get_session(user_id, key)
     with get_db() as conn:
         if existing:

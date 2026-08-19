@@ -88,8 +88,8 @@ def anthropic_tools() -> list[dict]:
         {
             "name": "create_lead",
             "description": (
-                "Queue creating a new CRM lead. Requires a name and a valid mobile phone. "
-                "Does not run until the agent confirms. Do not invent a phone or email."
+                "Create a new CRM lead now. Requires a name and a valid mobile phone. "
+                "Do not invent a phone or email."
             ),
             "input_schema": _obj(
                 {
@@ -120,7 +120,7 @@ def anthropic_tools() -> list[dict]:
         {
             "name": "add_lead_note",
             "description": (
-                "Queue appending a note to an existing lead. Prefer lead_id from context "
+                "Append a note to an existing lead now. Prefer lead_id from context "
                 "or find_lead. Do not guess if several leads match a name."
             ),
             "input_schema": _obj(
@@ -134,7 +134,7 @@ def anthropic_tools() -> list[dict]:
         {
             "name": "create_task",
             "description": (
-                "Queue a task or reminder for the agent. Attach lead_id when the reminder "
+                "Create a task or reminder for the agent now. Attach lead_id when the reminder "
                 "is about a specific person."
             ),
             "input_schema": _obj(
@@ -152,7 +152,7 @@ def anthropic_tools() -> list[dict]:
         {
             "name": "update_property_criteria",
             "description": (
-                "Queue a merge of buyer/seller search criteria onto an existing lead. "
+                "Merge buyer/seller search criteria onto an existing lead now. "
                 "Only include fields the user asked to change. Do not clear unspecified fields."
             ),
             "input_schema": _obj(
@@ -216,6 +216,24 @@ def anthropic_tools() -> list[dict]:
             ),
         },
     ]
+
+
+def openai_tools() -> list[dict]:
+    """OpenAI Realtime/Responses function tools for enabled CRM tools only."""
+    tools = []
+    for item in anthropic_tools():
+        name = item.get("name")
+        if name in CONTROL_TOOLS:
+            continue
+        tools.append(
+            {
+                "type": "function",
+                "name": name,
+                "description": item.get("description") or "",
+                "parameters": item.get("input_schema") or {"type": "object", "properties": {}},
+            }
+        )
+    return tools
 
 
 def is_write_tool(name: str) -> bool:
