@@ -168,14 +168,16 @@
     dc: null,
     stream: null,
     audio: null,
-    callsUrl: 'https://api.openai.com/v1/realtime/calls',
+    webrtcUrl: '/api/ask-topai/live/webrtc',
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     pendingCalls: [],
     flushing: false,
     turns: [],
     assistantBuf: '',
     assistantEl: null,
-    userEl: null
+    userEl: null,
+    stage: null,
+    lastRef: null
   };
   window.__askTopAILive = live;
 
@@ -249,6 +251,61 @@
     statusEl.textContent = label;
     statusEl.classList.remove('listening', 'speaking', 'working', 'reconnecting', 'clarify');
     if (kind) statusEl.classList.add(kind);
+  }
+
+  function looksLikeSdp(text) {
+    return String(text || '').replace(/^\uFEFF/, '').trimStart().indexOf('v=0') === 0;
+  }
+
+  function looksLikeHtml(text) {
+    const head = String(text || '').trimStart().slice(0, 400).toLowerCase();
+    return head.indexOf('<!doctype') === 0 || head.indexOf('<html') === 0 || head.indexOf('<html') !== -1;
+  }
+
+  function liveError(stage, message, extra) {
+    extra = extra || {};
+    const err = new Error(message || 'TopAI could not establish the Realtime session.');
+    err.stage = stage;
+    err.code = extra.code;
+    err.status = extra.status;
+    err.ref = extra.ref || live.lastRef;
+    err.userMessage = extra.userMessage || message;
+    return err;
+  }
+
+  function formatLiveError(err) {
+    let message = (err && (err.userMessage || err.message)) || 'TopAI could not establish the Realtime session.';
+    const ref = err && err.ref;
+    if (ref) message += ' (ref ' + ref + ')';
+    return message;
+  }
+
+  function logLive(reason, extra) {
+    const payload = {
+      stage: live.stage,
+      ref: live.lastRef,
+      connection: live.pc && live.pc.connectionState,
+      ice: live.pc && live.pc.iceConnectionState,
+      signaling: live.pc && live.pc.signalingState,
+      dc: live.dc && live.dc.readyState
+    };
+    if (extra) Object.keys(extra).forEach((key) => { payload[key] = extra[key]; });
+    console.info('Ask TopAI live', reason, payload);
+  }
+
+  function waitForIce(pc, timeoutMs) {
+    if (!pc || pc.iceGatheringState === 'complete') return Promise.resolve();
+    return new Promise((resolve) => {
+      const finish = () => {
+        try { pc.removeEventListener('icegatheringstatechange', onChange); } catch (err) {}
+        resolve();
+      };
+      const onChange = () => {
+        if (pc.iceGatheringState === 'complete') finish();
+      };
+      pc.addEventListener('icegatheringstatechange', onChange);
+      setTimeout(finish, timeoutMs || 3000);
+    });
   }
 
   function setLiveMode(on) {
@@ -400,40 +457,95 @@
   }
 
   async function mintSession() {
+    live.stage = 'backend_session';
     const res = await fetch('/api/ask-topai/live/session', {
       method: 'POST',
+      credentials: 'same-origin',
+      redirect: 'manual',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_id: live.sessionId,
         context: askContext()
       })
     });
+    if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
+      throw liveError('redirect', 'TopAI could not establish the Realtime session.', { status: res.status, code: 'redirect' });
+    }
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) {
-      const err = new Error(data.error || data.message || 'Ask TopAI could not start a live conversation.');
-      err.code = data.code;
-      throw err;
+      throw liveError('backend_session', data.error || 'Ask TopAI could not start a live conversation.', {
+        status: res.status,
+        code: data.code,
+        ref: data.ref
+      });
     }
     if (data.session_id) {
       live.sessionId = data.session_id;
       rememberSession(data.session_id);
     }
-    live.callsUrl = data.calls_url || live.callsUrl;
+    live.webrtcUrl = data.webrtc_url || live.webrtcUrl;
     live.iceServers = data.ice_servers || live.iceServers;
     return data;
   }
 
-  async function attachPeer(ephemeral) {
+  async function readWebrtcAnswer(sdpResponse) {
+    const contentType = String(sdpResponse.headers.get('content-type') || '').toLowerCase();
+    const headerRef = sdpResponse.headers.get('x-ask-topai-ref') || '';
+    const sessionHeader = sdpResponse.headers.get('x-ask-topai-session-id') || '';
+    if (sdpResponse.type === 'opaqueredirect' || (sdpResponse.status >= 300 && sdpResponse.status < 400)) {
+      throw liveError('redirect', 'TopAI could not establish the Realtime session.', {
+        status: sdpResponse.status,
+        code: 'redirect',
+        ref: headerRef
+      });
+    }
+    const text = await sdpResponse.text();
+    let data = {};
+    if (contentType.indexOf('application/json') !== -1 || looksLikeHtml(text) || (text && text.trim().charAt(0) === '{')) {
+      try { data = JSON.parse(text); } catch (err) { data = {}; }
+    }
+    const ref = data.ref || headerRef || live.lastRef;
+    live.lastRef = ref;
+    if (sdpResponse.status === 401) {
+      throw liveError('auth', 'Please log in to continue.', { status: 401, code: 'login', ref: ref });
+    }
+    if (!sdpResponse.ok) {
+      throw liveError(data.stage || 'backend_webrtc', data.error || 'TopAI could not establish the Realtime session.', {
+        status: sdpResponse.status,
+        code: data.code,
+        ref: ref,
+        userMessage: data.error
+      });
+    }
+    if (contentType.indexOf('text/html') !== -1 || looksLikeHtml(text) || !looksLikeSdp(text)) {
+      throw liveError('invalid_sdp', 'TopAI could not establish the Realtime session.', {
+        status: sdpResponse.status,
+        code: 'invalid_sdp',
+        ref: ref
+      });
+    }
+    if (sessionHeader) {
+      live.sessionId = sessionHeader;
+      rememberSession(sessionHeader);
+    }
+    return { sdp: text, ref: ref };
+  }
+
+  async function attachPeer() {
+    live.stage = 'pc_create';
     teardownPeer();
     live.pc = new RTCPeerConnection({ iceServers: live.iceServers });
     live.audio = document.createElement('audio');
     live.audio.autoplay = true;
     live.audio.setAttribute('playsinline', '');
     live.pc.ontrack = (event) => {
+      live.stage = 'remote_track';
+      logLive('remote-track');
       live.audio.srcObject = event.streams[0];
       live.audio.muted = false;
       live.audio.play().catch(() => {});
     };
+    live.stage = 'local_track';
     if (live.stream) {
       live.stream.getTracks().forEach((track) => live.pc.addTrack(track, live.stream));
     }
@@ -441,30 +553,54 @@
     live.dc.addEventListener('open', () => {
       live.reconnectAttempts = 0;
       live.reconnecting = false;
+      logLive('datachannel-open');
       setConn('Listening', 'listening');
       if (live.pendingCalls.length) flushTools();
     });
+    live.dc.addEventListener('error', () => logLive('datachannel-error'));
+    live.dc.addEventListener('close', () => logLive('datachannel-close'));
     live.dc.addEventListener('message', onRealtimeMessage);
     live.pc.onconnectionstatechange = () => {
+      logLive('connectionstatechange');
       if (live.ending || !live.active) return;
       const state = live.pc && live.pc.connectionState;
       if (state === 'disconnected' || state === 'failed') scheduleReconnect();
     };
+    live.pc.oniceconnectionstatechange = () => logLive('iceconnectionstatechange');
+    live.pc.onsignalingstatechange = () => logLive('signalingstatechange');
+    live.stage = 'offer';
     const offer = await live.pc.createOffer();
+    live.stage = 'set_local';
     await live.pc.setLocalDescription(offer);
-    const sdpResponse = await fetch(live.callsUrl, {
+    live.stage = 'ice_gather';
+    await waitForIce(live.pc, 3000);
+    const localSdp = (live.pc.localDescription && live.pc.localDescription.sdp) || offer.sdp;
+    if (!looksLikeSdp(localSdp)) {
+      throw liveError('offer', 'TopAI could not establish the Realtime session.', { code: 'invalid_offer' });
+    }
+    live.stage = 'backend_webrtc';
+    logLive('post-sdp');
+    const context = askContext();
+    const sdpResponse = await fetch(live.webrtcUrl, {
       method: 'POST',
-      body: offer.sdp,
+      credentials: 'same-origin',
+      redirect: 'manual',
+      body: localSdp,
       headers: {
-        Authorization: 'Bearer ' + ephemeral,
-        'Content-Type': 'application/sdp'
+        'Content-Type': 'application/sdp',
+        'X-Ask-TopAI-Session': live.sessionId || '',
+        'X-Ask-TopAI-Page': context.page || '',
+        'X-Ask-TopAI-Lead-Id': context.lead_id ? String(context.lead_id) : ''
       }
     });
-    if (!sdpResponse.ok) {
-      throw new Error('WebRTC connection failed');
+    const answer = await readWebrtcAnswer(sdpResponse);
+    live.stage = 'set_remote';
+    if (!looksLikeSdp(answer.sdp)) {
+      throw liveError('invalid_sdp', 'TopAI could not establish the Realtime session.', { ref: answer.ref, code: 'invalid_sdp' });
     }
-    const answer = { type: 'answer', sdp: await sdpResponse.text() };
-    await live.pc.setRemoteDescription(answer);
+    await live.pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
+    live.stage = 'ice_connect';
+    logLive('remote-description-set');
   }
 
   function scheduleReconnect() {
@@ -618,10 +754,8 @@
   }
 
   async function connectLive(isReconnect) {
-    const minted = await mintSession();
-    const ephemeral = minted.client_secret && minted.client_secret.value;
-    if (!ephemeral) throw new Error('Ask TopAI could not start a live conversation.');
-    await attachPeer(ephemeral);
+    await mintSession();
+    await attachPeer();
     live.reconnecting = false;
   }
 
@@ -630,12 +764,14 @@
     setError('');
     setResult('');
     setLiveMode(true);
-    setConn('Connecting...', '');
+    setConn('Connecting to Ask TopAI...', '');
     live.ending = false;
     live.reconnectAttempts = 0;
+    live.lastRef = null;
+    live.stage = 'microphone';
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw Object.assign(new Error('This browser cannot start a live microphone session. Type your request instead.'), { code: 'no_mic' });
+        throw liveError('microphone', 'This browser cannot start a live microphone session. Type your request instead.', { code: 'no_mic' });
       }
       live.stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -643,17 +779,20 @@
       });
       await connectLive(false);
     } catch (err) {
+      logLive('connect-failed', { name: err && err.name, code: err && err.code, message: err && err.message });
       const name = err && err.name;
-      let message = err && err.message;
+      let message;
       if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
         message = 'Microphone permission was denied. Allow the microphone or type your request.';
       } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError' || err.code === 'no_mic') {
         message = 'No microphone was found. Plug one in or type your request.';
       } else if (err.code === 'not_configured') {
         message = 'Ask TopAI Live Conversation is not configured yet. You can still type a request.';
+      } else {
+        message = formatLiveError(err);
       }
-      setError(message || 'Ask TopAI could not start a live conversation.');
-      await endLive(false);
+      setError(message);
+      await endLive(!!live.sessionId);
     }
   }
 

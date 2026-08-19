@@ -4,17 +4,7 @@ import crm_db
 import db
 from ask_topai import policy, registry, sessions
 from ask_topai.realtime import runtime, settings
-from ask_topai.realtime.openai_client import extract_ephemeral_secret
 from tests.test_ask_topai import _lead, _login
-
-
-def _mint(monkeypatch, value="ek_test_ephemeral_not_a_real_key"):
-    monkeypatch.setattr(
-        "ask_topai.realtime.openai_client.mint_ephemeral_secret",
-        lambda session_obj, user_id=None: {"value": value, "expires_at": 1_700_000_000},
-    )
-    monkeypatch.setattr("ask_topai.realtime.settings.is_configured", lambda: True)
-    monkeypatch.setattr("ask_topai.realtime.settings.key_present", lambda: True)
 
 
 def test_realtime_model_is_configurable(monkeypatch):
@@ -41,15 +31,11 @@ def test_future_tools_require_spoken_confirmation():
     assert policy.confirmation_mode("drop_table") == policy.MODE_FORBIDDEN
 
 
-def test_extract_ephemeral_secret_shapes():
-    assert extract_ephemeral_secret({"value": "ek_abc"})[0] == "ek_abc"
-    assert extract_ephemeral_secret({"client_secret": {"value": "ek_def", "expires_at": 9}})[0] == "ek_def"
-
-
-def test_live_session_mints_ephemeral_key_not_openai_api_key(app_client, two_users, monkeypatch):
+def test_live_session_bootstraps_without_openai_secrets(app_client, two_users, monkeypatch):
     u1, _ = two_users
     _login(app_client, u1)
-    _mint(monkeypatch)
+    monkeypatch.setattr("ask_topai.realtime.settings.is_configured", lambda: True)
+    monkeypatch.setattr("ask_topai.realtime.settings.key_present", lambda: True)
     res = app_client.post(
         "/api/ask-topai/live/session",
         json={"context": {"page": "/crm/leads"}},
@@ -58,24 +44,28 @@ def test_live_session_mints_ephemeral_key_not_openai_api_key(app_client, two_use
     data = res.get_json()
     body = res.get_data(as_text=True)
     assert data["ok"] is True
-    assert data["client_secret"]["value"].startswith("ek_")
+    assert "client_secret" not in data
     assert data["model"] == "gpt-realtime-2.1"
-    assert data["calls_url"] == "https://api.openai.com/v1/realtime/calls"
+    assert data["webrtc_url"] == "/api/ask-topai/live/webrtc"
+    assert "api.openai.com" not in body
     assert "OPENAI_API_KEY" not in body
-    assert "sk-" not in body
+    assert "sk-proj-" not in body
+    assert "sk-ant-" not in body
     assert data["session_id"]
 
 
-def test_live_session_without_openai_key(app_client, two_users, monkeypatch):
+def test_live_session_without_openai_key_still_bootstraps(app_client, two_users, monkeypatch):
     u1, _ = two_users
     _login(app_client, u1)
     monkeypatch.setattr("ask_topai.realtime.settings.is_configured", lambda: False)
     monkeypatch.setattr("ask_topai.realtime.settings.key_present", lambda: False)
     res = app_client.post("/api/ask-topai/live/session", json={})
-    assert res.status_code == 503
+    assert res.status_code == 200
     data = res.get_json()
-    assert data["ok"] is False
+    assert data["ok"] is True
+    assert data["openai_api_key_present"] is False
     assert "OPENAI_API_KEY" not in (data.get("error") or "")
+    assert "client_secret" not in data
 
 
 def test_live_health_reports_presence_not_secret(app_client, two_users, monkeypatch):
@@ -356,12 +346,21 @@ def test_widget_live_controls_and_no_secrets(app_client, two_users):
     assert "Start Live Conversation" in html
     assert "End Conversation" in html
     assert "Ask TopAI — Live" in html
-    assert "Connecting..." in html
+    assert "Connecting to Ask TopAI..." in html
     assert "Listening" in html
     assert "TopAI is speaking" in html
     assert "Working..." in html
     assert "Reconnecting..." in html
     assert "RTCPeerConnection" in html
+    assert "/api/ask-topai/live/webrtc" in html
+    assert "https://api.openai.com/v1/realtime/calls" not in html
+    assert "WebRTC connection failed" not in html
+    assert "looksLikeSdp" in html
+    assert html.index("looksLikeSdp(answer.sdp)") < html.index("setRemoteDescription")
+    assert "connectionstatechange" in html
+    assert "iceconnectionstatechange" in html
+    assert "signalingstatechange" in html
+    assert "datachannel-open" in html
     assert "response.cancel" in html
     assert "input_audio_buffer.speech_started" in html
     assert "OPENAI_API_KEY" not in html
