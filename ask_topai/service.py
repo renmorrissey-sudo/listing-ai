@@ -96,10 +96,9 @@ def build_preview(commands: list) -> dict:
     return {"title": "ASK TOPAI UNDERSTOOD:", "commands": numbered}
 
 
-def _api_status(internal: str, *, has_token=False) -> str:
-    if has_token or internal in {"ok", "needs_confirmation", "action_plan"}:
-        return "action_plan"
+def _api_status(internal: str) -> str:
     return {
+        "ok": "executed",
         "needs_clarification": "clarification_required",
         "unsupported": "unsupported_action",
         "informational": "informational_response",
@@ -107,18 +106,99 @@ def _api_status(internal: str, *, has_token=False) -> str:
     }.get(internal, internal)
 
 
-def _audit_kwargs(raw, session_id=None):
+def _audit_kwargs(raw, session_id=None, request_id=None):
     return {
         "model": raw.get("model"),
         "input_source": raw.get("source"),
         "tools_invoked": raw.get("tools_invoked"),
         "session_key": raw.get("session_id") or session_id,
+        "request_id": request_id,
     }
 
 
-def interpret(user_id, transcript: str, raw_context: dict | None, *, session_id=None, source="text"):
+def _refresh_hints(results: list) -> dict:
+    hints = {"leads": False, "tasks": False, "lead_ids": []}
+    for item in results or []:
+        action = item.get("action")
+        if action == "create_lead":
+            hints["leads"] = True
+        if action == "create_task":
+            hints["tasks"] = True
+        if action in {"add_lead_note", "update_property_criteria", "create_lead"}:
+            hints["leads"] = True
+        lead_id = item.get("lead_id")
+        if lead_id:
+            hints["lead_ids"].append(lead_id)
+    return hints
+
+
+def _replay_request(row: dict, session_id=None) -> dict:
+    try:
+        previous = json.loads(row.get("result_json") or "{}")
+    except json.JSONDecodeError:
+        previous = {}
+    status = row.get("status")
+    if status == "in_progress":
+        return {
+            "ok": True,
+            "status": "working",
+            "message": "Ask TopAI is working...",
+            "duplicate": True,
+            "preview": None,
+            "confirmation_token": None,
+            "choices": [],
+            "session_id": session_id or row.get("session_key"),
+        }
+    return {
+        "ok": True,
+        "status": status if status in {"executed", "partial"} else status,
+        "message": previous.get("message") or "This request was already completed.",
+        "results": previous.get("results") or [],
+        "failures": previous.get("failures") or [],
+        "duplicate": True,
+        "preview": None,
+        "confirmation_token": None,
+        "choices": [],
+        "session_id": session_id or row.get("session_key"),
+        "refresh": previous.get("refresh") or _refresh_hints(previous.get("results") or []),
+    }
+
+
+def interpret(
+    user_id,
+    transcript: str,
+    raw_context: dict | None,
+    *,
+    session_id=None,
+    source="text",
+    request_id=None,
+):
     context = sanitize_context(user_id, raw_context)
     source = source if source in {"voice", "text"} else "text"
+    request_id = str(request_id or "").strip()[:80] or None
+    reuse_id = None
+    if request_id:
+        existing = audit.get_by_request_id(user_id, request_id)
+        if existing:
+            status_existing = existing.get("status")
+            if status_existing in {"executed", "partial"}:
+                return _replay_request(existing, session_id)
+            if status_existing == "in_progress":
+                from datetime import datetime, timedelta, timezone
+
+                created = existing.get("created_at") or existing.get("updated_at") or ""
+                stale = True
+                try:
+                    ts = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+                    stale = datetime.now(timezone.utc) - ts > timedelta(minutes=2)
+                except (TypeError, ValueError):
+                    stale = True
+                if not stale:
+                    return _replay_request(existing, session_id)
+                reuse_id = existing["id"]
+            else:
+                reuse_id = existing["id"]
+
     raw = agent.complete(
         user_id,
         transcript,
@@ -129,20 +209,23 @@ def interpret(user_id, transcript: str, raw_context: dict | None, *, session_id=
     session_id = raw.get("session_id") or session_id
     lead_id = context.get("lead_id")
     choices = raw.get("choices") if isinstance(raw.get("choices"), list) else []
+    audit_kw = _audit_kwargs(raw, session_id, None)
+    audit_kw_id = _audit_kwargs(raw, session_id, request_id)
 
     if raw.get("status") == "error":
         audit.record_command(
             user_id,
             transcript=transcript,
-            interpreted={"status": "error", "message": raw.get("message")},
+            interpreted={"status": "error", "message": raw.get("message"), "code": raw.get("code")},
             status="error",
             lead_id=lead_id,
-            result={"message": raw.get("message")},
-            **_audit_kwargs(raw, session_id),
+            result={"message": raw.get("message"), "code": raw.get("code")},
+            **audit_kw,
         )
         return {
             "ok": True,
             "status": "error",
+            "code": raw.get("code"),
             "message": raw.get("message") or "Ask TopAI could not process that.",
             "preview": None,
             "confirmation_token": None,
@@ -170,7 +253,7 @@ def interpret(user_id, transcript: str, raw_context: dict | None, *, session_id=
             status=status,
             lead_id=lead_id,
             result={"message": parsed.get("message"), "choices": choices},
-            **_audit_kwargs(raw, session_id),
+            **audit_kw,
         )
         return {
             "ok": True,
@@ -191,7 +274,7 @@ def interpret(user_id, transcript: str, raw_context: dict | None, *, session_id=
             status="needs_clarification",
             lead_id=lead_id,
             result={"message": err, "choices": resolve_choices},
-            **_audit_kwargs(raw, session_id),
+            **audit_kw,
         )
         return {
             "ok": True,
@@ -203,35 +286,114 @@ def interpret(user_id, transcript: str, raw_context: dict | None, *, session_id=
             "session_id": session_id,
         }
 
-    token, expires = audit.issue_confirmation_token()
     target_lead = None
     for command in resolved:
         if command.get("arguments", {}).get("lead_id"):
             target_lead = command["arguments"]["lead_id"]
             break
-    audit.record_command(
-        user_id,
-        transcript=transcript,
-        interpreted={
-            "status": "ok",
-            "commands": resolved,
-            "grounding_transcript": grounding,
-        },
-        status="pending_confirmation",
-        lead_id=target_lead,
-        confirmation_token=token,
-        expires_at=expires,
-        **_audit_kwargs(raw, session_id),
-    )
+    if reuse_id:
+        audit.mark_status(reuse_id, user_id, "in_progress")
+        row_id = reuse_id
+    else:
+        row_id = audit.record_command(
+            user_id,
+            transcript=transcript,
+            interpreted={
+                "status": "ok",
+                "commands": resolved,
+                "grounding_transcript": grounding,
+            },
+            status="in_progress",
+            lead_id=target_lead,
+            **audit_kw_id,
+        )
+    results, failures, message = _run_commands(user_id, resolved, grounding, context)
+    refresh = _refresh_hints(results)
+    payload = {"results": results, "failures": failures, "message": message, "refresh": refresh}
+    if results and not failures:
+        audit.mark_status(row_id, user_id, "executed", result=payload, executed=True)
+        return {
+            "ok": True,
+            "status": "executed",
+            "message": message,
+            "results": results,
+            "preview": None,
+            "confirmation_token": None,
+            "choices": [],
+            "session_id": session_id,
+            "refresh": refresh,
+        }
+    if results and failures:
+        audit.mark_status(row_id, user_id, "partial", result=payload, executed=True)
+        return {
+            "ok": False,
+            "status": "partial",
+            "message": message,
+            "results": results,
+            "failures": failures,
+            "preview": None,
+            "confirmation_token": None,
+            "choices": [],
+            "session_id": session_id,
+            "refresh": refresh,
+        }
+    audit.mark_status(row_id, user_id, "failed", result=payload, executed=True)
+    first = failures[0] if failures else {}
     return {
-        "ok": True,
-        "status": "action_plan",
-        "message": parsed.get("message") or "Confirm this action plan before I change any CRM data.",
-        "preview": build_preview(resolved),
-        "confirmation_token": token,
-        "choices": [],
+        "ok": False,
+        "status": "error",
+        "message": first.get("error") or message or "Could not complete that action.",
+        "choices": first.get("choices") or [],
+        "results": results,
         "session_id": session_id,
+        "confirmation_token": None,
+        "preview": None,
     }
+
+
+def _run_commands(user_id, commands: list, grounding: str, context: dict):
+    results = []
+    failures = []
+    created_id = None
+    created_name = None
+    for command in commands:
+        command = {"action": command.get("action"), "arguments": dict(command.get("arguments") or {})}
+        _bind_created_lead(command, created_id, created_name)
+        cleaned, err = sanitize_command(command, grounding)
+        if cleaned is None or err:
+            failures.append(
+                {
+                    "action": command.get("action"),
+                    "error": err or "That command is not allowed.",
+                    "choices": [],
+                }
+            )
+            continue
+        lead_id = cleaned.get("arguments", {}).get("lead_id")
+        if lead_id and not db.get_lead(lead_id, user_id):
+            failures.append(
+                {
+                    "action": cleaned.get("action"),
+                    "error": "Lead not found.",
+                    "choices": [],
+                }
+            )
+            continue
+        action, payload, error, choices = actions.execute_command(user_id, cleaned, context)
+        if error:
+            failures.append({"action": action, "error": error, "choices": choices or []})
+            continue
+        item = {
+            "action": action,
+            "message": actions.success_message(action, payload),
+            "lead_id": (payload or {}).get("id") if action != "create_task" else cleaned.get("arguments", {}).get("lead_id"),
+            "task_id": (payload or {}).get("id") if action == "create_task" else None,
+        }
+        results.append(item)
+        if action == "create_lead" and payload:
+            created_id = payload.get("id")
+            created_name = payload.get("name")
+    return results, failures, _friendly_summary(results, failures)
 
 
 def _bind_created_lead(command: dict, created_id, created_name):
@@ -302,53 +464,11 @@ def confirm(user_id, token: str, raw_context: dict | None = None):
         audit.mark_status(row["id"], user_id, "failed", result={"error": "No commands"})
         return {"ok": False, "error": "Nothing to execute."}, 400
 
-    results = []
-    failures = []
-    created_id = None
-    created_name = None
-    for command in commands:
-        command = {"action": command.get("action"), "arguments": dict(command.get("arguments") or {})}
-        _bind_created_lead(command, created_id, created_name)
-        cleaned, err = sanitize_command(command, grounding)
-        if cleaned is None or err:
-            failures.append(
-                {
-                    "action": command.get("action"),
-                    "error": err or "That command is not allowed.",
-                    "choices": [],
-                }
-            )
-            continue
-        lead_id = cleaned.get("arguments", {}).get("lead_id")
-        if lead_id and not db.get_lead(lead_id, user_id):
-            failures.append(
-                {
-                    "action": cleaned.get("action"),
-                    "error": "Lead not found.",
-                    "choices": [],
-                }
-            )
-            continue
-        action, payload, error, choices = actions.execute_command(user_id, cleaned, context)
-        if error:
-            failures.append({"action": action, "error": error, "choices": choices or []})
-            continue
-        item = {
-            "action": action,
-            "message": actions.success_message(action, payload),
-            "lead_id": (payload or {}).get("id") if action != "create_task" else cleaned.get("arguments", {}).get("lead_id"),
-            "task_id": (payload or {}).get("id") if action == "create_task" else None,
-        }
-        results.append(item)
-        if action == "create_lead" and payload:
-            created_id = payload.get("id")
-            created_name = payload.get("name")
-
-    message = _friendly_summary(results, failures)
-    payload = {"results": results, "failures": failures, "message": message}
+    results, failures, message = _run_commands(user_id, commands, grounding, context)
+    payload = {"results": results, "failures": failures, "message": message, "refresh": _refresh_hints(results)}
     if results and not failures:
         audit.mark_status(row["id"], user_id, "executed", result=payload, executed=True)
-        return {"ok": True, "status": "executed", "results": results, "message": message}, 200
+        return {"ok": True, "status": "executed", "results": results, "message": message, "refresh": payload["refresh"]}, 200
     if results and failures:
         audit.mark_status(row["id"], user_id, "partial", result=payload, executed=True)
         return {
@@ -357,6 +477,7 @@ def confirm(user_id, token: str, raw_context: dict | None = None):
             "results": results,
             "failures": failures,
             "message": message,
+            "refresh": payload["refresh"],
         }, 200
     audit.mark_status(
         row["id"],

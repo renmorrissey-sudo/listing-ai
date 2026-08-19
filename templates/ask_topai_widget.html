@@ -44,7 +44,7 @@
     position: absolute;
     right: 0;
     bottom: 56px;
-    width: min(380px, calc(100vw - 24px));
+    width: min(400px, calc(100vw - 24px));
     background: #fff;
     color: #1a1a2e;
     border-radius: 14px;
@@ -58,30 +58,44 @@
   .ask-topai-close { background: transparent; border: 0; color: #fff; font-size: 18px; cursor: pointer; }
   .ask-topai-body { padding: 12px 14px 14px; }
   .ask-topai-status { font-size: 12px; color: #667; margin: 0 0 8px; }
-  .ask-topai-status.listening { color: #b91c1c; font-weight: 700; }
+  .ask-topai-status.listening { color: #15803d; font-weight: 700; }
+  .ask-topai-status.speaking { color: #1d4ed8; font-weight: 700; }
+  .ask-topai-status.working { color: #a16207; font-weight: 700; }
+  .ask-topai-status.reconnecting { color: #b45309; font-weight: 700; }
   .ask-topai-status.clarify { color: #1a1a2e; font-weight: 600; }
+  .ask-topai-log {
+    max-height: 220px;
+    overflow-y: auto;
+    background: #f8fafc;
+    border: 1px solid #eef2f7;
+    border-radius: 10px;
+    padding: 8px 10px;
+    margin: 0 0 10px;
+    font-size: 13px;
+  }
+  .ask-topai-turn { margin: 0 0 8px; }
+  .ask-topai-turn strong { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: #667; }
+  .ask-topai-turn p { margin: 2px 0 0; white-space: pre-wrap; }
   .ask-topai-choices { margin: 8px 0 0; padding-left: 18px; font-size: 13px; }
-  .ask-topai-plan { margin: 0; padding-left: 22px; }
-  .ask-topai-plan > li { margin: 0 0 10px; }
-  .ask-topai-plan strong { display: block; font-size: 13px; margin-bottom: 4px; }
-  .ask-topai-result.is-warn { color: #9a3412; }
   .ask-topai-transcript {
-    width: 100%; min-height: 84px; resize: vertical; border: 1.5px solid #dde3f0; border-radius: 8px;
+    width: 100%; min-height: 72px; resize: vertical; border: 1.5px solid #dde3f0; border-radius: 8px;
     padding: 8px; font: inherit; font-size: 14px;
   }
   .ask-topai-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   .ask-topai-actions button, .ask-topai-preview button {
     border: 0; border-radius: 8px; padding: 8px 12px; font-size: 13px; font-weight: 700; cursor: pointer;
   }
-  .ask-topai-primary { background: #4f8ef7; color: #fff; }
+  .ask-topai-primary { background: #1a1a2e; color: #fff; }
+  .ask-topai-primary:disabled { opacity: 0.65; cursor: wait; }
   .ask-topai-secondary { background: #eef2f7; color: #334; }
-  .ask-topai-danger { background: #fef2f2; color: #b91c1c; }
+  .ask-topai-danger { background: #b91c1c; color: #fff; }
+  .ask-topai-live-end { display: none; }
+  .ask-topai-root.is-live .ask-topai-live-end { display: inline-flex; }
+  .ask-topai-root.is-live .ask-topai-live-start { display: none; }
   .ask-topai-preview { margin-top: 12px; background: #f8fafc; border: 1px solid #eef2f7; border-radius: 10px; padding: 10px; }
   .ask-topai-preview h3 { margin: 0 0 8px; font-size: 13px; }
-  .ask-topai-preview dl { margin: 0 0 10px; }
-  .ask-topai-preview dt { font-size: 11px; color: #667; }
-  .ask-topai-preview dd { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
   .ask-topai-result { margin-top: 10px; font-size: 14px; font-weight: 700; color: #15803d; }
+  .ask-topai-result.is-warn { color: #9a3412; }
   .ask-topai-error { margin-top: 10px; font-size: 13px; color: #b91c1c; }
   @media (max-width: 640px) {
     .ask-topai-root {
@@ -98,15 +112,16 @@
       <button type="button" class="ask-topai-close" id="ask-topai-close" aria-label="Close Ask TopAI">&times;</button>
     </div>
     <div class="ask-topai-body">
-      <p class="ask-topai-status" id="ask-topai-status">Type a request or use the microphone.</p>
+      <p class="ask-topai-status" id="ask-topai-status">Start a live conversation or type a request.</p>
+      <div class="ask-topai-log" id="ask-topai-log" hidden></div>
       <div id="ask-topai-choices" hidden></div>
-      <label class="muted" for="ask-topai-text" style="font-size:12px;">Request</label>
+      <label class="muted" for="ask-topai-text" style="font-size:12px;">Type a message</label>
       <textarea id="ask-topai-text" class="ask-topai-transcript" placeholder="Create a buyer lead named John Smith at 303-555-1212..."></textarea>
       <div class="ask-topai-actions">
-        <button type="button" class="ask-topai-primary" id="ask-topai-mic">Microphone</button>
-        <button type="button" class="ask-topai-primary" id="ask-topai-submit">Ask TopAI</button>
+        <button type="button" class="ask-topai-primary ask-topai-live-start" id="ask-topai-live-start">Start Live Conversation</button>
+        <button type="button" class="ask-topai-danger ask-topai-live-end" id="ask-topai-live-end">End Conversation</button>
+        <button type="button" class="ask-topai-primary" id="ask-topai-submit">Send</button>
         <button type="button" class="ask-topai-secondary" id="ask-topai-clear">Clear</button>
-        <button type="button" class="ask-topai-secondary" id="ask-topai-cancel">Cancel</button>
       </div>
       <div class="ask-topai-preview" id="ask-topai-preview" hidden></div>
       <div class="ask-topai-result" id="ask-topai-result" hidden></div>
@@ -114,7 +129,7 @@
     </div>
   </div>
   <button type="button" class="ask-topai-fab" id="ask-topai-fab" aria-expanded="false" aria-controls="ask-topai-panel">
-    <span class="ask-topai-fab-icon" aria-hidden="true">🎤</span>
+    <span class="ask-topai-fab-icon" aria-hidden="true">🎙</span>
     <span class="ask-topai-fab-label">Ask TopAI</span>
   </button>
 </div>
@@ -129,17 +144,40 @@
   }
   const panel = document.getElementById('ask-topai-panel');
   const fab = document.getElementById('ask-topai-fab');
+  const titleEl = document.getElementById('ask-topai-title');
   const statusEl = document.getElementById('ask-topai-status');
   const textEl = document.getElementById('ask-topai-text');
+  const logEl = document.getElementById('ask-topai-log');
   const previewEl = document.getElementById('ask-topai-preview');
   const resultEl = document.getElementById('ask-topai-result');
   const errorEl = document.getElementById('ask-topai-error');
   const choicesEl = document.getElementById('ask-topai-choices');
-  const micBtn = document.getElementById('ask-topai-mic');
-  let recognition = null;
-  let listening = false;
-  let confirmationToken = null;
+  const submitBtn = document.getElementById('ask-topai-submit');
+  const startBtn = document.getElementById('ask-topai-live-start');
+  const endBtn = document.getElementById('ask-topai-live-end');
+  let sending = false;
   let lastInputSource = 'text';
+  const live = {
+    active: false,
+    ending: false,
+    reconnecting: false,
+    reconnectTimer: null,
+    reconnectAttempts: 0,
+    sessionId: null,
+    pc: null,
+    dc: null,
+    stream: null,
+    audio: null,
+    callsUrl: 'https://api.openai.com/v1/realtime/calls',
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    pendingCalls: [],
+    flushing: false,
+    turns: [],
+    assistantBuf: '',
+    assistantEl: null,
+    userEl: null
+  };
+  window.__askTopAILive = live;
 
   function sessionId() {
     try {
@@ -169,7 +207,10 @@
     let leadId = match ? Number(match[1]) : null;
     const smsSelect = document.getElementById('sms-lead-select');
     if (!leadId && smsSelect && smsSelect.value) leadId = Number(smsSelect.value);
-    return { page, lead_id: leadId };
+    let leadName = null;
+    const heading = document.querySelector('h1, .lead-name, [data-lead-name]');
+    if (leadId && heading) leadName = (heading.getAttribute('data-lead-name') || heading.textContent || '').trim().slice(0, 120);
+    return { page, lead_id: leadId, lead_name: leadName };
   }
 
   function setOpen(open) {
@@ -177,6 +218,7 @@
     panel.hidden = !open;
     fab.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) setTimeout(() => textEl.focus(), 30);
+    else if (live.active) endLive(true);
   }
 
   function setError(msg) {
@@ -193,58 +235,35 @@
   function resetPreview() {
     previewEl.hidden = true;
     previewEl.innerHTML = '';
-    confirmationToken = null;
   }
 
-  function resetAll() {
-    stopMic();
-    textEl.value = '';
-    statusEl.textContent = 'Type a request or use the microphone.';
-    statusEl.classList.remove('listening', 'clarify');
-    resetPreview();
-    resetSession();
-    lastInputSource = 'text';
-    setError('');
-    setResult('');
-    renderChoices([]);
-  }
-
-  function actionTitle(command) {
-    const titles = {
-      create_lead: 'Create Lead',
-      add_lead_note: 'Add Note',
-      create_task: 'Create Task',
-      update_property_criteria: 'Save Property Criteria'
-    };
-    const fromRows = (command.rows || []).find((row) => row.label === 'Action');
-    return titles[command.action] || (fromRows && fromRows.value) || command.action || 'Action';
-  }
-
-  function renderPreview(preview, message) {
-    if (!preview) {
-      resetPreview();
-      return;
+  function setSending(on) {
+    sending = !!on;
+    if (submitBtn) {
+      submitBtn.disabled = sending;
+      submitBtn.textContent = sending ? 'Working…' : 'Send';
     }
-    const blocks = (preview.commands || []).map((command) => {
-      const rows = (command.rows || [])
-        .filter((row) => row.label !== 'Action')
-        .map((row) => `<dt>${escapeAsk(row.label)}</dt><dd>${escapeAsk(row.value)}</dd>`)
-        .join('');
-      return `<li><strong>${escapeAsk(actionTitle(command))}</strong><dl>${rows}</dl></li>`;
-    }).join('');
-    previewEl.innerHTML = `<h3>${escapeAsk(preview.title || 'ASK TOPAI UNDERSTOOD:')}</h3>
-      <ol class="ask-topai-plan">${blocks}</ol>
-      <div class="ask-topai-actions">
-        <button type="button" class="ask-topai-primary" id="ask-topai-confirm">Confirm All</button>
-        <button type="button" class="ask-topai-secondary" id="ask-topai-edit">Edit</button>
-        <button type="button" class="ask-topai-danger" id="ask-topai-discard">Cancel</button>
-      </div>`;
-    previewEl.hidden = false;
-    if (message) statusEl.textContent = message;
-    statusEl.classList.remove('clarify');
-    document.getElementById('ask-topai-confirm').onclick = confirmCommand;
-    document.getElementById('ask-topai-edit').onclick = () => { resetPreview(); textEl.focus(); };
-    document.getElementById('ask-topai-discard').onclick = cancelPending;
+  }
+
+  function setConn(label, kind) {
+    statusEl.textContent = label;
+    statusEl.classList.remove('listening', 'speaking', 'working', 'reconnecting', 'clarify');
+    if (kind) statusEl.classList.add(kind);
+  }
+
+  function setLiveMode(on) {
+    live.active = !!on;
+    root.classList.toggle('is-live', live.active);
+    titleEl.textContent = live.active ? 'Ask TopAI — Live' : 'Ask TopAI';
+    logEl.hidden = !live.active && live.turns.length === 0;
+    if (startBtn) startBtn.disabled = !!on;
+    if (endBtn) endBtn.disabled = !on;
+  }
+
+  function escapeAsk(value) {
+    return String(value || '').replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
   }
 
   function renderChoices(choices) {
@@ -263,20 +282,412 @@
     choicesEl.hidden = false;
   }
 
-  function escapeAsk(value) {
-    return String(value || '').replace(/[&<>"']/g, (ch) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-    }[ch]));
+  function appendTurn(role, text, streaming) {
+    logEl.hidden = false;
+    const label = role === 'user' ? 'You' : 'Ask TopAI';
+    if (streaming && role === 'assistant' && live.assistantEl) {
+      live.assistantEl.querySelector('p').textContent = text;
+      logEl.scrollTop = logEl.scrollHeight;
+      return;
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'ask-topai-turn ' + (role === 'user' ? 'you' : 'assistant');
+    wrap.innerHTML = `<strong>${label}</strong><p></p>`;
+    wrap.querySelector('p').textContent = text || '';
+    logEl.appendChild(wrap);
+    logEl.scrollTop = logEl.scrollHeight;
+    if (role === 'assistant' && streaming) live.assistantEl = wrap;
+    if (role === 'user') live.userEl = wrap;
+    return wrap;
+  }
+
+  function rememberTurn(role, text) {
+    const cleaned = String(text || '').trim();
+    if (!cleaned) return;
+    const last = live.turns[live.turns.length - 1];
+    if (last && last.role === role) last.text = cleaned;
+    else live.turns.push({ role, text: cleaned });
+  }
+
+  function lastUserText() {
+    for (let i = live.turns.length - 1; i >= 0; i--) {
+      if (live.turns[i].role === 'user') return live.turns[i].text;
+    }
+    return textEl.value.trim();
+  }
+
+  function refreshAffectedUI(refresh) {
+    if (!refresh) return;
+    const path = window.location.pathname || '';
+    const leadMatch = path.match(/\/crm\/leads\/(\d+)/);
+    const leadIds = refresh.lead_ids || [];
+    if (refresh.tasks && path.indexOf('/crm/tasks') === 0) {
+      window.location.reload();
+      return;
+    }
+    if (refresh.leads && path.indexOf('/crm/leads') === 0 && !leadMatch) {
+      window.location.reload();
+      return;
+    }
+    if (leadMatch && leadIds.map(String).indexOf(leadMatch[1]) !== -1) {
+      window.location.reload();
+    }
+  }
+
+  function sendEvent(event) {
+    if (live.dc && live.dc.readyState === 'open') {
+      live.dc.send(JSON.stringify(event));
+    }
+  }
+
+  function bargeIn() {
+    if (live.audio) live.audio.muted = true;
+    live.assistantBuf = '';
+    live.assistantEl = null;
+    sendEvent({ type: 'response.cancel' });
+    setConn('Listening', 'listening');
+  }
+
+  function teardownPeer() {
+    try { if (live.dc) live.dc.close(); } catch (err) {}
+    live.dc = null;
+    if (live.pc) {
+      try { live.pc.getSenders().forEach((sender) => { try { live.pc.removeTrack(sender); } catch (err) {} }); } catch (err) {}
+      try { live.pc.close(); } catch (err) {}
+    }
+    live.pc = null;
+    if (live.audio) {
+      try { live.audio.pause(); } catch (err) {}
+      live.audio.srcObject = null;
+      live.audio = null;
+    }
+  }
+
+  function stopMicTracks() {
+    if (!live.stream) return;
+    live.stream.getTracks().forEach((track) => { try { track.stop(); } catch (err) {} });
+    live.stream = null;
+  }
+
+  async function endLive(notify) {
+    live.ending = true;
+    live.active = false;
+    if (live.reconnectTimer) {
+      clearTimeout(live.reconnectTimer);
+      live.reconnectTimer = null;
+    }
+    const sid = live.sessionId;
+    const turns = live.turns.slice();
+    teardownPeer();
+    stopMicTracks();
+    setLiveMode(false);
+    setConn('Start a live conversation or type a request.');
+    if (notify && sid) {
+      try {
+        await fetch('/api/ask-topai/live/end', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sid, transcript: turns })
+        });
+      } catch (err) {}
+    }
+    live.sessionId = null;
+    live.pendingCalls = [];
+    live.flushing = false;
+    live.ending = false;
+    live.reconnecting = false;
+    live.reconnectAttempts = 0;
+  }
+
+  async function mintSession() {
+    const res = await fetch('/api/ask-topai/live/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: live.sessionId,
+        context: askContext()
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      const err = new Error(data.error || data.message || 'Ask TopAI could not start a live conversation.');
+      err.code = data.code;
+      throw err;
+    }
+    if (data.session_id) {
+      live.sessionId = data.session_id;
+      rememberSession(data.session_id);
+    }
+    live.callsUrl = data.calls_url || live.callsUrl;
+    live.iceServers = data.ice_servers || live.iceServers;
+    return data;
+  }
+
+  async function attachPeer(ephemeral) {
+    teardownPeer();
+    live.pc = new RTCPeerConnection({ iceServers: live.iceServers });
+    live.audio = document.createElement('audio');
+    live.audio.autoplay = true;
+    live.audio.setAttribute('playsinline', '');
+    live.pc.ontrack = (event) => {
+      live.audio.srcObject = event.streams[0];
+      live.audio.muted = false;
+      live.audio.play().catch(() => {});
+    };
+    if (live.stream) {
+      live.stream.getTracks().forEach((track) => live.pc.addTrack(track, live.stream));
+    }
+    live.dc = live.pc.createDataChannel('oai-events');
+    live.dc.addEventListener('open', () => {
+      live.reconnectAttempts = 0;
+      live.reconnecting = false;
+      setConn('Listening', 'listening');
+      if (live.pendingCalls.length) flushTools();
+    });
+    live.dc.addEventListener('message', onRealtimeMessage);
+    live.pc.onconnectionstatechange = () => {
+      if (live.ending || !live.active) return;
+      const state = live.pc && live.pc.connectionState;
+      if (state === 'disconnected' || state === 'failed') scheduleReconnect();
+    };
+    const offer = await live.pc.createOffer();
+    await live.pc.setLocalDescription(offer);
+    const sdpResponse = await fetch(live.callsUrl, {
+      method: 'POST',
+      body: offer.sdp,
+      headers: {
+        Authorization: 'Bearer ' + ephemeral,
+        'Content-Type': 'application/sdp'
+      }
+    });
+    if (!sdpResponse.ok) {
+      throw new Error('WebRTC connection failed');
+    }
+    const answer = { type: 'answer', sdp: await sdpResponse.text() };
+    await live.pc.setRemoteDescription(answer);
+  }
+
+  function scheduleReconnect() {
+    if (live.ending || live.reconnecting || !live.active) return;
+    if (live.reconnectAttempts >= 3) {
+      setError('The live connection dropped. You can start again or type a request.');
+      setConn('Reconnecting...', 'reconnecting');
+      endLive(true);
+      return;
+    }
+    live.reconnecting = true;
+    live.reconnectAttempts += 1;
+    setConn('Reconnecting...', 'reconnecting');
+    const wait = Math.min(4000, 800 * live.reconnectAttempts);
+    live.reconnectTimer = setTimeout(() => {
+      connectLive(true).catch(() => {
+        live.reconnecting = false;
+        scheduleReconnect();
+      });
+    }, wait);
+  }
+
+  function onRealtimeMessage(event) {
+    let payload;
+    try { payload = JSON.parse(event.data); } catch (err) { return; }
+    const type = payload.type || '';
+    if (type === 'input_audio_buffer.speech_started') {
+      bargeIn();
+    } else if (type === 'output_audio_buffer.started' || type === 'response.output_audio.started') {
+      if (live.audio) live.audio.muted = false;
+      setConn('TopAI is speaking', 'speaking');
+    } else if (type === 'response.output_audio_transcript.delta' || type === 'response.audio_transcript.delta') {
+      live.assistantBuf += payload.delta || '';
+      appendTurn('assistant', live.assistantBuf, true);
+      if (live.audio) live.audio.muted = false;
+      setConn('TopAI is speaking', 'speaking');
+    } else if (type === 'response.output_audio_transcript.done' || type === 'response.audio_transcript.done') {
+      const text = payload.transcript || live.assistantBuf;
+      live.assistantBuf = '';
+      live.assistantEl = null;
+      if (text) {
+        appendTurn('assistant', text, false);
+        rememberTurn('assistant', text);
+      }
+    } else if (type === 'conversation.item.input_audio_transcription.completed') {
+      const text = payload.transcript || '';
+      if (text) {
+        appendTurn('user', text, false);
+        rememberTurn('user', text);
+      }
+    } else if (type === 'response.function_call_arguments.done') {
+      live.pendingCalls.push({
+        call_id: payload.call_id,
+        name: payload.name,
+        arguments: payload.arguments,
+        response_id: payload.response_id
+      });
+      setConn('Working...', 'working');
+    } else if (type === 'response.output_item.done' && payload.item && payload.item.type === 'function_call') {
+      const item = payload.item;
+      if (item.call_id && item.name && !live.pendingCalls.some((c) => c.call_id === item.call_id)) {
+        live.pendingCalls.push({
+          call_id: item.call_id,
+          name: item.name,
+          arguments: item.arguments,
+          response_id: payload.response_id
+        });
+        setConn('Working...', 'working');
+      }
+    } else if (type === 'response.done') {
+      const status = (payload.response && payload.response.status) || '';
+      const rid = payload.response && payload.response.id;
+      if (status === 'cancelled' || status === 'incomplete') {
+        live.pendingCalls = live.pendingCalls.filter((call) => call.response_id && call.response_id !== rid);
+        setConn('Listening', 'listening');
+        return;
+      }
+      flushTools();
+    } else if (type === 'response.cancelled' || type === 'output_audio_buffer.cleared') {
+      if (live.audio) live.audio.muted = true;
+      setConn('Listening', 'listening');
+    } else if (type === 'error') {
+      const msg = (payload.error && (payload.error.message || payload.error.code)) || 'Live conversation error.';
+      setError(String(msg).slice(0, 220));
+    }
+  }
+
+  async function flushTools() {
+    if (live.flushing) return;
+    if (!live.pendingCalls.length) {
+      if (live.active && !live.reconnecting) setConn('Listening', 'listening');
+      return;
+    }
+    live.flushing = true;
+    const calls = live.pendingCalls.splice(0, live.pendingCalls.length);
+    setConn('Working...', 'working');
+    let results = [];
+    try {
+      const res = await fetch('/api/ask-topai/live/tools', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: live.sessionId,
+          calls: calls,
+          context: askContext(),
+          transcript: lastUserText()
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      results = data.results || [];
+      refreshAffectedUI(data.refresh);
+    } catch (err) {
+      results = calls.map((call) => ({
+        call_id: call.call_id,
+        output: {
+          ok: false,
+          status: 'error',
+          message: 'The CRM update failed. Tell the agent you could not complete it, and do not claim success.'
+        }
+      }));
+    }
+    results.forEach((item) => {
+      sendEvent({
+        type: 'conversation.item.create',
+        item: {
+          type: 'function_call_output',
+          call_id: item.call_id,
+          output: JSON.stringify(item.output || {})
+        }
+      });
+    });
+    calls.forEach((call) => {
+      if (!results.some((item) => item.call_id === call.call_id)) {
+        sendEvent({
+          type: 'conversation.item.create',
+          item: {
+            type: 'function_call_output',
+            call_id: call.call_id,
+            output: JSON.stringify({
+              ok: false,
+              status: 'error',
+              message: 'The CRM update failed. Do not claim success.'
+            })
+          }
+        });
+      }
+    });
+    sendEvent({ type: 'response.create' });
+    live.flushing = false;
+    if (live.pendingCalls.length) flushTools();
+  }
+
+  async function connectLive(isReconnect) {
+    const minted = await mintSession();
+    const ephemeral = minted.client_secret && minted.client_secret.value;
+    if (!ephemeral) throw new Error('Ask TopAI could not start a live conversation.');
+    await attachPeer(ephemeral);
+    live.reconnecting = false;
+  }
+
+  async function startLive() {
+    if (live.active) return;
+    setError('');
+    setResult('');
+    setLiveMode(true);
+    setConn('Connecting...', '');
+    live.ending = false;
+    live.reconnectAttempts = 0;
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw Object.assign(new Error('This browser cannot start a live microphone session. Type your request instead.'), { code: 'no_mic' });
+      }
+      live.stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false
+      });
+      await connectLive(false);
+    } catch (err) {
+      const name = err && err.name;
+      let message = err && err.message;
+      if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+        message = 'Microphone permission was denied. Allow the microphone or type your request.';
+      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError' || err.code === 'no_mic') {
+        message = 'No microphone was found. Plug one in or type your request.';
+      } else if (err.code === 'not_configured') {
+        message = 'Ask TopAI Live Conversation is not configured yet. You can still type a request.';
+      }
+      setError(message || 'Ask TopAI could not start a live conversation.');
+      await endLive(false);
+    }
+  }
+
+  async function sendTypedToLive(text) {
+    appendTurn('user', text, false);
+    rememberTurn('user', text);
+    sendEvent({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: text }]
+      }
+    });
+    sendEvent({ type: 'response.create' });
+    textEl.value = '';
   }
 
   async function interpret() {
+    if (sending) return;
     const text = textEl.value.trim();
     const original = textEl.value;
     setError('');
     setResult('');
     statusEl.classList.remove('clarify');
     renderChoices([]);
-    if (!text) { setError('Enter or speak a request first.'); return; }
+    if (!text) { setError('Enter a request first.'); return; }
+    if (live.active && live.dc && live.dc.readyState === 'open') {
+      lastInputSource = 'text';
+      return sendTypedToLive(text);
+    }
+    const requestId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('req-' + Date.now() + '-' + Math.random());
+    setSending(true);
+    setConn('Ask TopAI is working...', 'working');
     try {
       const res = await fetch('/api/ask-topai/interpret', {
         method: 'POST',
@@ -285,23 +696,40 @@
           text,
           context: askContext(),
           session_id: sessionId(),
-          source: lastInputSource === 'voice' ? 'voice' : 'text'
+          source: lastInputSource === 'voice' ? 'voice' : 'text',
+          request_id: requestId
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (data.session_id) rememberSession(data.session_id);
       if (res.status === 401) { setError('Please log in to use Ask TopAI.'); return; }
-      if (!res.ok) { setError(data.error || 'Ask TopAI could not process that.'); textEl.value = original; return; }
+      if (!res.ok && data.status !== 'partial') {
+        setError(data.error || data.message || 'Ask TopAI could not process that.');
+        textEl.value = original;
+        return;
+      }
       const status = data.status || '';
-      if (status === 'action_plan' || status === 'needs_confirmation') {
-        confirmationToken = data.confirmation_token;
-        renderPreview(data.preview, data.message);
+      if (status === 'executed') {
+        resetPreview();
+        setResult(data.message || 'Done.');
+        setConn('Start a live conversation or type a request.');
+        refreshAffectedUI(data.refresh);
+        return;
+      }
+      if (status === 'partial') {
+        resetPreview();
+        setResult(data.message || 'Some actions could not be completed.', 'warn');
+        refreshAffectedUI(data.refresh);
+        return;
+      }
+      if (status === 'working') {
+        setConn(data.message || 'Ask TopAI is working...', 'working');
+        textEl.value = original;
         return;
       }
       resetPreview();
       if (status === 'clarification_required' || status === 'needs_clarification') {
-        statusEl.textContent = data.message || 'I need a bit more information.';
-        statusEl.classList.add('clarify');
+        setConn(data.message || 'I need a bit more information.', 'clarify');
         renderChoices(data.choices);
         textEl.value = '';
         textEl.placeholder = 'Type your answer…';
@@ -310,6 +738,7 @@
       }
       if (status === 'informational_response' || status === 'informational') {
         setResult(data.message || 'I understood, and no CRM change is needed.');
+        setConn('Start a live conversation or type a request.');
         return;
       }
       if (status === 'unsupported_action' || status === 'unsupported') {
@@ -326,89 +755,25 @@
     } catch (err) {
       setError(err.message || 'Network error.');
       textEl.value = original;
+    } finally {
+      setSending(false);
     }
   }
 
-  async function confirmCommand() {
-    if (!confirmationToken) return;
-    try {
-      const res = await fetch('/api/ask-topai/confirm', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ confirmation_token: confirmationToken, context: askContext() }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setError(data.error || 'Could not complete that action.'); return; }
-      if (data.status === 'partial') {
-        resetPreview();
-        setResult(data.message || 'Some actions could not be completed.', 'warn');
-        return;
-      }
-      resetPreview();
-      setResult(data.message || 'Done.');
-    } catch (err) {
-      setError(err.message || 'Network error.');
-    }
-  }
-
-  async function cancelPending() {
-    if (confirmationToken) {
-      try {
-        await fetch('/api/ask-topai/cancel', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ confirmation_token: confirmationToken }),
-        });
-      } catch (err) {}
-    }
+  function resetAll() {
+    if (live.active) endLive(true);
+    textEl.value = '';
+    setConn('Start a live conversation or type a request.');
     resetPreview();
-    setOpen(false);
-  }
-
-  function stopMic() {
-    listening = false;
-    if (recognition) {
-      try { recognition.stop(); } catch (err) {}
-    }
-    statusEl.classList.remove('listening');
-    micBtn.textContent = 'Microphone';
-  }
-
-  function startMic() {
-    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Rec) {
-      setError('Voice capture is not available in this browser. Type your request instead.');
-      return;
-    }
-    recognition = new Rec();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
-    recognition.onresult = (event) => {
-      let finalText = '';
-      let interim = '';
-      for (let i = 0; i < event.results.length; i++) {
-        const chunk = event.results[i][0].transcript;
-        if (event.results[i].isFinal) finalText += chunk + ' ';
-        else interim += chunk;
-      }
-      textEl.value = (finalText + interim).trim();
-      lastInputSource = 'voice';
-    };
-    recognition.onerror = () => {
-      stopMic();
-      setError('Microphone error. You can still type the request.');
-    };
-    recognition.onend = () => {
-      if (listening) {
-        try { recognition.start(); } catch (err) { stopMic(); }
-      }
-    };
-    listening = true;
-    statusEl.textContent = 'Listening…';
-    statusEl.classList.add('listening');
-    micBtn.textContent = 'Stop listening';
-    recognition.start();
+    resetSession();
+    lastInputSource = 'text';
+    setSending(false);
+    setError('');
+    setResult('');
+    renderChoices([]);
+    live.turns = [];
+    logEl.innerHTML = '';
+    logEl.hidden = true;
   }
 
   fab.addEventListener('click', () => setOpen(!root.classList.contains('is-open')));
@@ -416,10 +781,22 @@
   document.getElementById('ask-topai-submit').addEventListener('click', interpret);
   textEl.addEventListener('input', () => { lastInputSource = 'text'; });
   document.getElementById('ask-topai-clear').addEventListener('click', resetAll);
-  document.getElementById('ask-topai-cancel').addEventListener('click', cancelPending);
-  micBtn.addEventListener('click', () => listening ? stopMic() : startMic());
+  startBtn.addEventListener('click', startLive);
+  endBtn.addEventListener('click', () => endLive(true));
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && root.classList.contains('is-open')) setOpen(false);
+  });
+  window.addEventListener('beforeunload', () => {
+    if (live.active) {
+      try {
+        navigator.sendBeacon && navigator.sendBeacon('/api/ask-topai/live/end', new Blob([JSON.stringify({
+          session_id: live.sessionId,
+          transcript: live.turns
+        })], { type: 'application/json' }));
+      } catch (err) {}
+      teardownPeer();
+      stopMicTracks();
+    }
   });
 })();
 </script>

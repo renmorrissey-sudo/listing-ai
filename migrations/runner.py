@@ -49,6 +49,8 @@ MIGRATION_MODULES = [
     "migrations.versions.022_sms_scheduled_send_at",
     "migrations.versions.023_ask_topai",
     "migrations.versions.024_ask_topai_agent",
+    "migrations.versions.025_ask_topai_send",
+    "migrations.versions.026_ask_topai_live",
 ]
 
 # Required after 001_baseline. App has no separate accounts/tenants/subscriptions

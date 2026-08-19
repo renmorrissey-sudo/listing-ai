@@ -55,15 +55,20 @@ def _assert_ask_topai_widget(html, path):
     assert html.count('id="ask-topai-root"') == 1, path
     assert "Ask TopAI" in html, path
     assert "ask-topai-fab-label" in html, path
-    assert 'id="ask-topai-mic"' in html, path
+    assert "Start Live Conversation" in html, path
+    assert "End Conversation" in html, path
     assert 'id="ask-topai-text"' in html, path
     assert "/api/ask-topai/interpret" in html, path
-    assert "Confirm All" in html, path
+    assert "/api/ask-topai/live/session" in html, path
+    assert "RTCPeerConnection" in html, path
+    assert ">Send<" in html, path
+    assert "Ask TopAI is working..." in html, path
     assert "session_id" in html, path
     assert "clarification_required" in html, path
-    assert "SpeechRecognition" in html, path
     assert "z-index: 10050" in html, path
     assert "document.body.appendChild" in html, path
+    assert "OPENAI_API_KEY" not in html, path
+    assert "SpeechRecognition" not in html, path
 
 
 def test_ask_topai_is_globally_mounted_on_authenticated_pages(app_client, two_users):
@@ -116,9 +121,11 @@ def test_text_fallback_reaches_interpret_endpoint(app_client, two_users, monkeyp
     )
     assert res.status_code == 200
     data = res.get_json()
-    assert data["status"] == "action_plan"
-    assert data["confirmation_token"]
-    assert "Ada Lopez" in json.dumps(data["preview"])
+    assert data["status"] == "executed"
+    assert data["confirmation_token"] is None
+    assert "Ada Lopez" in (data.get("message") or "")
+    leads = [lead for lead in db.list_leads(u1, limit=100) if lead.get("name") == "Ada Lopez"]
+    assert len(leads) == 1
 
 
 def test_unauthenticated_interpret_is_rejected(app_client):
@@ -126,7 +133,7 @@ def test_unauthenticated_interpret_is_rejected(app_client):
     assert res.status_code == 401
 
 
-def test_create_lead_requires_confirmation_then_creates_one(app_client, two_users, monkeypatch):
+def test_create_lead_executes_on_send(app_client, two_users, monkeypatch):
     u1, _ = two_users
     _login(app_client, u1)
     transcript = (
@@ -153,21 +160,12 @@ def test_create_lead_requires_confirmation_then_creates_one(app_client, two_user
         }
 
     monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake_llm))
-    before = len(db.list_leads(u1, limit=100))
     interpreted = app_client.post("/api/ask-topai/interpret", json={"text": transcript})
     assert interpreted.status_code == 200
     data = interpreted.get_json()
-    assert data["status"] == "action_plan"
-    assert data["confirmation_token"]
-    assert "John Smith" in json.dumps(data["preview"])
-    assert len(db.list_leads(u1, limit=100)) == before
-
-    confirmed = app_client.post(
-        "/api/ask-topai/confirm",
-        json={"confirmation_token": data["confirmation_token"]},
-    )
-    assert confirmed.status_code == 200
-    assert "Lead created: John Smith" in confirmed.get_json()["message"]
+    assert data["status"] == "executed"
+    assert data["confirmation_token"] is None
+    assert "Lead created: John Smith" in data["message"]
     leads = [lead for lead in db.list_leads(u1, limit=100) if lead["phone_number"] == "+13035551212"]
     assert len(leads) == 1
     assert leads[0]["name"] == "John Smith"
@@ -226,10 +224,9 @@ def test_add_note_uses_current_lead_context(app_client, two_users, monkeypatch):
             "context": {"page": f"/crm/leads/{sarah_id}", "lead_id": sarah_id},
         },
     )
-    token = res.get_json()["confirmation_token"]
-    confirmed = app_client.post("/api/ask-topai/confirm", json={"confirmation_token": token})
-    assert confirmed.status_code == 200
-    assert "Note added to Sarah Johnson" in confirmed.get_json()["message"]
+    data = res.get_json()
+    assert data["status"] == "executed"
+    assert "Note added to Sarah Johnson" in data["message"]
     sarah = db.get_lead(sarah_id, u1)
     ryan = db.get_lead(ryan_id, u1)
     assert "Saturday" in (sarah.get("notes") or "")
@@ -284,9 +281,7 @@ def test_create_task_creates_exactly_one(app_client, two_users, monkeypatch):
         "/api/ask-topai/interpret",
         json={"text": "Create a task to prepare a CMA for Sarah Johnson tomorrow."},
     )
-    token = interpreted.get_json()["confirmation_token"]
-    confirmed = app_client.post("/api/ask-topai/confirm", json={"confirmation_token": token})
-    assert confirmed.status_code == 200
+    assert interpreted.get_json()["status"] == "executed"
     tasks = crm_db.list_tasks(u1)
     assert len(tasks) == before + 1
     created = [task for task in tasks if "CMA" in (task.get("title") or "")]
@@ -324,11 +319,7 @@ def test_property_criteria_updates_intended_lead_only(app_client, two_users, mon
         "/api/ask-topai/interpret",
         json={"text": "Sarah wants 3-bedroom townhomes in Littleton under $650,000."},
     )
-    confirmed = app_client.post(
-        "/api/ask-topai/confirm",
-        json={"confirmation_token": interpreted.get_json()["confirmation_token"]},
-    )
-    assert confirmed.status_code == 200
+    assert interpreted.get_json()["status"] == "executed"
     sarah = db.get_lead(sarah_id, u1)
     ryan = db.get_lead(ryan_id, u1)
     assert "Littleton" in (sarah.get("property_interest") or "")
@@ -401,10 +392,7 @@ def test_executed_command_is_audited(app_client, two_users, monkeypatch):
         "/api/ask-topai/interpret",
         json={"text": "Remind me to call Ryan", "source": "voice"},
     )
-    app_client.post(
-        "/api/ask-topai/confirm",
-        json={"confirmation_token": interpreted.get_json()["confirmation_token"]},
-    )
+    assert interpreted.get_json()["status"] == "executed"
     rows = audit.list_recent(u1)
     assert rows
     assert rows[0]["source"] == "ask_topai"
@@ -412,8 +400,6 @@ def test_executed_command_is_audited(app_client, two_users, monkeypatch):
     assert "call Ryan" in (rows[0].get("transcript") or "")
     interpreted_json = json.loads(rows[0]["interpreted_json"])
     assert interpreted_json["commands"][0]["action"] == "create_task"
-    pending_or_exec = [row for row in rows if row["status"] in {"executed", "pending_confirmation"}]
-    assert pending_or_exec
     assert rows[0].get("model") == "claude-sonnet-5"
     assert rows[0].get("input_source") == "voice"
 

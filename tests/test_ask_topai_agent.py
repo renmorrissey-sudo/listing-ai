@@ -85,14 +85,13 @@ def test_create_john_smith_plan(app_client, two_users, monkeypatch):
         }
 
     monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake))
-    before = len(db.list_leads(u1, limit=50))
     res = app_client.post("/api/ask-topai/interpret", json={"text": transcript, "source": "text"})
     data = res.get_json()
-    assert data["status"] == "action_plan"
-    assert data["preview"]["title"] == "ASK TOPAI UNDERSTOOD:"
-    assert "John Smith" in json.dumps(data["preview"])
-    assert data["confirmation_token"]
-    assert len(db.list_leads(u1, limit=50)) == before
+    assert data["status"] == "executed"
+    assert data["confirmation_token"] is None
+    assert "John Smith" in (data.get("message") or "")
+    leads = [lead for lead in db.list_leads(u1, limit=50) if lead.get("name") == "John Smith"]
+    assert len(leads) == 1
 
 
 def test_add_note_to_sarah_plan(app_client, two_users, monkeypatch):
@@ -116,13 +115,7 @@ def test_add_note_to_sarah_plan(app_client, two_users, monkeypatch):
         "/api/ask-topai/interpret",
         json={"text": "Add a note to Sarah that she wants to tour Saturday."},
     ).get_json()
-    assert data["status"] == "action_plan"
-    assert data["preview"]["commands"][0]["action"] == "add_lead_note"
-    assert "Sarah" in json.dumps(data["preview"])
-    confirmed = app_client.post(
-        "/api/ask-topai/confirm", json={"confirmation_token": data["confirmation_token"]}
-    )
-    assert confirmed.status_code == 200
+    assert data["status"] == "executed"
     assert "Saturday" in (db.get_lead(sarah_id, u1).get("notes") or "")
 
 
@@ -151,8 +144,7 @@ def test_remind_me_tomorrow_task_plan(app_client, two_users, monkeypatch):
         "/api/ask-topai/interpret",
         json={"text": "Remind me tomorrow to call Sarah about the listings."},
     ).get_json()
-    token = data["confirmation_token"]
-    app_client.post("/api/ask-topai/confirm", json={"confirmation_token": token})
+    assert data["status"] == "executed"
     tasks = [task for task in crm_db.list_tasks(u1) if task.get("lead_id") == sarah_id]
     assert len(tasks) == 1
     assert tasks[0]["due_at"]
@@ -180,7 +172,7 @@ def test_sarah_max_price_updates_criteria(app_client, two_users, monkeypatch):
         "/api/ask-topai/interpret",
         json={"text": "Sarah can go up to $900,000"},
     ).get_json()
-    app_client.post("/api/ask-topai/confirm", json={"confirmation_token": data["confirmation_token"]})
+    assert data["status"] == "executed"
     sarah = db.get_lead(sarah_id, u1)
     criteria = json.loads(sarah.get("property_criteria_json") or "{}")
     assert criteria.get("price_max") == 900000
@@ -229,25 +221,15 @@ def test_multi_action_plan_defers_new_lead(app_client, two_users, monkeypatch):
         }
 
     monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake))
-    before_leads = len(db.list_leads(u1, limit=50))
     before_tasks = len(crm_db.list_tasks(u1))
     data = app_client.post("/api/ask-topai/interpret", json={"text": transcript}).get_json()
-    assert data["status"] == "action_plan"
-    assert len(data["preview"]["commands"]) == 3
-    assert [row["action"] for row in data["preview"]["commands"]] == [
+    assert data["status"] == "executed"
+    assert [item["action"] for item in data["results"]] == [
         "create_lead",
         "update_property_criteria",
         "create_task",
     ]
-    assert len(db.list_leads(u1, limit=50)) == before_leads
-
-    confirmed = app_client.post(
-        "/api/ask-topai/confirm", json={"confirmation_token": data["confirmation_token"]}
-    )
-    assert confirmed.status_code == 200
-    body = confirmed.get_json()
-    assert body["status"] == "executed"
-    assert "Mike Johnson" in body["message"]
+    assert "Mike Johnson" in data["message"]
     leads = [lead for lead in db.list_leads(u1, limit=50) if "Mike" in (lead.get("name") or "")]
     assert len(leads) == 1
     criteria = json.loads(leads[0].get("property_criteria_json") or "{}")
@@ -285,7 +267,7 @@ def test_selected_lead_context_resolves_pronoun(app_client, two_users, monkeypat
             "context": {"page": f"/crm/leads/{sarah_id}", "lead_id": sarah_id},
         },
     ).get_json()
-    app_client.post("/api/ask-topai/confirm", json={"confirmation_token": data["confirmation_token"]})
+    assert data["status"] == "executed"
     assert "finished basement" in (db.get_lead(sarah_id, u1).get("notes") or "")
 
 
@@ -371,9 +353,8 @@ def test_clarification_continues_prior_create(app_client, two_users, monkeypatch
         "/api/ask-topai/interpret",
         json={"text": "720-555-0194.", "session_id": session},
     ).get_json()
-    assert second["status"] == "action_plan"
-    assert "Jennifer" in json.dumps(second["preview"])
-    app_client.post("/api/ask-topai/confirm", json={"confirmation_token": second["confirmation_token"]})
+    assert second["status"] == "executed"
+    assert "Jennifer" in (second.get("message") or "")
     leads = db.list_leads(u1, limit=20)
     assert len(leads) == 1
     assert leads[0]["name"] == "Jennifer"
@@ -450,24 +431,23 @@ def test_cross_account_lead_access_is_impossible(app_client, two_users, monkeypa
     assert "cross account" not in (db.get_lead(sarah_id, u1).get("notes") or "")
 
 
-def test_no_mutation_before_confirmation(app_client, two_users, monkeypatch):
+def test_clarification_does_not_mutate(app_client, two_users, monkeypatch):
     u1, _ = two_users
     _login(app_client, u1)
 
     def fake(_text, _context):
         return {
-            "status": "ok",
-            "commands": [
-                {"action": "create_lead", "arguments": {"name": "Pat Lee", "phone": "303-555-4110"}}
-            ],
+            "status": "needs_clarification",
+            "message": "What phone number should I use?",
+            "commands": [],
         }
 
     monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake))
-    app_client.post("/api/ask-topai/interpret", json={"text": "Create Pat Lee at 303-555-4110"})
+    app_client.post("/api/ask-topai/interpret", json={"text": "Create Pat Lee"})
     assert db.list_leads(u1, limit=20) == []
 
 
-def test_confirm_executes_each_action_once(app_client, two_users, monkeypatch):
+def test_repeated_send_does_not_duplicate(app_client, two_users, monkeypatch):
     u1, _ = two_users
     _login(app_client, u1)
 
@@ -480,18 +460,11 @@ def test_confirm_executes_each_action_once(app_client, two_users, monkeypatch):
         }
 
     monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake))
-    data = app_client.post(
-        "/api/ask-topai/interpret", json={"text": "Give me a task to call the title company"}
-    ).get_json()
-    first = app_client.post(
-        "/api/ask-topai/confirm", json={"confirmation_token": data["confirmation_token"]}
-    )
-    second = app_client.post(
-        "/api/ask-topai/confirm", json={"confirmation_token": data["confirmation_token"]}
-    )
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert second.get_json().get("duplicate") is True
+    payload = {"text": "Give me a task to call the title company", "request_id": "req-title-1"}
+    first = app_client.post("/api/ask-topai/interpret", json=payload).get_json()
+    second = app_client.post("/api/ask-topai/interpret", json=payload).get_json()
+    assert first["status"] == "executed"
+    assert second.get("duplicate") is True
     matches = [task for task in crm_db.list_tasks(u1) if "title company" in (task.get("title") or "").lower()]
     assert len(matches) == 1
 
@@ -548,11 +521,9 @@ def test_voice_and_text_share_interpret_path(app_client, two_users, monkeypatch)
     text = "Remind me to follow up with the lender"
     a = app_client.post("/api/ask-topai/interpret", json={"text": text, "source": "text"}).get_json()
     b = app_client.post("/api/ask-topai/interpret", json={"text": text, "source": "voice"}).get_json()
-    assert a["status"] == b["status"] == "action_plan"
+    assert a["status"] == b["status"] == "executed"
     assert seen == ["text", "voice"]
-    assert [row["action"] for row in a["preview"]["commands"]] == [
-        row["action"] for row in b["preview"]["commands"]
-    ]
+    assert [row["action"] for row in a["results"]] == [row["action"] for row in b["results"]]
 
 
 def test_partial_failure_does_not_claim_full_success(app_client, two_users, monkeypatch):
@@ -580,10 +551,7 @@ def test_partial_failure_does_not_claim_full_success(app_client, two_users, monk
         "/api/ask-topai/interpret",
         json={"text": "Create Mike Johnson at 720-555-4112 and remind me to call him."},
     ).get_json()
-    confirmed = app_client.post(
-        "/api/ask-topai/confirm", json={"confirmation_token": data["confirmation_token"]}
-    )
-    body = confirmed.get_json()
+    body = data
     assert body["status"] == "partial"
     assert "Mike Johnson" in body["message"]
     assert "couldn't" in body["message"].lower() or "could not" in body["message"].lower()
@@ -641,5 +609,6 @@ def test_widget_does_not_expose_anthropic_key(app_client, two_users):
     html = app_client.get("/crm/leads").get_data(as_text=True)
     assert "ANTHROPIC_API_KEY" not in html
     assert "sk-ant" not in html
-    assert "Confirm All" in html
+    assert "OPENAI_API_KEY" not in html
+    assert "Start Live Conversation" in html
     assert "session_id" in html

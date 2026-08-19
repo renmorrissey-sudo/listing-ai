@@ -36,8 +36,10 @@ def record_command(
     input_source=None,
     tools_invoked=None,
     session_key=None,
+    request_id=None,
 ):
     token_hash = hash_token(confirmation_token) if confirmation_token else None
+    request_hash = hash_token(f"{user_id}:{request_id}") if request_id else None
     created = _now().isoformat()
     tools_json = json.dumps(tools_invoked or [])[:2000] if tools_invoked is not None else None
     with get_db() as conn:
@@ -46,8 +48,8 @@ def record_command(
             INSERT INTO ask_topai_commands
                 (user_id, source, transcript, interpreted_json, confirmation_token_hash,
                  status, lead_id, result_json, created_at, expires_at,
-                 model, input_source, tools_invoked_json, session_key)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 model, input_source, tools_invoked_json, session_key, request_id_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -64,6 +66,7 @@ def record_command(
                 (str(input_source)[:20] if input_source else None),
                 tools_json,
                 (str(session_key)[:80] if session_key else None),
+                request_hash,
             ),
         )
         return cur.lastrowid
@@ -82,6 +85,23 @@ def get_by_token(user_id, token: str):
             LIMIT 1
             """,
             (user_id, token_hash),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_by_request_id(user_id, request_id: str):
+    if not request_id:
+        return None
+    request_hash = hash_token(f"{user_id}:{request_id}")
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM ask_topai_commands
+            WHERE user_id = ? AND request_id_hash = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (user_id, request_hash),
         ).fetchone()
     return dict(row) if row else None
 
@@ -159,7 +179,7 @@ def list_recent(user_id, limit=20):
             """
             SELECT id, source, transcript, interpreted_json, status, lead_id,
                    result_json, created_at, executed_at, model, input_source,
-                   tools_invoked_json, session_key
+                   tools_invoked_json, session_key, request_id_hash
             FROM ask_topai_commands
             WHERE user_id = ?
             ORDER BY id DESC

@@ -1,30 +1,27 @@
-"""Claude tool-use loop for Ask TopAI. Mutations are queued, never executed here."""
+"""Claude tool-use loop for Ask TopAI. Writes are proposed here; Send executes them."""
 
 from __future__ import annotations
 
 import json
 import logging
 
-from anthropic import APIStatusError, APITimeoutError, Anthropic, RateLimitError
-
-import config
-from ask_topai import registry, sessions, tools
+from ask_topai import claude, registry, sessions, tools
+from ask_topai.claude import AskTopAIModelError
 
 logger = logging.getLogger(__name__)
 
 MAX_ROUNDS = 6
-MAX_TOKENS = 1800
 
 SYSTEM_PROMPT = """You are Ask TopAI, the intelligent CRM assistant for a real-estate agent.
-You reason about what the agent wants, look up tenant-scoped CRM data with read tools, and queue write tools for confirmation.
+You reason about what the agent wants, look up tenant-scoped CRM data with read tools, and select write tools for the permitted CRM actions.
 
 Rules:
 - Never invent phone numbers, emails, lead IDs, prices, or property details.
 - Never guess among multiple matching leads. Call ask_clarification.
-- Never claim a write already happened. Writes run only after the agent clicks Confirm.
+- The agent clicked Send. Write tools you select are executed after validation. Do not claim a write already happened in this turn.
 - Use selected_lead_id from context when the agent says she/he/them/this lead and no other person is named.
 - You may queue several write tools in one turn when the request clearly needs multiple CRM actions.
-- If a required field is missing (especially a lead phone for create_lead), call ask_clarification.
+- If a required field is missing (especially a lead phone for create_lead), call ask_clarification and do not queue incomplete writes.
 - If the agent asks to send email, SMS, listings, place a call, delete data, change consent, or run SQL, call inform_user with kind=unsupported. Explain the intent was understood but that permission is not enabled yet.
 - Do not call tools that are not provided to you.
 - Do not output JSON to the user. Use tools.
@@ -33,31 +30,20 @@ Future capabilities that are NOT available yet: find_matching_listings, create_c
 """
 
 
-class AskTopAIModelError(RuntimeError):
-    """Claude is unavailable or returned an unusable response."""
-
-
 def is_configured() -> bool:
-    return bool((config.ANTHROPIC_API_KEY or "").strip()) and not str(
-        config.ANTHROPIC_API_KEY
-    ).startswith("test-")
+    return claude.key_configured()
 
 
 def model_name() -> str:
-    return (config.ASK_TOPAI_MODEL or "").strip() or "claude-sonnet-5"
+    return claude.model_name()
 
 
 def call_claude(messages: list, *, system: str, tools_spec: list):
-    if not is_configured():
-        raise AskTopAIModelError("Ask TopAI is not configured.")
-    client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
-    return client.messages.create(
-        model=model_name(),
-        max_tokens=MAX_TOKENS,
-        temperature=0,
+    return claude.create_message(
+        messages=messages,
         system=system,
         tools=tools_spec,
-        messages=messages,
+        max_tokens=claude.DEFAULT_MAX_TOKENS,
     )
 
 
@@ -107,6 +93,16 @@ def _assistant_content(content) -> list:
                     "input": payload["input"] or {},
                 }
             )
+        elif btype in {"thinking", "redacted_thinking"}:
+            if isinstance(block, dict):
+                serialized.append(block)
+            else:
+                payload = {"type": btype}
+                for attr in ("thinking", "signature", "data"):
+                    value = getattr(block, attr, None)
+                    if value is not None:
+                        payload[attr] = value
+                serialized.append(payload)
     return serialized
 
 
@@ -229,39 +225,11 @@ def complete(user_id, transcript, context, *, session_id=None, source="text"):
                     continue
             break
     except AskTopAIModelError as exc:
-        return _error_result(str(exc), session_id, source, invoked)
-    except RateLimitError:
-        logger.warning("Ask TopAI Claude rate limited")
-        return _error_result(
-            "Ask TopAI is busy right now. Please try again in a moment.",
-            session_id,
-            source,
-            invoked,
-        )
-    except APITimeoutError:
-        logger.warning("Ask TopAI Claude timeout")
-        return _error_result(
-            "Ask TopAI timed out before it could finish. Your request was not changed.",
-            session_id,
-            source,
-            invoked,
-        )
-    except APIStatusError as exc:
-        logger.warning("Ask TopAI Claude HTTP error: %s", getattr(exc, "status_code", None))
-        return _error_result(
-            "Ask TopAI could not reach Claude. Your CRM data was not changed.",
-            session_id,
-            source,
-            invoked,
-        )
-    except Exception:
-        logger.exception("Ask TopAI Claude failure")
-        return _error_result(
-            "Ask TopAI had a problem understanding that request. Your CRM data was not changed.",
-            session_id,
-            source,
-            invoked,
-        )
+        mapped = claude.classify_exception(exc)
+        return _error_result(mapped.user_message, session_id, source, invoked, code=mapped.code)
+    except Exception as exc:
+        mapped = claude.classify_exception(exc)
+        return _error_result(mapped.user_message, session_id, source, invoked, code=mapped.code)
 
     result = _finalize(proposed, clarification, inform, last_text, unknown)
     result["tools_invoked"] = invoked
@@ -315,7 +283,7 @@ def _finalize(proposed, clarification, inform, last_text, unknown=None):
     if proposed:
         return {
             "status": "ok",
-            "message": last_text or "Confirm this action plan before I change any CRM data.",
+            "message": last_text or "I will complete that CRM request now.",
             "commands": proposed,
             "choices": [],
         }
@@ -363,10 +331,11 @@ def _looks_unsupported(text: str) -> bool:
     return "doesn't have" in lowered or "does not have" in lowered or "not yet" in lowered
 
 
-def _error_result(message, session_id, source, invoked):
+def _error_result(message, session_id, source, invoked, code="error"):
     return {
         "status": "error",
         "message": message,
+        "code": code,
         "commands": [],
         "tools_invoked": invoked or [],
         "model": model_name(),
