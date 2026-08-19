@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 *.db
 build/
+frontend/ask-topai-realtime/node_modules/

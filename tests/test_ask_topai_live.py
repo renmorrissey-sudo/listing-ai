@@ -7,6 +7,21 @@ from ask_topai.realtime import runtime, settings
 from tests.test_ask_topai import _lead, _login
 
 
+def _mint(monkeypatch, value="ek_test_ephemeral_not_a_real_key"):
+    monkeypatch.setattr(
+        "ask_topai.realtime.openai_client.mint_ephemeral_secret",
+        lambda session_obj, user_id=None, ref=None: {
+            "value": value,
+            "expires_at": 1_700_000_000,
+            "ref": "live-test",
+            "openai_status": 200,
+            "model": "gpt-realtime-2.1",
+        },
+    )
+    monkeypatch.setattr("ask_topai.realtime.settings.is_configured", lambda: True)
+    monkeypatch.setattr("ask_topai.realtime.settings.key_present", lambda: True)
+
+
 def test_realtime_model_is_configurable(monkeypatch):
     monkeypatch.setattr("config.ASK_TOPAI_REALTIME_MODEL", "")
     assert settings.realtime_model() == "gpt-realtime-2.1"
@@ -31,11 +46,10 @@ def test_future_tools_require_spoken_confirmation():
     assert policy.confirmation_mode("drop_table") == policy.MODE_FORBIDDEN
 
 
-def test_live_session_bootstraps_without_openai_secrets(app_client, two_users, monkeypatch):
+def test_live_session_mints_ephemeral_key_not_openai_api_key(app_client, two_users, monkeypatch):
     u1, _ = two_users
     _login(app_client, u1)
-    monkeypatch.setattr("ask_topai.realtime.settings.is_configured", lambda: True)
-    monkeypatch.setattr("ask_topai.realtime.settings.key_present", lambda: True)
+    _mint(monkeypatch)
     res = app_client.post(
         "/api/ask-topai/live/session",
         json={"context": {"page": "/crm/leads"}},
@@ -44,26 +58,35 @@ def test_live_session_bootstraps_without_openai_secrets(app_client, two_users, m
     data = res.get_json()
     body = res.get_data(as_text=True)
     assert data["ok"] is True
-    assert "client_secret" not in data
+    assert data["client_secret"]["value"].startswith("ek_")
     assert data["model"] == "gpt-realtime-2.1"
-    assert data["webrtc_url"] == "/api/ask-topai/live/webrtc"
+    assert {item["name"] for item in data["tools"]} >= {
+        "find_lead",
+        "get_lead_context",
+        "create_lead",
+        "add_lead_note",
+        "create_task",
+        "update_property_criteria",
+    }
+    assert "webrtc_url" not in data
     assert "api.openai.com" not in body
     assert "OPENAI_API_KEY" not in body
     assert "sk-proj-" not in body
-    assert "sk-ant-" not in body
     assert data["session_id"]
+    assert data["instructions"]
 
 
-def test_live_session_without_openai_key_still_bootstraps(app_client, two_users, monkeypatch):
+def test_live_session_without_openai_key(app_client, two_users, monkeypatch):
     u1, _ = two_users
     _login(app_client, u1)
     monkeypatch.setattr("ask_topai.realtime.settings.is_configured", lambda: False)
     monkeypatch.setattr("ask_topai.realtime.settings.key_present", lambda: False)
     res = app_client.post("/api/ask-topai/live/session", json={})
-    assert res.status_code == 200
+    assert res.status_code == 503
     data = res.get_json()
-    assert data["ok"] is True
-    assert data["openai_api_key_present"] is False
+    assert data["ok"] is False
+    assert data["code"] == "not_configured"
+    assert data["error"] == "Ask TopAI is not configured for live conversation."
     assert "OPENAI_API_KEY" not in (data.get("error") or "")
     assert "client_secret" not in data
 
@@ -351,18 +374,17 @@ def test_widget_live_controls_and_no_secrets(app_client, two_users):
     assert "TopAI is speaking" in html
     assert "Working..." in html
     assert "Reconnecting..." in html
-    assert "RTCPeerConnection" in html
-    assert "/api/ask-topai/live/webrtc" in html
-    assert "https://api.openai.com/v1/realtime/calls" not in html
+    assert "AskTopAIRealtime" in html
+    assert "ask_topai/realtime.js" in html
+    assert "/api/ask-topai/live/session" in html
+    assert "/api/ask-topai/live/webrtc" not in html
     assert "WebRTC connection failed" not in html
-    assert "looksLikeSdp" in html
-    assert html.index("looksLikeSdp(answer.sdp)") < html.index("setRemoteDescription")
-    assert "connectionstatechange" in html
-    assert "iceconnectionstatechange" in html
-    assert "signalingstatechange" in html
-    assert "datachannel-open" in html
-    assert "response.cancel" in html
-    assert "input_audio_buffer.speech_started" in html
+    assert "Ask TopAI could not start a live conversation" not in html
+    assert "Microphone access is blocked." in html
+    assert "OpenAI authentication failed." in html
+    assert "OpenAI API quota is unavailable." in html
+    assert "Could not establish the realtime audio connection." in html
+    assert "live.realtime.close" in html
     assert "OPENAI_API_KEY" not in html
     assert "ANTHROPIC_API_KEY" not in html
     assert ">Send<" in html

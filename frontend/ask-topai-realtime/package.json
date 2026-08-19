@@ -1,0 +1,16 @@
+{
+  "name": "ask-topai-realtime",
+  "private": true,
+  "version": "1.0.0",
+  "description": "OpenAI Agents SDK bundle for Ask TopAI Live Conversation",
+  "scripts": {
+    "build": "esbuild src/index.js --bundle --format=iife --minify --outfile=../../static/ask_topai/realtime.js --legal-comments=none --target=es2020"
+  },
+  "dependencies": {
+    "@openai/agents": "^0.4.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

@@ -9,9 +9,7 @@ import config
 PROVIDER_NAME = "openai_realtime"
 DEFAULT_MODEL = "gpt-realtime-2.1"
 DEFAULT_VOICE = "marin"
-CALLS_URL = "https://api.openai.com/v1/realtime/calls"
-WEBRTC_PATH = "/api/ask-topai/live/webrtc"
-ICE_SERVERS = [{"urls": "stun:stun.l.google.com:19302"}]
+CLIENT_SECRETS_URL = "https://api.openai.com/v1/realtime/client_secrets"
 
 
 def provider_name() -> str:
@@ -40,7 +38,7 @@ def key_present() -> bool:
 
 
 def session_config(instructions: str, tools: list) -> dict:
-    """OpenAI Realtime session object. Isolated so a GPT-Live adapter can differ."""
+    """OpenAI Realtime session object minted into the ephemeral client secret."""
     return {
         "type": "realtime",
         "model": realtime_model(),
@@ -77,10 +75,9 @@ def slim_session_config() -> dict:
 
 
 def public_client_config() -> dict:
-    """Safe values for the browser. Never includes OPENAI_API_KEY or OpenAI URLs."""
+    """Safe values for the browser. Never includes OPENAI_API_KEY."""
     return {
         "provider": provider_name(),
         "model": realtime_model(),
-        "webrtc_url": WEBRTC_PATH,
-        "ice_servers": ICE_SERVERS,
+        "voice": realtime_voice(),
     }

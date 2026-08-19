@@ -2,7 +2,7 @@
 
 import logging
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, jsonify, request
 
 import auth
 from ask_topai import service
@@ -111,79 +111,28 @@ def api_live_session():
     if err:
         return err
     from ask_topai.realtime import service as live_service
+    from ask_topai.realtime.openai_client import RealtimeSessionError, new_ref
 
     data = request.get_json(silent=True) or {}
     context = data.get("context") if isinstance(data.get("context"), dict) else {}
     session_id = str(data.get("session_id") or "").strip() or None
-    return jsonify(live_service.start_session(user["id"], context, session_id))
-
-
-@ask_topai_bp.route("/api/ask-topai/live/webrtc", methods=["POST"], strict_slashes=False)
-@auth.subscription_required
-def api_live_webrtc():
-    user, err = _user_or_401()
-    if err:
-        return err
-    from ask_topai.realtime import service as live_service
-    from ask_topai.realtime.openai_client import RealtimeSessionError, looks_like_html, looks_like_sdp
-
-    ctype = ((request.content_type or "").split(";")[0] or "").strip().lower()
-    if ctype in {"application/json", "text/html", "application/xml"}:
-        return jsonify(
-            {
-                "ok": False,
-                "error": "TopAI could not establish the Realtime session.",
-                "code": "unsupported_content_type",
-                "stage": "backend_webrtc",
-            }
-        ), 415
-    raw = request.get_data(as_text=True) or ""
-    if looks_like_html(raw) or not looks_like_sdp(raw):
-        return jsonify(
-            {
-                "ok": False,
-                "error": "TopAI could not establish the Realtime session.",
-                "code": "invalid_offer",
-                "stage": "invalid_offer",
-            }
-        ), 400
-    session_id = (
-        (request.headers.get("X-Ask-TopAI-Session") or request.args.get("session_id") or "")
-        .strip()
-        or None
-    )
-    page = (request.headers.get("X-Ask-TopAI-Page") or request.args.get("page") or "").strip()
-    lead_raw = (request.headers.get("X-Ask-TopAI-Lead-Id") or request.args.get("lead_id") or "").strip()
-    lead_id = None
-    if lead_raw:
-        try:
-            lead_id = int(lead_raw)
-        except ValueError:
-            lead_id = lead_raw
-    context = {"page": page, "lead_id": lead_id}
     try:
-        result = live_service.start_webrtc(user["id"], raw, context, session_id)
+        result = live_service.start_session(user["id"], context, session_id)
     except RealtimeSessionError as exc:
         return jsonify(_live_error_payload(exc)), exc.http_status
     except Exception:
-        from ask_topai.realtime.openai_client import new_ref
-
         ref = new_ref()
-        logger.exception("Ask TopAI realtime webrtc unexpected error ref=%s", ref)
+        logger.exception("Ask TopAI realtime session unexpected error ref=%s", ref)
         return jsonify(
             {
                 "ok": False,
-                "error": "TopAI could not establish the Realtime session.",
+                "error": "Could not establish the realtime audio connection.",
                 "code": "error",
-                "stage": "backend_webrtc",
+                "stage": "backend_session",
                 "ref": ref,
             }
         ), 503
-    response = Response(result["sdp"], status=200, mimetype="application/sdp")
-    response.headers["X-Ask-TopAI-Session-Id"] = result["session_id"]
-    response.headers["X-Ask-TopAI-Ref"] = result["ref"]
-    response.headers["Cache-Control"] = "no-store"
-    return response
+    return jsonify(result)
 
 
 @ask_topai_bp.route("/api/ask-topai/live/diagnostics", methods=["GET"], strict_slashes=False)
@@ -195,7 +144,10 @@ def api_live_diagnostics():
     from ask_topai.realtime import service as live_service
 
     probe = str(request.args.get("probe") or "").strip().lower()
-    body = live_service.diagnostics(user_id=user["id"], probe_calls=probe in {"calls", "1", "true", "sdp"})
+    body = live_service.diagnostics(
+        user_id=user["id"],
+        probe_secret=probe in {"secret", "secrets", "1", "true", "calls", "sdp"},
+    )
     return jsonify(body), 200 if body.get("ok") else 503
 
 
