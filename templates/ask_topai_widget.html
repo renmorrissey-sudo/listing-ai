@@ -1,16 +1,56 @@
 {% if current_user %}
 <style>
-  .ask-topai-root { position: fixed; right: 16px; bottom: 16px; z-index: 400; font-family: inherit; }
-  .ask-topai-fab {
-    background: #1a1a2e; color: #fff; border: 0; border-radius: 999px; padding: 12px 16px;
-    font-size: 14px; font-weight: 700; cursor: pointer; box-shadow: 0 8px 24px rgba(15,23,42,0.28);
+  .ask-topai-root {
+    position: fixed !important;
+    right: max(16px, env(safe-area-inset-right, 0px));
+    bottom: max(16px, env(safe-area-inset-bottom, 0px));
+    left: auto;
+    top: auto;
+    z-index: 10050;
+    font-family: inherit;
+    width: auto;
+    max-width: calc(100vw - 24px);
+    margin: 0;
+    padding: 0;
+    pointer-events: none;
+    transform: none;
+    filter: none;
   }
+  .ask-topai-fab,
+  .ask-topai-panel { pointer-events: auto; }
+  .ask-topai-fab {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 8px;
+    background: #1a1a2e;
+    color: #fff !important;
+    border: 0;
+    border-radius: 999px;
+    padding: 12px 16px !important;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.2;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(15,23,42,0.28);
+    width: auto !important;
+    max-width: 100%;
+    white-space: nowrap;
+  }
+  .ask-topai-fab-icon { font-size: 16px; line-height: 1; }
   .ask-topai-fab:hover { background: #232344; }
   .ask-topai-fab:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 3px; }
   .ask-topai-panel {
-    display: none; position: absolute; right: 0; bottom: 56px; width: min(380px, calc(100vw - 24px));
-    background: #fff; color: #1a1a2e; border-radius: 14px; box-shadow: 0 16px 40px rgba(15,23,42,0.28);
-    border: 1px solid #e5ebf5; overflow: hidden;
+    display: none;
+    position: absolute;
+    right: 0;
+    bottom: 56px;
+    width: min(380px, calc(100vw - 24px));
+    background: #fff;
+    color: #1a1a2e;
+    border-radius: 14px;
+    box-shadow: 0 16px 40px rgba(15,23,42,0.28);
+    border: 1px solid #e5ebf5;
+    overflow: hidden;
   }
   .ask-topai-root.is-open .ask-topai-panel { display: block; }
   .ask-topai-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: #1a1a2e; color: #fff; }
@@ -38,7 +78,10 @@
   .ask-topai-result { margin-top: 10px; font-size: 14px; font-weight: 700; color: #15803d; }
   .ask-topai-error { margin-top: 10px; font-size: 13px; color: #b91c1c; }
   @media (max-width: 640px) {
-    .ask-topai-root { right: 10px; bottom: 10px; }
+    .ask-topai-root {
+      right: max(10px, env(safe-area-inset-right, 0px));
+      bottom: max(10px, env(safe-area-inset-bottom, 0px));
+    }
     .ask-topai-panel { width: calc(100vw - 20px); }
   }
 </style>
@@ -63,12 +106,20 @@
       <div class="ask-topai-error" id="ask-topai-error" hidden></div>
     </div>
   </div>
-  <button type="button" class="ask-topai-fab" id="ask-topai-fab" aria-expanded="false" aria-controls="ask-topai-panel">🎤 Ask TopAI</button>
+  <button type="button" class="ask-topai-fab" id="ask-topai-fab" aria-expanded="false" aria-controls="ask-topai-panel">
+    <span class="ask-topai-fab-icon" aria-hidden="true">🎤</span>
+    <span class="ask-topai-fab-label">Ask TopAI</span>
+  </button>
 </div>
 <script>
 (function initAskTopAI() {
+  if (window.__askTopAIInit) return;
   const root = document.getElementById('ask-topai-root');
   if (!root) return;
+  window.__askTopAIInit = true;
+  if (root.parentNode !== document.body) {
+    document.body.appendChild(root);
+  }
   const panel = document.getElementById('ask-topai-panel');
   const fab = document.getElementById('ask-topai-fab');
   const statusEl = document.getElementById('ask-topai-status');
