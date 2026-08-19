@@ -60,6 +60,7 @@ def _assert_ask_topai_widget(html, path):
     assert 'id="ask-topai-text"' in html, path
     assert "/api/ask-topai/interpret" in html, path
     assert "/api/ask-topai/live/session" in html, path
+    assert "/api/ask-topai/live/webrtc" in html, path
     assert "RTCPeerConnection" in html, path
     assert ">Send<" in html, path
     assert "Ask TopAI is working..." in html, path
