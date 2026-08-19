@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 import listing_generations_db as listing_db
 import email_marketing_db as email_marketing_db
 import sms_coach
+from ask_topai import ask_topai_bp
 from crm import crm_bp
 from crm_constants import status_label
 from external_leads_routes import external_leads_bp
@@ -73,6 +74,7 @@ app.config["PERMANENT_SESSION_LIFETIME"] = 86400 * 14
 
 db.init_db()
 app.register_blueprint(crm_bp)
+app.register_blueprint(ask_topai_bp)
 app.register_blueprint(external_leads_bp)
 app.register_blueprint(email_marketing_bp)
 app.register_blueprint(sms_campaigns_bp)

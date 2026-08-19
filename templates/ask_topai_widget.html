@@ -1,0 +1,267 @@
+{% if current_user %}
+<style>
+  .ask-topai-root { position: fixed; right: 16px; bottom: 16px; z-index: 400; font-family: inherit; }
+  .ask-topai-fab {
+    background: #1a1a2e; color: #fff; border: 0; border-radius: 999px; padding: 12px 16px;
+    font-size: 14px; font-weight: 700; cursor: pointer; box-shadow: 0 8px 24px rgba(15,23,42,0.28);
+  }
+  .ask-topai-fab:hover { background: #232344; }
+  .ask-topai-fab:focus-visible { outline: 2px solid #4f8ef7; outline-offset: 3px; }
+  .ask-topai-panel {
+    display: none; position: absolute; right: 0; bottom: 56px; width: min(380px, calc(100vw - 24px));
+    background: #fff; color: #1a1a2e; border-radius: 14px; box-shadow: 0 16px 40px rgba(15,23,42,0.28);
+    border: 1px solid #e5ebf5; overflow: hidden;
+  }
+  .ask-topai-root.is-open .ask-topai-panel { display: block; }
+  .ask-topai-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: #1a1a2e; color: #fff; }
+  .ask-topai-head strong { font-size: 14px; }
+  .ask-topai-close { background: transparent; border: 0; color: #fff; font-size: 18px; cursor: pointer; }
+  .ask-topai-body { padding: 12px 14px 14px; }
+  .ask-topai-status { font-size: 12px; color: #667; margin: 0 0 8px; }
+  .ask-topai-status.listening { color: #b91c1c; font-weight: 700; }
+  .ask-topai-transcript {
+    width: 100%; min-height: 84px; resize: vertical; border: 1.5px solid #dde3f0; border-radius: 8px;
+    padding: 8px; font: inherit; font-size: 14px;
+  }
+  .ask-topai-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .ask-topai-actions button, .ask-topai-preview button {
+    border: 0; border-radius: 8px; padding: 8px 12px; font-size: 13px; font-weight: 700; cursor: pointer;
+  }
+  .ask-topai-primary { background: #4f8ef7; color: #fff; }
+  .ask-topai-secondary { background: #eef2f7; color: #334; }
+  .ask-topai-danger { background: #fef2f2; color: #b91c1c; }
+  .ask-topai-preview { margin-top: 12px; background: #f8fafc; border: 1px solid #eef2f7; border-radius: 10px; padding: 10px; }
+  .ask-topai-preview h3 { margin: 0 0 8px; font-size: 13px; }
+  .ask-topai-preview dl { margin: 0 0 10px; }
+  .ask-topai-preview dt { font-size: 11px; color: #667; }
+  .ask-topai-preview dd { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+  .ask-topai-result { margin-top: 10px; font-size: 14px; font-weight: 700; color: #15803d; }
+  .ask-topai-error { margin-top: 10px; font-size: 13px; color: #b91c1c; }
+  @media (max-width: 640px) {
+    .ask-topai-root { right: 10px; bottom: 10px; }
+    .ask-topai-panel { width: calc(100vw - 20px); }
+  }
+</style>
+<div class="ask-topai-root" id="ask-topai-root">
+  <div class="ask-topai-panel" id="ask-topai-panel" role="dialog" aria-labelledby="ask-topai-title" hidden>
+    <div class="ask-topai-head">
+      <strong id="ask-topai-title">Ask TopAI</strong>
+      <button type="button" class="ask-topai-close" id="ask-topai-close" aria-label="Close Ask TopAI">&times;</button>
+    </div>
+    <div class="ask-topai-body">
+      <p class="ask-topai-status" id="ask-topai-status">Type a request or use the microphone.</p>
+      <label class="muted" for="ask-topai-text" style="font-size:12px;">Request</label>
+      <textarea id="ask-topai-text" class="ask-topai-transcript" placeholder="Create a buyer lead named John Smith at 303-555-1212..."></textarea>
+      <div class="ask-topai-actions">
+        <button type="button" class="ask-topai-primary" id="ask-topai-mic">Microphone</button>
+        <button type="button" class="ask-topai-primary" id="ask-topai-submit">Ask TopAI</button>
+        <button type="button" class="ask-topai-secondary" id="ask-topai-clear">Clear</button>
+        <button type="button" class="ask-topai-secondary" id="ask-topai-cancel">Cancel</button>
+      </div>
+      <div class="ask-topai-preview" id="ask-topai-preview" hidden></div>
+      <div class="ask-topai-result" id="ask-topai-result" hidden></div>
+      <div class="ask-topai-error" id="ask-topai-error" hidden></div>
+    </div>
+  </div>
+  <button type="button" class="ask-topai-fab" id="ask-topai-fab" aria-expanded="false" aria-controls="ask-topai-panel">🎤 Ask TopAI</button>
+</div>
+<script>
+(function initAskTopAI() {
+  const root = document.getElementById('ask-topai-root');
+  if (!root) return;
+  const panel = document.getElementById('ask-topai-panel');
+  const fab = document.getElementById('ask-topai-fab');
+  const statusEl = document.getElementById('ask-topai-status');
+  const textEl = document.getElementById('ask-topai-text');
+  const previewEl = document.getElementById('ask-topai-preview');
+  const resultEl = document.getElementById('ask-topai-result');
+  const errorEl = document.getElementById('ask-topai-error');
+  const micBtn = document.getElementById('ask-topai-mic');
+  let recognition = null;
+  let listening = false;
+  let confirmationToken = null;
+
+  function askContext() {
+    const page = window.location.pathname || '';
+    const match = page.match(/\/crm\/leads\/(\d+)/);
+    let leadId = match ? Number(match[1]) : null;
+    const smsSelect = document.getElementById('sms-lead-select');
+    if (!leadId && smsSelect && smsSelect.value) leadId = Number(smsSelect.value);
+    return { page, lead_id: leadId };
+  }
+
+  function setOpen(open) {
+    root.classList.toggle('is-open', open);
+    panel.hidden = !open;
+    fab.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) setTimeout(() => textEl.focus(), 30);
+  }
+
+  function setError(msg) {
+    errorEl.hidden = !msg;
+    errorEl.textContent = msg || '';
+  }
+
+  function setResult(msg) {
+    resultEl.hidden = !msg;
+    resultEl.textContent = msg ? ('✓ ' + msg) : '';
+  }
+
+  function resetPreview() {
+    previewEl.hidden = true;
+    previewEl.innerHTML = '';
+    confirmationToken = null;
+  }
+
+  function resetAll() {
+    stopMic();
+    textEl.value = '';
+    statusEl.textContent = 'Type a request or use the microphone.';
+    statusEl.classList.remove('listening');
+    resetPreview();
+    setError('');
+    setResult('');
+  }
+
+  function renderPreview(preview, message) {
+    if (!preview) {
+      resetPreview();
+      return;
+    }
+    const blocks = (preview.commands || []).map((command) => {
+      const rows = (command.rows || []).map((row) => `<dt>${escapeAsk(row.label)}</dt><dd>${escapeAsk(row.value)}</dd>`).join('');
+      return `<dl>${rows}</dl>`;
+    }).join('');
+    previewEl.innerHTML = `<h3>${escapeAsk(preview.title || 'I understood:')}</h3>${blocks}
+      <div class="ask-topai-actions">
+        <button type="button" class="ask-topai-primary" id="ask-topai-confirm">Confirm</button>
+        <button type="button" class="ask-topai-secondary" id="ask-topai-edit">Edit</button>
+        <button type="button" class="ask-topai-danger" id="ask-topai-discard">Cancel</button>
+      </div>`;
+    previewEl.hidden = false;
+    if (message) statusEl.textContent = message;
+    document.getElementById('ask-topai-confirm').onclick = confirmCommand;
+    document.getElementById('ask-topai-edit').onclick = () => { resetPreview(); textEl.focus(); };
+    document.getElementById('ask-topai-discard').onclick = cancelPending;
+  }
+
+  function escapeAsk(value) {
+    return String(value || '').replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
+  }
+
+  async function interpret() {
+    const text = textEl.value.trim();
+    setError('');
+    setResult('');
+    if (!text) { setError('Enter or speak a request first.'); return; }
+    try {
+      const res = await fetch('/api/ask-topai/interpret', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ text, context: askContext() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) { setError('Please log in to use Ask TopAI.'); return; }
+      if (!res.ok) { setError(data.error || 'Ask TopAI could not process that.'); return; }
+      if (data.status === 'needs_confirmation') {
+        confirmationToken = data.confirmation_token;
+        renderPreview(data.preview, data.message);
+        return;
+      }
+      resetPreview();
+      setError(data.message || 'I need more information.');
+    } catch (err) {
+      setError(err.message || 'Network error.');
+    }
+  }
+
+  async function confirmCommand() {
+    if (!confirmationToken) return;
+    try {
+      const res = await fetch('/api/ask-topai/confirm', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ confirmation_token: confirmationToken, context: askContext() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(data.error || 'Could not complete that action.'); return; }
+      resetPreview();
+      setResult(data.message || 'Done.');
+    } catch (err) {
+      setError(err.message || 'Network error.');
+    }
+  }
+
+  async function cancelPending() {
+    if (confirmationToken) {
+      try {
+        await fetch('/api/ask-topai/cancel', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ confirmation_token: confirmationToken }),
+        });
+      } catch (err) {}
+    }
+    resetPreview();
+    setOpen(false);
+  }
+
+  function stopMic() {
+    listening = false;
+    if (recognition) {
+      try { recognition.stop(); } catch (err) {}
+    }
+    statusEl.classList.remove('listening');
+    micBtn.textContent = 'Microphone';
+  }
+
+  function startMic() {
+    const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Rec) {
+      setError('Voice capture is not available in this browser. Type your request instead.');
+      return;
+    }
+    recognition = new Rec();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+    recognition.onresult = (event) => {
+      let finalText = '';
+      let interim = '';
+      for (let i = 0; i < event.results.length; i++) {
+        const chunk = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalText += chunk + ' ';
+        else interim += chunk;
+      }
+      textEl.value = (finalText + interim).trim();
+    };
+    recognition.onerror = () => {
+      stopMic();
+      setError('Microphone error. You can still type the request.');
+    };
+    recognition.onend = () => {
+      if (listening) {
+        try { recognition.start(); } catch (err) { stopMic(); }
+      }
+    };
+    listening = true;
+    statusEl.textContent = 'Listening…';
+    statusEl.classList.add('listening');
+    micBtn.textContent = 'Stop listening';
+    recognition.start();
+  }
+
+  fab.addEventListener('click', () => setOpen(!root.classList.contains('is-open')));
+  document.getElementById('ask-topai-close').addEventListener('click', () => setOpen(false));
+  document.getElementById('ask-topai-submit').addEventListener('click', interpret);
+  document.getElementById('ask-topai-clear').addEventListener('click', resetAll);
+  document.getElementById('ask-topai-cancel').addEventListener('click', cancelPending);
+  micBtn.addEventListener('click', () => listening ? stopMic() : startMic());
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && root.classList.contains('is-open')) setOpen(false);
+  });
+})();
+</script>
+{% endif %}

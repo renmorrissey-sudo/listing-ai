@@ -47,6 +47,7 @@ MIGRATION_MODULES = [
     "migrations.versions.020_listing_email_campaigns",
     "migrations.versions.021_billing_subscription_fields",
     "migrations.versions.022_sms_scheduled_send_at",
+    "migrations.versions.023_ask_topai",
 ]
 
 # Required after 001_baseline. App has no separate accounts/tenants/subscriptions
