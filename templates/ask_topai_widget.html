@@ -170,7 +170,8 @@
     minted: null,
     turns: [],
     stage: null,
-    lastRef: null
+    lastRef: null,
+    cleanupPromise: null
   };
   window.__askTopAILive = live;
 
@@ -208,12 +209,36 @@
     return { page, lead_id: leadId, lead_name: leadName };
   }
 
-  function setOpen(open) {
-    root.classList.toggle('is-open', open);
+  function applyPanelOpen(open) {
+    root.classList.toggle('is-open', !!open);
     panel.hidden = !open;
+    fab.hidden = false;
     fab.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) setTimeout(() => textEl.focus(), 30);
-    else if (live.active) endLive(true);
+  }
+
+  function resetLiveConversationState() {
+    live.turns = [];
+    live.assistantEl = null;
+    live.userEl = null;
+    logEl.innerHTML = '';
+    logEl.hidden = true;
+  }
+
+  function hasLiveResources() {
+    return !!(live.active || live.realtime || live.stream || live.reconnectTimer);
+  }
+
+  function setOpen(open) {
+    if (open) {
+      applyPanelOpen(true);
+      return;
+    }
+    if (hasLiveResources()) {
+      cleanupLiveSession({ notify: true, closePanel: true });
+      return;
+    }
+    applyPanelOpen(false);
   }
 
   function setError(msg) {
@@ -359,12 +384,84 @@
     }
   }
 
-  function teardownPeer() {
-    if (live.realtime) {
-      try { live.realtime.close(); } catch (err) {}
+  function stopPlaybackAudio(session) {
+    const seen = [];
+    function hush(el) {
+      if (!el || seen.indexOf(el) !== -1) return;
+      seen.push(el);
+      try { el.pause(); } catch (err) {}
+      try { el.muted = true; } catch (err) {}
+      try {
+        if (el.srcObject && el.srcObject.getTracks) {
+          el.srcObject.getTracks().forEach((track) => { try { track.stop(); } catch (e) {} });
+        }
+        el.srcObject = null;
+      } catch (err) {}
+      try { el.removeAttribute('src'); } catch (err) {}
+      try { if (el.load) el.load(); } catch (err) {}
     }
+    try {
+      const transport = session && session.transport;
+      if (!transport) return;
+      hush(transport.audioElement);
+      hush(transport.audioEl);
+      hush(transport._audioElement);
+      const state = transport.connectionState || {};
+      hush(state.audioElement);
+    } catch (err) {}
+  }
+
+  function closeDataChannels(pc, transport) {
+    try {
+      if (transport && transport.dataChannel && transport.dataChannel.close) {
+        transport.dataChannel.close();
+      }
+    } catch (err) {}
+    try {
+      const state = transport && transport.connectionState;
+      if (state && state.dataChannel && state.dataChannel.close) state.dataChannel.close();
+    } catch (err) {}
+    try {
+      if (pc && pc.getTransceivers) {
+        pc.getTransceivers().forEach((t) => {
+          try { if (t.stop) t.stop(); } catch (err) {}
+        });
+      }
+    } catch (err) {}
+  }
+
+  function closePeerConnection(pc) {
+    if (!pc) return;
+    try {
+      pc.getSenders().forEach((sender) => {
+        try { if (sender.track) sender.track.stop(); } catch (err) {}
+      });
+    } catch (err) {}
+    try {
+      pc.getReceivers().forEach((receiver) => {
+        try { if (receiver.track) receiver.track.stop(); } catch (err) {}
+      });
+    } catch (err) {}
+    try { pc.close(); } catch (err) {}
+  }
+
+  function teardownPeer() {
+    const session = live.realtime;
     live.realtime = null;
     live.minted = null;
+    if (!session) return;
+    let transport = null;
+    let pc = null;
+    try { transport = session.transport; } catch (err) {}
+    try {
+      pc = (transport && transport.connectionState && transport.connectionState.peerConnection)
+        || (transport && transport.peerConnection)
+        || null;
+    } catch (err) {}
+    stopPlaybackAudio(session);
+    closeDataChannels(pc, transport);
+    try { if (session.close) session.close(); } catch (err) {}
+    closePeerConnection(pc);
   }
 
   function stopMicTracks() {
@@ -373,7 +470,21 @@
     live.stream = null;
   }
 
-  async function endLive(notify) {
+  function cleanupLiveSession(opts) {
+    opts = opts || {};
+    const notify = opts.notify !== false;
+    const closePanel = !!opts.closePanel;
+    const useBeacon = !!opts.beacon;
+
+    if (live.cleanupPromise && hasLiveResources()) {
+      return live.cleanupPromise.then(() => {
+        if (closePanel) {
+          resetLiveConversationState();
+          applyPanelOpen(false);
+        }
+      });
+    }
+
     live.ending = true;
     live.active = false;
     if (live.reconnectTimer) {
@@ -386,20 +497,50 @@
     stopMicTracks();
     setLiveMode(false);
     setConn('Start a live conversation or type a request.');
-    if (notify && sid) {
-      try {
-        await fetch('/api/ask-topai/live/end', {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: sid, transcript: turns })
-        });
-      } catch (err) {}
-    }
     live.sessionId = null;
-    live.ending = false;
     live.reconnecting = false;
     live.reconnectAttempts = 0;
+    live.stage = null;
+    live.lastRef = null;
+
+    function finishPanel() {
+      if (closePanel) {
+        resetLiveConversationState();
+        applyPanelOpen(false);
+      }
+    }
+
+    if (!notify || !sid) {
+      live.ending = false;
+      finishPanel();
+      return Promise.resolve();
+    }
+    if (useBeacon) {
+      try {
+        navigator.sendBeacon && navigator.sendBeacon('/api/ask-topai/live/end', new Blob([JSON.stringify({
+          session_id: sid,
+          transcript: turns
+        })], { type: 'application/json' }));
+      } catch (err) {}
+      live.ending = false;
+      finishPanel();
+      return Promise.resolve();
+    }
+    live.cleanupPromise = fetch('/api/ask-topai/live/end', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sid, transcript: turns })
+    }).catch(() => {}).then(() => {
+      live.ending = false;
+      live.cleanupPromise = null;
+    });
+    finishPanel();
+    return live.cleanupPromise;
+  }
+
+  async function endLive(notify) {
+    return cleanupLiveSession({ notify: !!notify, closePanel: false });
   }
 
   function messageForSessionFailure(res, data) {
@@ -566,6 +707,9 @@
 
   async function startLive() {
     if (live.active) return;
+    if (live.realtime || live.stream) {
+      await cleanupLiveSession({ notify: false, closePanel: false });
+    }
     setError('');
     setResult('');
     setLiveMode(true);
@@ -700,7 +844,7 @@
   }
 
   function resetAll() {
-    if (live.active) endLive(true);
+    if (hasLiveResources()) endLive(true);
     textEl.value = '';
     setConn('Start a live conversation or type a request.');
     resetPreview();
@@ -721,20 +865,13 @@
   textEl.addEventListener('input', () => { lastInputSource = 'text'; });
   document.getElementById('ask-topai-clear').addEventListener('click', resetAll);
   startBtn.addEventListener('click', startLive);
-  endBtn.addEventListener('click', () => endLive(true));
+  endBtn.addEventListener('click', () => cleanupLiveSession({ notify: true, closePanel: true }));
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && root.classList.contains('is-open')) setOpen(false);
   });
   window.addEventListener('beforeunload', () => {
-    if (live.active) {
-      try {
-        navigator.sendBeacon && navigator.sendBeacon('/api/ask-topai/live/end', new Blob([JSON.stringify({
-          session_id: live.sessionId,
-          transcript: live.turns
-        })], { type: 'application/json' }));
-      } catch (err) {}
-      teardownPeer();
-      stopMicTracks();
+    if (hasLiveResources()) {
+      cleanupLiveSession({ notify: true, beacon: true, closePanel: false });
     }
   });
 })();

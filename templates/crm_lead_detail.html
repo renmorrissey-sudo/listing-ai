@@ -22,7 +22,8 @@
     {% endif %}
     <div class="card">
       <h1>{{ lead.name or 'Lead' }}</h1>
-      <div class="muted">{{ lead.phone_number }} · {{ lead.lead_type or 'N/A' }} · {{ lead.source or 'sms' }}</div>
+      {% set shown_source = public_lead_source(lead.source) %}
+      <div class="muted">{{ lead.phone_number }} · {{ lead.lead_type or 'N/A' }}{% if shown_source %} · {{ shown_source }}{% elif not lead.source %} · sms{% endif %}</div>
       <form id="lead-identity-form" style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
         <label class="muted" style="font-size:12px;">Name
           <input id="lead-name-input" name="name" value="{{ lead.name or '' }}" maxlength="200" required style="display:block;min-width:220px;padding:8px 10px;border:1px solid #e0e4ed;border-radius:8px;" />
@@ -42,7 +43,7 @@
         <div class="row" style="gap:8px;flex-wrap:wrap;">
           <span class="pill {% if not sms_consent_is_certified(lead.sms_consent_status) %}warn{% endif %}">{{ sms_consent_label(lead.sms_consent_status) }}</span>
           {% if lead.sms_sending_blocked %}<span class="pill danger">SMS Blocked</span>{% else %}<span class="pill">SMS Enabled</span>{% endif %}
-          {% if lead.external_source_id or (lead.source or '').startswith('external:') %}
+          {% if show_external_source_badge(lead) %}
           <span class="pill">External source</span>
           {% endif %}
           {% if lead.pond_status %}<span class="pill">Pond: {{ lead.pond_status }}</span>{% endif %}

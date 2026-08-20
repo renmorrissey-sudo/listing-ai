@@ -384,7 +384,8 @@ def test_widget_live_controls_and_no_secrets(app_client, two_users):
     assert "OpenAI authentication failed." in html
     assert "OpenAI API quota is unavailable." in html
     assert "Could not establish the realtime audio connection." in html
-    assert "live.realtime.close" in html
+    assert "cleanupLiveSession" in html
+    assert "session.close" in html
     assert "OPENAI_API_KEY" not in html
     assert "ANTHROPIC_API_KEY" not in html
     assert ">Send<" in html

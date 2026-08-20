@@ -249,8 +249,10 @@ def test_widget_uses_sdk_connect_and_clean_disconnect(app_client, two_users):
     _login(app_client, u1)
     html = app_client.get("/crm/leads").get_data(as_text=True)
     assert "AskTopAIRealtime.connect" in html
-    assert "live.realtime.close" in html
+    assert "cleanupLiveSession" in html
+    assert "session.close" in html
     assert "endLive(!!live.sessionId)" in html
+    assert "cleanupLiveSession({ notify: true, closePanel: true })" in html
     assert "Microphone access is blocked." in html
     assert "Could not establish the realtime audio connection." in html
     assert "setRemoteDescription" not in html

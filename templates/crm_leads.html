@@ -145,7 +145,8 @@
               <span>{{ lead.phone_number }}</span>
               {% if lead.email %}<span>{{ lead.email }}</span>{% endif %}
               <span>{{ lead.message_count or 0 }} message{% if lead.message_count != 1 %}s{% endif %}</span>
-              {% if lead.source %}<span>{{ lead.source }}</span>{% endif %}
+              {% set shown_source = public_lead_source(lead.source) %}
+              {% if shown_source %}<span>{{ shown_source }}</span>{% endif %}
               {% if lead.updated_at %}<span>Last activity {{ lead.updated_at[:10] }}</span>{% endif %}
             </div>
             {% if lead.next_action %}
