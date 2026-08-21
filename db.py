@@ -1340,16 +1340,42 @@ def create_inbound_sms_message(
 
 
 def set_lead_consent(lead_id, user_id, consent_status="confirmed"):
+    """Record legacy consent_status and keep sms_consent_status in sync."""
+    from db_backend import bind_bool
+
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
-        conn.execute(
-            """
-            UPDATE leads
-            SET consent_status = ?, updated_at = ?
-            WHERE id = ? AND user_id = ?
-            """,
-            (consent_status, now, lead_id, user_id),
-        )
+        if (consent_status or "").strip().lower() == "confirmed":
+            conn.execute(
+                """
+                UPDATE leads
+                SET consent_status = ?,
+                    sms_consent_status = CASE
+                        WHEN COALESCE(opt_out_status, 'active') = 'opted_out'
+                             OR sms_consent_status = 'opted_out'
+                        THEN sms_consent_status
+                        ELSE 'user_certified'
+                    END,
+                    sms_sending_blocked = CASE
+                        WHEN COALESCE(opt_out_status, 'active') = 'opted_out'
+                             OR sms_consent_status = 'opted_out'
+                        THEN sms_sending_blocked
+                        ELSE ?
+                    END,
+                    updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (consent_status, bind_bool(False), now, lead_id, user_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE leads
+                SET consent_status = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (consent_status, now, lead_id, user_id),
+            )
 
 
 def create_sms_consent_inquiry(

@@ -24,7 +24,7 @@ def _lead(user_id, name="Pipe Lead", status="new", **extra):
         crm_db.set_lead_status(user_id, lead_id, status)
     if extra.get("sms_consent_status") or extra.get("sms_sending_blocked") is not None or extra.get(
         "opt_out_status"
-    ):
+    ) or extra.get("consent_status"):
         with db.get_db() as conn:
             fields = []
             params = []
@@ -37,6 +37,9 @@ def _lead(user_id, name="Pipe Lead", status="new", **extra):
             if extra.get("opt_out_status"):
                 fields.append("opt_out_status = ?")
                 params.append(extra["opt_out_status"])
+            if extra.get("consent_status"):
+                fields.append("consent_status = ?")
+                params.append(extra["consent_status"])
             if extra.get("external_source_id") is not None:
                 fields.append("external_source_id = ?")
                 params.append(extra["external_source_id"])
@@ -276,6 +279,13 @@ def test_consent_and_sms_filters_match_dashboard_counts(app_client, two_users):
         sms_consent_status="user_certified",
         sms_sending_blocked=False,
     )
+    _lead(
+        u1,
+        name="Legacy Confirmed",
+        sms_consent_status="not_certified",
+        sms_sending_blocked=False,
+        consent_status="confirmed",
+    )
     _lead(u1, name="Opted Consent", sms_consent_status="opted_out")
     _lead(u1, name="Opted Flag", opt_out_status="opted_out", sms_consent_status="unverified")
     _lead(
@@ -316,9 +326,11 @@ def test_consent_and_sms_filters_match_dashboard_counts(app_client, two_users):
     assert "User Certified" not in unverified_names
     assert "User Certified" in verified_names
     assert "Verified" in verified_names
+    assert "Legacy Confirmed" in verified_names
     assert "Not Certified" not in verified_names
+    assert "Legacy Confirmed" not in unverified_names
     assert metrics["unverified_consent"] == len(unverified_names)
-    assert metrics["verified_consent"] == 2
+    assert metrics["verified_consent"] == 3
     _login(app_client, u1)
 
     cases = [
@@ -354,6 +366,11 @@ def test_consent_and_sms_filters_match_dashboard_counts(app_client, two_users):
         assert "Clear filters" in html
         assert "Other Verified" not in html
         assert fragment in html or fragment.lower() in html.lower()
+        if "consent=verified" in path:
+            assert "Legacy Confirmed" in html
+            assert "User Certified" in html
+            assert "Consent: Verified" in html
+            assert "Not Certified" not in html
 
 
 def test_needs_attention_count_matches_destination(app_client, two_users):

@@ -25,6 +25,7 @@ from crm_constants import (
     cancel_reason_label,
     outcome_label,
     normalize_lead_status,
+    sms_consent_filter_label,
     sms_consent_is_certified,
     sms_consent_label,
     status_label,
@@ -440,8 +441,11 @@ def crm_leads_page():
     if source:
         active_filter = (active_filter + f" · Source: {source}") if active_filter else f"Source: {source}"
     if sms_consent:
+        consent_label = sms_consent_filter_label(sms_consent)
         active_filter = (
-            (active_filter + f" · Consent: {sms_consent}") if active_filter else f"Consent: {sms_consent}"
+            (active_filter + f" · Consent: {consent_label}")
+            if active_filter
+            else f"Consent: {consent_label}"
         )
     if external:
         active_filter = (active_filter + " · External") if active_filter else "External leads"

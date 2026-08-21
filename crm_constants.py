@@ -329,6 +329,18 @@ def sms_consent_filter_statuses(sms_consent_status):
     return (key,)
 
 
+def sms_consent_filter_label(sms_consent_status):
+    """Banner label for a `/crm/leads?consent=` filter value."""
+    key = (sms_consent_status or "").strip().lower()
+    if key in SMS_CONSENT_CERTIFIED_STATUSES:
+        return "Verified"
+    if key in SMS_CONSENT_UNVERIFIED_STATUSES:
+        return "Unverified"
+    if key in SMS_CONSENT_STATUS_LABELS:
+        return SMS_CONSENT_STATUS_LABELS[key]
+    return key.replace("_", " ").title() if key else ""
+
+
 def sms_consent_label(sms_consent_status):
     """Human-friendly SMS consent status label — never mislabels certified consent as Unverified."""
     key = (sms_consent_status or "").strip().lower()

@@ -23,6 +23,8 @@ from crm_constants import (
     cancel_reason_label,
     normalize_lead_status,
     outcome_label,
+    SMS_CONSENT_CERTIFIED_STATUSES,
+    SMS_CONSENT_UNVERIFIED_STATUSES,
     sms_consent_filter_statuses,
     status_label,
 )
@@ -2849,11 +2851,30 @@ def filter_leads(
             else:
                 # Unverified/Verified dashboard cards use legacy query values;
                 # stored rows may be not_certified / user_certified after migration 012.
+                # Successful outbound SMS also sets legacy consent_status=confirmed
+                # without always renaming sms_consent_status to user_certified.
                 consent_values = sms_consent_filter_statuses(sms_consent_status)
                 if consent_values:
                     placeholders = ", ".join("?" for _ in consent_values)
-                    sql += f" AND l.sms_consent_status IN ({placeholders})"
-                    params.extend(consent_values)
+                    key = str(sms_consent_status or "").strip().lower()
+                    if key in SMS_CONSENT_CERTIFIED_STATUSES:
+                        sql += (
+                            f" AND (l.sms_consent_status IN ({placeholders})"
+                            " OR ("
+                            "LOWER(COALESCE(l.consent_status, '')) = 'confirmed'"
+                            " AND COALESCE(l.opt_out_status, 'active') != 'opted_out'"
+                            " AND COALESCE(l.sms_consent_status, '') NOT IN "
+                            "('opted_out', 'revoked', 'not_permitted', 'suppressed')"
+                            "))"
+                        )
+                        params.extend(consent_values)
+                    elif key in SMS_CONSENT_UNVERIFIED_STATUSES:
+                        sql += f" AND l.sms_consent_status IN ({placeholders})"
+                        sql += " AND LOWER(COALESCE(l.consent_status, '')) != 'confirmed'"
+                        params.extend(consent_values)
+                    else:
+                        sql += f" AND l.sms_consent_status IN ({placeholders})"
+                        params.extend(consent_values)
         if sms_sending_blocked is not None:
             from db_backend import sql_is_true
 
