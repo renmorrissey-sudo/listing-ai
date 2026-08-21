@@ -1456,6 +1456,7 @@ def sms_inbox():
         if not isinstance(raw, dict):
             raw = {}
         items.append({
+            "kind": "escalation",
             "id": item["id"],
             "lead_id": item["lead_id"],
             "lead_name": item.get("lead_name"),
@@ -1469,20 +1470,15 @@ def sms_inbox():
             "suggested_reply": item.get("suggested_reply") or raw.get("draft_reply"),
             "home_value_pitch": item.get("home_value_pitch") or raw.get("home_value_pitch"),
             "confidence_score": item.get("confidence_score") if item.get("confidence_score") is not None else raw.get("confidence"),
-            "requires_manual_review": bool(item.get("requires_manual_review")),
+            "requires_manual_review": True,
             "escalation_topics": [
                 t for t in str(item.get("escalation_topics") or "").split(",") if t
             ],
             "suggested_message_id": item.get("suggested_message_id"),
             "created_at": item.get("created_at"),
-            "suggested_lead_status": raw.get("suggested_lead_status") or "",
-            "suggested_lead_status_label": status_label(raw.get("suggested_lead_status")) if raw.get("suggested_lead_status") else "",
-            "suggested_follow_up_at": raw.get("suggested_follow_up_at"),
-            "suggested_follow_up_reason": raw.get("suggested_follow_up_reason") or "",
-            "suggested_tasks": raw.get("suggested_tasks") or [],
-            "appointment_requested": bool(raw.get("appointment_requested")),
-            "appointment_details": raw.get("appointment_details"),
         })
+    for row in crm_db.list_recent_ai_sms_activity(user["id"], limit=15):
+        items.append(row)
     return jsonify({
         "coach_configured": sms_coach.is_configured(),
         "items": items,
@@ -1510,7 +1506,7 @@ def dismiss_sms_suggestion(insight_id):
 @auth.subscription_required
 @limiter.limit(lambda: f"{config.SMS_DAILY_LIMIT} per day", key_func=_user_rate_limit_key)
 def send_sms_suggestion(insight_id):
-    """Agent-approved send of a Claude-suggested reply. Never auto-sends."""
+    """Escalated AI reply that still requires an agent send. Routine replies auto-send."""
     user = auth.get_current_user()
     data = request.get_json(silent=True) or {}
     if not data.get("compliance_confirmed"):

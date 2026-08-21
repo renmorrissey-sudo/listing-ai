@@ -30,11 +30,12 @@ def test_validate_coach_response_phase2_schema():
     assert len(result["suggested_tasks"]) == 1
 
 
-def test_validate_coach_low_confidence_requires_review():
+def test_validate_coach_low_confidence_does_not_require_review():
     result = validate_coach_response(
         '{"summary":"unclear","intent":"unknown","draft_reply":"Thanks","confidence":0.2}'
     )
-    assert result["requires_manual_review"] is True
+    assert result["requires_manual_review"] is False
+    assert result["draft_reply"] == "Thanks"
 
 
 def test_validate_coach_maps_legacy_status():

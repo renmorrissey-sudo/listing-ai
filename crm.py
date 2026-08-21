@@ -555,7 +555,7 @@ def crm_needs_attention_page():
     items = []
     if item_type in {"draft_reply", "draft", "drafts"}:
         drafts = crm_db.list_pending_draft_insights(user["id"])
-        active_filter = "Drafts awaiting approval"
+        active_filter = "Escalated SMS replies"
         result_count = len(drafts)
     else:
         items = crm_db.list_needs_attention(user["id"], local_date=local_date)

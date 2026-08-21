@@ -1,38 +1,17 @@
-"""Ask TopAI action confirmation policy.
+"""Ask TopAI action policy.
 
-CRM tools stay model-independent. This module decides whether a tool may run
-from clear spoken/typed intent, or must wait for an extra confirmation turn.
+Routine CRM/calendar tools auto-execute from clear spoken/typed intent.
+Destructive, financial, and outbound-message tools stay blocked.
 """
 
 from __future__ import annotations
 
+import autonomy
 from ask_topai import registry
 
-# Low-risk internal CRM writes: clear intent is enough during Live Conversation
-# and on typed Send. No extra Confirm button.
 AUTO_EXECUTE_TOOLS = registry.WRITE_TOOLS
 
-# Higher-impact tools are not enabled yet. When they are registered, the first
-# request must only propose the action; a second explicit confirmation
-# ("Yes, send them") is required before execute.
-SPOKEN_CONFIRMATION_TOOLS = frozenset(
-    {
-        "send_email",
-        "draft_email",
-        "send_sms",
-        "draft_sms",
-        "send_listings",
-        "schedule_appointment",
-        "initiate_ai_call",
-        "place_call",
-        "start_call",
-        "delete_lead",
-        "delete_records",
-        "bulk_action",
-        "change_consent",
-        "change_sms_qualification",
-    }
-)
+SPOKEN_CONFIRMATION_TOOLS = autonomy.BLOCK_TOOLS
 
 MODE_AUTO = "auto"
 MODE_SPOKEN_CONFIRMATION = "spoken_confirmation"
@@ -41,7 +20,8 @@ MODE_FORBIDDEN = "forbidden"
 
 def confirmation_mode(tool_name: str) -> str:
     name = (tool_name or "").strip()
-    if registry.is_read_tool(name) or name in AUTO_EXECUTE_TOOLS:
+    mode = autonomy.tool_mode(name)
+    if mode == autonomy.MODE_AUTO:
         return MODE_AUTO
     if name in SPOKEN_CONFIRMATION_TOOLS or registry.is_future_tool(name):
         return MODE_SPOKEN_CONFIRMATION

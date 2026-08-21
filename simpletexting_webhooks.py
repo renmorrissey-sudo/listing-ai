@@ -108,14 +108,15 @@ def handle_inbound(payload: dict, *, app=None):
         "Inbound SMS received",
         {"message_id": message_id, "provider": "simpletexting"},
     )
-    crm_db.upsert_needs_attention(
-        user_id,
-        lead_id,
-        "unreviewed_inbound",
-        priority="high",
-        source_ref_type="sms",
-        source_ref_id=message_id,
-    )
+    if keyword in {"opt_in", "help"}:
+        crm_db.upsert_needs_attention(
+            user_id,
+            lead_id,
+            "unreviewed_inbound",
+            priority="high",
+            source_ref_type="sms",
+            source_ref_id=message_id,
+        )
 
     if keyword == "opt_out":
         _apply_opt_out(user_id, lead_id, contact, source="simpletexting_inbound")
@@ -132,9 +133,16 @@ def handle_inbound(payload: dict, *, app=None):
     # Defer coach like Twilio path
     if keyword is None and app is not None:
         try:
-            from sms_inbound import _schedule_coach
+            from sms_ai_agent import schedule_inbound_ai
 
-            _schedule_coach(app, user_id, lead_id, message_id, text)
+            schedule_inbound_ai(
+                app,
+                user_id,
+                lead_id,
+                message_id,
+                text,
+                _normalize_phone(sender.get("sender_number")) or event.get("account_phone"),
+            )
         except Exception:
             logger.exception("Failed to schedule coach for ST inbound")
 

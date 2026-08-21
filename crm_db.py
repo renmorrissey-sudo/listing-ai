@@ -1269,8 +1269,32 @@ def create_task(user_id, data):
                 "SELECT id FROM leads WHERE id = ? AND user_id = ?",
                 (lead_id, user_id),
             ).fetchone()
-            if not lead:
-                return None, "Lead not found."
+        if not lead:
+            return None, "Lead not found."
+    title_key = title.strip().lower()
+    with get_db() as conn:
+        if lead_id:
+            existing = conn.execute(
+                """
+                SELECT * FROM tasks
+                WHERE user_id = ? AND lead_id = ? AND LOWER(title) = ?
+                  AND status IN ('open', 'in_progress')
+                ORDER BY id DESC LIMIT 1
+                """,
+                (user_id, lead_id, title_key),
+            ).fetchone()
+        else:
+            existing = conn.execute(
+                """
+                SELECT * FROM tasks
+                WHERE user_id = ? AND lead_id IS NULL AND LOWER(title) = ?
+                  AND status IN ('open', 'in_progress')
+                ORDER BY id DESC LIMIT 1
+                """,
+                (user_id, title_key),
+            ).fetchone()
+        if existing:
+            return existing["id"], None
     with get_db() as conn:
         cur = conn.execute(
             """
@@ -1578,6 +1602,54 @@ def create_appointment(user_id, data):
         lead_id=lead_id,
     )
     return appt_id, None
+
+
+def get_appointment(user_id, appointment_id):
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT a.*, l.name AS lead_name
+            FROM appointments a
+            JOIN leads l ON l.id = a.lead_id
+            WHERE a.id = ? AND a.user_id = ?
+            """,
+            (appointment_id, user_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def update_appointment(user_id, appointment_id, data):
+    existing = get_appointment(user_id, appointment_id)
+    if not existing:
+        return None, "Appointment not found."
+    now = _now()
+    start_at = data.get("start_at") or existing.get("start_at")
+    end_at = data.get("end_at") if data.get("end_at") is not None else existing.get("end_at")
+    status = data.get("status") if data.get("status") in APPOINTMENT_STATUSES else existing.get("status")
+    notes = data.get("notes") if data.get("notes") is not None else existing.get("notes")
+    location = data.get("location") if data.get("location") is not None else existing.get("location")
+    previous_start = existing.get("start_at")
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE appointments
+            SET start_at = ?, end_at = ?, status = ?, notes = ?, location = ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (start_at, end_at, status, notes, location, now, appointment_id, user_id),
+        )
+    add_lead_activity(
+        existing["lead_id"],
+        user_id,
+        "appointment_rescheduled",
+        "Appointment rescheduled",
+        {
+            "appointment_id": appointment_id,
+            "previous_start_at": previous_start,
+            "start_at": start_at,
+        },
+    )
+    return get_appointment(user_id, appointment_id), None
 
 
 def preview_appointment_outcome(user_id, appointment_id, outcome, next_action=""):
@@ -2319,24 +2391,24 @@ def mark_notification_read(user_id, notification_id):
         )
 
 
-def apply_coach_queue_flags(user_id, lead_id, analysis, insight_id=None):
-    """Create Needs Attention items from Claude analysis without applying changes."""
+def apply_coach_queue_flags(user_id, lead_id, analysis, insight_id=None, *, auto_handled=False):
+    """Create Needs Attention items only when TopAI cannot complete the work."""
+    if auto_handled:
+        resolve_needs_attention_by_reason(user_id, lead_id, "unreviewed_inbound", "Handled automatically by TopAI")
+        resolve_needs_attention_by_reason(user_id, lead_id, "draft_awaiting_approval", "Handled automatically by TopAI")
+        resolve_needs_attention_by_reason(user_id, lead_id, "appointment_requested", "Handled automatically by TopAI")
+        return
     if analysis.get("requires_manual_review") or analysis.get("sensitive_topic"):
         upsert_needs_attention(user_id, lead_id, "sensitive_topic", priority="urgent", source_ref_type="insight", source_ref_id=insight_id)
-    confidence = float(analysis.get("confidence_score") or analysis.get("confidence") or 1)
-    if confidence < CONFIDENCE_THRESHOLD:
-        upsert_needs_attention(user_id, lead_id, "low_confidence", priority="normal", source_ref_type="insight", source_ref_id=insight_id)
     if analysis.get("draft_reply") or analysis.get("suggested_reply"):
-        upsert_needs_attention(user_id, lead_id, "draft_awaiting_approval", priority="high", source_ref_type="insight", source_ref_id=insight_id)
-    upsert_needs_attention(user_id, lead_id, "unreviewed_inbound", priority="high", source_ref_type="insight", source_ref_id=insight_id)
+        if analysis.get("requires_manual_review") or analysis.get("sensitive_topic"):
+            upsert_needs_attention(user_id, lead_id, "draft_awaiting_approval", priority="high", source_ref_type="insight", source_ref_id=insight_id)
     intent = str(analysis.get("intent") or "").lower()
     if any(k in intent for k in ("buy", "sell", "ready", "list", "offer")):
         upsert_needs_attention(user_id, lead_id, "high_intent", priority="high", source_ref_type="insight", source_ref_id=insight_id)
-    if analysis.get("appointment_requested"):
-        upsert_needs_attention(user_id, lead_id, "appointment_requested", priority="high", source_ref_type="insight", source_ref_id=insight_id)
     for reason in analysis.get("needs_attention_reasons") or []:
         code = str(reason).strip().lower().replace(" ", "_")
-        if code in NEEDS_ATTENTION_REASONS:
+        if code in NEEDS_ATTENTION_REASONS and code not in {"unreviewed_inbound", "draft_awaiting_approval", "appointment_requested", "low_confidence"}:
             upsert_needs_attention(user_id, lead_id, code, priority="high", source_ref_type="insight", source_ref_id=insight_id)
 
 
@@ -2454,7 +2526,10 @@ def get_pipeline_metrics(
         "tasks_due_today": count_tasks_due_today(user_id, local_date=day),
         "appointments_today": count_appointments_today(user_id, local_date=day),
         "unreviewed_inbound": unreviewed,
-        "drafts_awaiting_approval": count_pending_draft_insights(user_id),
+        "ai_actions_completed": count_ai_actions_completed(
+            user_id, since_iso=windows.start_today_utc.isoformat()
+        ),
+        "drafts_awaiting_approval": 0,
         "appointments_this_week": appts_week,
         "outcomes_this_month": outcomes_month,
         "sms_delivery_success_rate": round((sent / delivery_total) * 100, 1)
@@ -2948,6 +3023,7 @@ def list_pending_draft_insights(user_id, limit=100):
             FROM lead_insights i
             LEFT JOIN leads l ON l.id = i.lead_id
             WHERE i.user_id = ? AND i.status = 'pending'
+              AND COALESCE(i.requires_manual_review, 0) = 1
             ORDER BY i.created_at DESC
             LIMIT ?
             """,
@@ -2956,15 +3032,87 @@ def list_pending_draft_insights(user_id, limit=100):
         return [dict(r) for r in rows]
 
 
+def list_recent_ai_sms_activity(user_id, limit=15):
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT a.*, l.name AS lead_name, l.phone_number, l.status AS lead_status
+            FROM lead_activities a
+            JOIN leads l ON l.id = a.lead_id
+            WHERE a.user_id = ? AND a.event_type IN ('sms_ai_reply', 'appointment_scheduled', 'appointment_rescheduled')
+            ORDER BY a.created_at DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+    items = []
+    for row in rows:
+        payload = {}
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+        items.append(
+            {
+                "kind": "activity",
+                "id": f"act-{row['id']}",
+                "lead_id": row["lead_id"],
+                "lead_name": row["lead_name"],
+                "phone_number": row["phone_number"],
+                "lead_status": row["lead_status"],
+                "summary": row["summary"],
+                "created_at": row["created_at"],
+                "requires_manual_review": False,
+                "message_id": payload.get("message_id"),
+                "appointment_id": payload.get("appointment_id"),
+            }
+        )
+    return items
+
+
 def count_pending_draft_insights(user_id):
     with get_db() as conn:
         return conn.execute(
             """
             SELECT COUNT(*) AS count FROM lead_insights
-            WHERE user_id = ? AND status = 'pending'
+            WHERE user_id = ? AND status = 'pending' AND COALESCE(requires_manual_review, 0) = 1
             """,
             (user_id,),
         ).fetchone()["count"]
+
+
+def count_ai_actions_completed(user_id, since_iso=None):
+    """Autonomous mutations visible after the fact (not a review queue)."""
+    since = since_iso or "1970-01-01"
+    with get_db() as conn:
+        activities = conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM lead_activities
+            WHERE user_id = ? AND created_at >= ?
+              AND event_type IN (
+                    'sms_ai_reply',
+                    'ask_topai_command',
+                    'appointment_scheduled',
+                    'appointment_rescheduled',
+                    'note_added',
+                    'task_created'
+              )
+            """,
+            (user_id, since),
+        ).fetchone()["count"]
+        commands = 0
+        try:
+            commands = conn.execute(
+                """
+                SELECT COUNT(*) AS count FROM ask_topai_commands
+                WHERE user_id = ? AND created_at >= ?
+                  AND status IN ('executed', 'partial')
+                """,
+                (user_id, since),
+            ).fetchone()["count"]
+        except Exception:
+            commands = 0
+    return int(activities or 0) + int(commands or 0)
 
 
 def count_open_needs_attention(user_id, local_date=None):

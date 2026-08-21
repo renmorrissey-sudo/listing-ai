@@ -112,7 +112,7 @@
       <div class="metrics-row">
         {{ pipeline_metric('Active leads', pipeline.active_leads, '/crm/leads?active=1', 'View ' ~ pipeline.active_leads ~ ' active leads') }}
         {{ pipeline_metric('Needs attention', pipeline.needs_attention, '/crm/needs-attention?status=open' ~ (date_qs|default('')), 'View ' ~ pipeline.needs_attention ~ ' leads needing attention') }}
-        {{ pipeline_metric('Drafts awaiting', pipeline.drafts_awaiting_approval, '/crm/needs-attention?type=draft_reply&status=open', 'View ' ~ pipeline.drafts_awaiting_approval ~ ' drafts awaiting approval') }}
+        {{ pipeline_metric('AI actions completed', pipeline.ai_actions_completed|default(0), '/crm/leads', 'View ' ~ (pipeline.ai_actions_completed|default(0)) ~ ' AI actions completed today') }}
       </div>
       <div class="metrics-row" style="margin-top:10px;">
         {{ pipeline_metric('Follow-ups due today', pipeline.follow_ups_due_today, '/crm/follow-ups?due=today' ~ (date_qs|default('')), 'View ' ~ pipeline.follow_ups_due_today ~ ' follow-ups due today') }}

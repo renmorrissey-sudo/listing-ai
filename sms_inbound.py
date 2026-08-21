@@ -109,8 +109,8 @@ def parse_inbound_form(form) -> dict:
 
 def process_inbound_sms(payload: dict, *, defer_coach: bool = True, app=None) -> dict:
     """
-    Persist inbound SMS and enqueue Claude coaching.
-    Never sends an outbound SMS. Returns a small result dict for logging/tests.
+    Persist inbound SMS and enqueue autonomous AI analysis/reply.
+    Opt-out and compliance still block sending. Returns a small result dict.
     """
     result = {
         "ok": False,
@@ -299,14 +299,6 @@ def process_inbound_sms(payload: dict, *, defer_coach: bool = True, app=None) ->
                 "num_media": num_media,
             },
         )
-        crm_db.upsert_needs_attention(
-            owner_id,
-            lead_id,
-            "unreviewed_inbound",
-            priority="high",
-            source_ref_type="sms",
-            source_ref_id=inbound_id,
-        )
         logger.info(
             "Inbound SMS processed sid=%s tenant=%s lead=%s keyword=none",
             message_sid,
@@ -314,41 +306,58 @@ def process_inbound_sms(payload: dict, *, defer_coach: bool = True, app=None) ->
             lead_id,
         )
 
-    # Claude analysis is deferred so Twilio gets a fast empty TwiML ack.
-    # Never auto-sends outbound SMS from this path.
+    # Claude analysis + autonomous reply are deferred so Twilio gets a fast ack.
     opted_out_flag = keyword == "opt_out"
     if defer_coach:
         _schedule_coach(
-            app, owner_id, lead_id, inbound_id, store_body, opted_out=opted_out_flag
+            app,
+            owner_id,
+            lead_id,
+            inbound_id,
+            store_body,
+            opted_out=opted_out_flag,
+            receiving_number=to_number,
+        )
+    elif opted_out_flag:
+        analyze_inbound_and_coach(
+            owner_id, lead_id, inbound_id, store_body, opted_out=True
         )
     else:
-        analyze_inbound_and_coach(
-            owner_id, lead_id, inbound_id, store_body, opted_out=opted_out_flag
-        )
+        from sms_ai_agent import process_inbound_ai
+
+        process_inbound_ai(owner_id, lead_id, inbound_id, store_body, to_number)
 
     return result
 
 
-def _schedule_coach(app, user_id, lead_id, inbound_id, body, opted_out=False):
+def _schedule_coach(app, user_id, lead_id, inbound_id, body, opted_out=False, receiving_number=None):
     def run():
         try:
-            if app is not None:
-                with app.app_context():
+            if opted_out:
+                if app is not None:
+                    with app.app_context():
+                        analyze_inbound_and_coach(
+                            user_id, lead_id, inbound_id, body, opted_out=True
+                        )
+                else:
                     analyze_inbound_and_coach(
-                        user_id, lead_id, inbound_id, body, opted_out=opted_out
+                        user_id, lead_id, inbound_id, body, opted_out=True
                     )
+                return
+            from sms_ai_agent import process_inbound_ai, schedule_inbound_ai
+
+            if app is not None:
+                schedule_inbound_ai(app, user_id, lead_id, inbound_id, body, receiving_number)
             else:
-                analyze_inbound_and_coach(
-                    user_id, lead_id, inbound_id, body, opted_out=opted_out
-                )
+                process_inbound_ai(user_id, lead_id, inbound_id, body, receiving_number)
         except Exception:
             logger.exception(
-                "Deferred inbound coach failed inbound_id=%s lead_id=%s",
+                "Deferred inbound AI failed inbound_id=%s lead_id=%s",
                 inbound_id,
                 lead_id,
             )
 
-    threading.Thread(target=run, name=f"sms-coach-{inbound_id}", daemon=True).start()
+    threading.Thread(target=run, name=f"sms-ai-{inbound_id}", daemon=True).start()
 
 
 def _ensure_sms_follow_up(user_id, lead_id, analysis):
@@ -387,9 +396,8 @@ def _ensure_sms_follow_up(user_id, lead_id, analysis):
 
 def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_out=False):
     """
-    Claude coaching. Stores recommendations + a draft reply — never sends anything
-    itself. Returns {"analysis", "insight_id", "suggested_id", "error"} so callers
-    (e.g. the Telnyx AI auto-reply path) can reuse the single Claude call.
+    Claude analysis of an inbound SMS. Stores insight + CRM captures.
+    Routine replies are auto-executed by sms_ai_agent; this function does not send.
     """
     result = {"analysis": None, "insight_id": None, "suggested_id": None, "error": None}
     lead = db.get_lead(lead_id, user_id)
@@ -484,16 +492,9 @@ def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_
         result["error"] = "coach_failed"
         return result
 
-    note_bits = [
-        analysis.get("summary"),
-        analysis.get("intent"),
-        analysis.get("recommended_next_action") or analysis.get("next_best_step"),
-    ]
-    notes = " | ".join(bit for bit in note_bits if bit)[:1500] or None
     db.update_lead_from_analysis(
         lead_id,
         user_id,
-        notes=notes,
         next_action=analysis.get("recommended_next_action")
         or analysis.get("recommended_action")
         or analysis.get("next_best_step"),
@@ -501,9 +502,14 @@ def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_
     )
     _ensure_sms_follow_up(user_id, lead_id, analysis)
 
+    import autonomy
+
+    autonomy.apply_inbound_side_effects(user_id, lead_id, analysis, source="ai_sms")
+
+    auto_send = autonomy.should_auto_send_sms(analysis, lead)
     suggested_id = None
     draft = analysis.get("draft_reply") or analysis.get("suggested_reply")
-    if draft:
+    if draft and not auto_send:
         suggested_id = db.create_sms_message(
             user_id=user_id,
             persona_id=None,
@@ -514,7 +520,7 @@ def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_
                 "lead_type": lead.get("lead_type"),
                 "property_interest": lead.get("property_interest"),
                 "message_body": draft,
-                "notes": "Claude suggested reply pending agent approval",
+                "notes": "Escalated AI reply — agent follow-up required",
             },
             status="suggested",
             lead_id=lead_id,
@@ -523,6 +529,7 @@ def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_
             opt_out_status=lead.get("opt_out_status") or "active",
         )
 
+    insight_status = "processed" if auto_send else "pending"
     insight_id = db.create_lead_insight(
         lead_id,
         user_id,
@@ -530,21 +537,26 @@ def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_
         analysis,
         suggested_message_id=suggested_id,
         model=config.CLAUDE_MODEL,
+        status=insight_status,
     )
     crm_db.add_lead_activity(
         lead_id,
         user_id,
         "insight_created",
-        "Claude coaching recommendation ready for review",
+        "AI SMS analyzed inbound message",
         {
             "insight_id": insight_id,
             "suggested_lead_status": analysis.get("suggested_lead_status"),
             "confidence": analysis.get("confidence_score") or analysis.get("confidence"),
+            "auto_execute": auto_send,
         },
     )
-    crm_db.apply_coach_queue_flags(user_id, lead_id, analysis, insight_id=insight_id)
+    crm_db.apply_coach_queue_flags(
+        user_id, lead_id, analysis, insight_id=insight_id, auto_handled=auto_send
+    )
     db.record_tool_usage(user_id, "ai_sms", "inbound_analyzed")
     result["analysis"] = analysis
     result["insight_id"] = insight_id
     result["suggested_id"] = suggested_id
+    result["auto_execute"] = auto_send
     return result

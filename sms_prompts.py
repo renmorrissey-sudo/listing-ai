@@ -6,33 +6,38 @@ def build_inbound_reply_analysis_prompt(lead, conversation, inbound_text):
         history_lines.append(f"{who}: {msg.get('message_body') or ''}")
     history = "\n".join(history_lines) if history_lines else "(no prior messages)"
 
-    return f"""Analyze this real estate lead SMS reply for the agent.
+    return f"""Analyze this real estate lead SMS reply and produce the next autonomous action.
 
 Return ONLY JSON with these keys:
 - summary: concise summary of the lead's message
 - intent: inferred intent in a short phrase
-- recommended_next_action: concrete next action for the agent
-- draft_reply: one SMS draft for agent approval (under 420 chars). If escalation is required, draft a brief acknowledgment that the agent will follow up personally.
+- recommended_next_action: concrete next action TopAI should take or already took
+- draft_reply: one SMS reply TopAI will send automatically (under 420 chars). If escalation is required, draft a brief acknowledgment that the agent will follow up personally.
 - confidence: number from 0 to 1
 - sensitive_topic: true if legal/financing/negotiation/fair housing/complaint/uncertain facts apply
-- suggested_lead_status: one of new, attempting_contact, contacted, qualified, appointment_scheduled, appointment_completed, nurture, under_contract, closed_won, closed_lost, do_not_contact (suggestion only — never applied automatically)
+- suggested_lead_status: one of new, attempting_contact, contacted, qualified, appointment_scheduled, nurture (never closed_won, closed_lost, or do_not_contact unless the lead opted out)
 - suggested_follow_up_at: ISO-8601 UTC datetime string or null
 - suggested_follow_up_reason: short reason for the follow-up
-- suggested_tasks: array of up to 5 objects {{title, task_type, due_at}} (suggestions only)
-- appointment_requested: true if the lead asked to meet/call/show
-- appointment_details: object with type/time hints or null
-- needs_attention_reasons: array of reason codes if the agent should review urgently
+- suggested_tasks: array of up to 5 objects {{title, task_type, due_at}}
+- appointment_requested: true if the lead asked to meet/call/show or accepted a time
+- appointment_details: object with day/time/window/type hints (example: {{"day":"wednesday","time":"15:00","window":"afternoon"}}) or null
+- captured_note: useful CRM context from the lead to save, or empty string
+- property_criteria_updates: object of fields the lead clearly changed (price_min, price_max, bedrooms, bathrooms, city, neighborhood, property_type) or empty object
+- needs_attention_reasons: array of reason codes only if a human must handle an exception
 - home_value_pitch: optional SMS pitching a home-value / seller consultation if relevant, else empty string
 - escalation_topics: array subset of [legal, financing, negotiation, fair_housing, complaint, uncertain_property_fact]
-- requires_manual_review: true if any escalation topic applies, confidence is low, or the reply is ambiguous/sensitive
+- requires_manual_review: true ONLY if an escalation topic applies or the situation is sensitive
 
 RULES:
-- Do not auto-send anything; this is advice for agent approval only.
-- Do not assume status, follow-up, tasks, or appointments will be applied — agent must approve.
-- Be compliant and professional.
-- Escalate legal, financing, negotiation, fair-housing, complaint, and uncertain property-fact topics for manual handling.
-- If the lead is months away or must sell first, prefer nurture + schedule follow-up and consider a home-value pitch.
+- TopAI will send draft_reply automatically when compliance allows. Write the actual reply, not a suggestion for the agent.
+- Carry the conversation toward the lead's desired outcome (showing, call, nurture, or stop pursuing).
+- If the lead names a time, put it in appointment_details so TopAI can check the calendar and book or offer nearby times.
+- If the lead accepts an offered alternative time, set appointment_requested true and include that time.
+- If the lead is no longer interested, respond politely, set suggested_lead_status to nurture, and do not keep pitching.
+- Capture useful property/context facts in captured_note and property_criteria_updates. Do not clear unspecified criteria fields.
+- Escalate legal, financing, negotiation, fair-housing, complaint, and uncertain property-fact topics. Do not auto-negotiate legal/financial terms.
 - If they ask to stop/unsubscribe, suggest do_not_contact and leave draft_reply empty.
+- Be compliant and professional.
 
 LEAD:
 - Name: {lead.get("name") or "Lead"}

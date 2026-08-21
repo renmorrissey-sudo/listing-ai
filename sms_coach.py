@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from anthropic import Anthropic
 
 import config
-from crm_constants import CONFIDENCE_THRESHOLD, LEAD_STATUS_SET, normalize_lead_status
+from crm_constants import LEAD_STATUS_SET, normalize_lead_status
 
 ESCALATION_TOPICS = {
     "legal",
@@ -90,11 +90,12 @@ def validate_coach_response(content):
             topics.append(cleaned)
 
     sensitive = bool(data.get("sensitive_topic")) or bool(topics)
-    requires_manual = (
-        bool(data.get("requires_manual_review"))
-        or sensitive
-        or confidence < CONFIDENCE_THRESHOLD
-    )
+    requires_manual = sensitive
+
+    incoming_criteria = data.get("property_criteria_updates")
+    if incoming_criteria is not None and not isinstance(incoming_criteria, dict):
+        incoming_criteria = None
+    captured_note = str(data.get("captured_note") or "").strip()[:1500]
 
     suggested_status = data.get("suggested_lead_status") or data.get("lead_status") or ""
     suggested_status = str(suggested_status).strip().lower().replace(" ", "_")
@@ -166,6 +167,8 @@ def validate_coach_response(content):
         "appointment_requested": bool(data.get("appointment_requested")),
         "appointment_details": appointment_details,
         "needs_attention_reasons": reasons,
+        "captured_note": captured_note or None,
+        "property_criteria_updates": incoming_criteria,
         # Backward-compatible aliases used by Phase 1 persistence
         "next_best_step": recommended,
         "recommended_action": recommended,

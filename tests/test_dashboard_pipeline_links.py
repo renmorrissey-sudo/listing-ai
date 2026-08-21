@@ -124,7 +124,7 @@ def test_each_card_routes_to_correct_destination(app_client, two_users):
     expected = [
         ("/crm/leads?active=1", "active leads"),
         ("/crm/needs-attention?status=open", "needing attention"),
-        ("/crm/needs-attention?type=draft_reply&status=open", "drafts awaiting"),
+        ("/crm/leads", "AI actions completed"),
         ("/crm/follow-ups?due=today", "follow-ups due today"),
         ("/crm/follow-ups?due=overdue", "overdue follow-ups"),
         ("/crm/follow-ups?due=this-week", "follow-ups due this week"),

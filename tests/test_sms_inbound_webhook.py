@@ -106,9 +106,11 @@ def test_valid_inbound_sms(app_client, two_users):
 
     activities = crm_db.list_lead_activities(u1, lead_id)
     assert any(a["event_type"] == "sms_inbound" for a in activities)
-
     needs = crm_db.list_needs_attention(u1)
-    assert any(n["lead_id"] == lead_id for n in needs)
+    assert not any(
+        n["lead_id"] == lead_id and n.get("reason_code") == "unreviewed_inbound"
+        for n in needs
+    )
 
 
 def test_invalid_twilio_signature(app_client, two_users):
@@ -268,7 +270,7 @@ def test_tenant_isolation(app_client, two_users):
     assert db.get_lead(lead1, u2) is None
 
 
-def test_claude_draft_creation_no_auto_send(app_client, two_users):
+def test_inbound_ai_auto_sends_reply(app_client, two_users):
     u1, _ = two_users
     lead_id = _seed_lead(u1)
 
@@ -278,10 +280,18 @@ def test_claude_draft_creation_no_auto_send(app_client, two_users):
         "recommended_next_action": "Offer two times",
         "draft_reply": "Great — Sat 11am or Sun 2pm?",
         "suggested_reply": "Great — Sat 11am or Sun 2pm?",
+        "confidence": 0.9,
         "confidence_score": 0.9,
+        "sensitive_topic": False,
         "requires_manual_review": False,
         "escalation_topics": [],
         "home_value_pitch": None,
+        "suggested_lead_status": "contacted",
+        "suggested_follow_up_at": None,
+        "suggested_tasks": [],
+        "appointment_requested": False,
+        "appointment_details": None,
+        "needs_attention_reasons": [],
     }
 
     from sms_inbound import parse_inbound_form, process_inbound_sms
@@ -295,11 +305,18 @@ def test_claude_draft_creation_no_auto_send(app_client, two_users):
         "MessagingServiceSid": MSID,
     }
 
+    class _Prov:
+        def send_sms(self, *args, **kwargs):
+            return {"provider_message_id": "SM-auto-1", "status": "queued"}
+
     with patch.object(config, "TWILIO_PHONE_NUMBER", TWILIO_TO), \
          patch.object(config, "TWILIO_MESSAGING_SERVICE_SID", MSID), \
+         patch.object(config, "SMS_AI_AUTO_REPLY_ENABLED", True), \
          patch("sms_coach.is_configured", return_value=True), \
          patch("sms_coach.analyze_inbound_reply", return_value=fake_analysis) as analyze, \
-         patch("sms_provider.TwilioSmsProvider.send_sms") as send_sms:
+         patch("sms_ai_agent._auto_reply_allowed", return_value=(True, None)), \
+         patch("sms_quiet_hours.in_quiet_hours", return_value=False), \
+         patch("sms_providers.get_sms_provider", return_value=_Prov()):
         result = process_inbound_sms(
             parse_inbound_form(params),
             defer_coach=False,
@@ -307,29 +324,23 @@ def test_claude_draft_creation_no_auto_send(app_client, two_users):
         )
 
     assert result["ok"] is True
-    assert result["duplicate"] is False
     analyze.assert_called()
-    send_sms.assert_not_called()
-
     msgs = db.list_lead_messages(u1, lead_id)
     suggested = [m for m in msgs if m["status"] == "suggested" or m["direction"] == "suggested"]
-    assert any("Sat 11am" in (m["message_body"] or "") for m in suggested)
-    assert not any(
-        m["direction"] == "outbound"
-        and m["status"] in ("queued", "sent", "delivered")
-        and "Sat 11am" in (m["message_body"] or "")
-        for m in msgs
+    assert suggested == []
+    outbound = [m for m in msgs if m["direction"] == "outbound" and m.get("reply_to_message_id")]
+    assert outbound
+    assert db.list_pending_insights(u1) == [] or all(
+        i["lead_id"] != lead_id for i in db.list_pending_insights(u1)
     )
 
-    # HTTP path acknowledges without sending.
-    with patch("sms_provider.TwilioSmsProvider.send_sms") as send_sms_http:
+    with patch("sms_inbound._schedule_coach"):
         res = _post_inbound(
             app_client,
             body="Another reply",
             message_sid="SMcoach002",
         )
     assert res.status_code == 200
-    send_sms_http.assert_not_called()
 
 
 def test_legacy_inbound_path_still_works(app_client, two_users):

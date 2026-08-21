@@ -1029,7 +1029,7 @@ def list_due_follow_ups(user_id, limit=20):
         return [dict(row) for row in rows]
 
 
-def create_lead_insight(lead_id, user_id, inbound_message_id, analysis, suggested_message_id=None, model="claude"):
+def create_lead_insight(lead_id, user_id, inbound_message_id, analysis, suggested_message_id=None, model="claude", status="pending"):
     now = datetime.now(timezone.utc).isoformat()
     topics = analysis.get("escalation_topics") or []
     if isinstance(topics, list):
@@ -1043,7 +1043,7 @@ def create_lead_insight(lead_id, user_id, inbound_message_id, analysis, suggeste
                 (lead_id, user_id, inbound_message_id, suggested_message_id, summary, intent, next_best_step,
                  recommended_action, suggested_reply, home_value_pitch, confidence_score,
                  requires_manual_review, escalation_topics, model, status, raw_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 lead_id,
@@ -1060,6 +1060,7 @@ def create_lead_insight(lead_id, user_id, inbound_message_id, analysis, suggeste
                 1 if analysis.get("requires_manual_review") else 0,
                 topics_value,
                 model,
+                status or "pending",
                 analysis.get("raw_json"),
                 now,
             ),

@@ -397,7 +397,7 @@
     <div class="card">
       <h2>AI SMS Assistant</h2>
       <div class="notice">
-        AI-drafted, one-to-one SMS. Review and edit the message before it sends — nothing goes out automatically.
+        AI-generated replies send automatically when the lead is clear and SMS compliance allows. Escalations still pause for you.
       </div>
       <form id="sms-form">
         <div class="form-group"><label>Persona</label><select name="persona_id" id="sms-persona" required><option value="">Loading personas...</option></select></div>
@@ -450,10 +450,10 @@
       <p class="muted" style="font-size:12px;margin-top:14px;"><a href="/crm/sms-diagnostics" class="call-link">Troubleshoot SMS setup &amp; delivery status &rarr;</a></p>
     </div>
     <div class="card results-panel">
-      <h2>Needs your review</h2>
-      <p class="muted" style="font-size:13px;margin-bottom:10px;">Claude summarizes inbound replies and drafts responses. You must approve before Send.</p>
+      <h2>AI SMS activity</h2>
+      <p class="muted" style="font-size:13px;margin-bottom:10px;">TopAI replies automatically, then records what it did. Escalated messages still pause here.</p>
       <div class="placeholder" id="sms-inbox-placeholder">
-        <p>No inbound replies waiting<br/>for review yet.</p>
+        <p>No AI SMS activity yet.</p>
       </div>
       <div class="call-history" id="sms-inbox" style="display:none;"></div>
     </div>
@@ -856,67 +856,34 @@
         return;
       }
       inbox.innerHTML = data.items.map(item => {
-        const confidence = (typeof item.confidence_score === 'number')
-          ? `${Math.round(item.confidence_score * 100)}%`
-          : 'n/a';
+        if (item.kind === 'activity') {
+          return `<div class="call-item">
+            <strong>AI SMS — ${escapeHtml(item.summary || 'Action completed')}</strong>
+            <div class="call-meta">${escapeHtml(item.lead_name || 'Lead')} · ${escapeHtml(item.phone_number || '')} · ${escapeHtml(item.lead_status || '')}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+              <button type="button" class="billing-link" style="padding:8px 12px;" onclick="openSmsLead(${item.lead_id})">View conversation</button>
+              ${item.lead_id ? `<a class="billing-link" style="padding:8px 12px;" href="/crm/leads/${item.lead_id}">Open CRM lead</a>` : ''}
+            </div>
+          </div>`;
+        }
         const topics = (item.escalation_topics || []).join(', ');
-        const escalate = item.requires_manual_review
-          ? `<div class="call-meta" style="color:#b45309;margin-top:8px;"><strong>Manual review required</strong>${topics ? ` · ${escapeHtml(topics)}` : ''}. Edit carefully before sending.</div>`
-          : '';
-        const pitch = item.home_value_pitch
-          ? `<div class="call-meta" style="margin-top:8px;"><strong>Home-value pitch option:</strong> ${escapeHtml(item.home_value_pitch)}</div>
-             <button type="button" class="btn-generate" style="margin-top:8px;padding:8px 12px;font-size:12px;" onclick="sendSmsSuggestion(${item.id}, true, ${item.requires_manual_review ? 'true' : 'false'})">Send home-value pitch</button>`
-          : '';
-        const statusCard = item.suggested_lead_status
-          ? `<div class="call-summary" style="margin-top:10px;padding:10px;background:#f8fafc;border-radius:8px;">
-               <strong>Suggested status:</strong> ${escapeHtml(item.suggested_lead_status_label || item.suggested_lead_status)}
-               <div style="margin-top:8px;"><button type="button" class="btn-generate" style="padding:8px 12px;font-size:12px;" onclick="approveCrmSuggestion(${item.id}, 'status')">Approve status</button></div>
-             </div>`
-          : '';
-        const fuCard = item.suggested_follow_up_at
-          ? `<div class="call-summary" style="margin-top:10px;padding:10px;background:#f8fafc;border-radius:8px;">
-               <strong>Suggested follow-up:</strong> ${escapeHtml(String(item.suggested_follow_up_at).slice(0,16))} UTC
-               <div class="call-meta">${escapeHtml(item.suggested_follow_up_reason || '')}</div>
-               <div style="margin-top:8px;"><button type="button" class="btn-generate" style="padding:8px 12px;font-size:12px;" onclick="approveCrmSuggestion(${item.id}, 'follow-up')">Approve follow-up</button></div>
-             </div>`
-          : '';
-        const tasks = Array.isArray(item.suggested_tasks) ? item.suggested_tasks : [];
-        const tasksCard = tasks.length
-          ? `<div class="call-summary" style="margin-top:10px;padding:10px;background:#f8fafc;border-radius:8px;">
-               <strong>Suggested tasks:</strong>
-               <ul style="margin:6px 0 0;padding-left:18px;">${tasks.map(t => `<li>${escapeHtml((t && t.title) || t || '')}</li>`).join('')}</ul>
-               <div style="margin-top:8px;"><button type="button" class="btn-generate" style="padding:8px 12px;font-size:12px;" onclick="approveCrmSuggestion(${item.id}, 'tasks')">Approve tasks</button></div>
-             </div>`
-          : '';
-        const apptCard = item.appointment_requested
-          ? `<div class="call-summary" style="margin-top:10px;padding:10px;background:#f8fafc;border-radius:8px;">
-               <strong>Appointment requested</strong>
-               <div class="call-meta">Claude suggested scheduling — confirm time on the lead page if needed.</div>
-               <div style="margin-top:8px;"><button type="button" class="btn-generate" style="padding:8px 12px;font-size:12px;" onclick="approveCrmSuggestion(${item.id}, 'appointment')">Approve appointment</button></div>
-             </div>`
-          : '';
         return `<div class="call-item">
-          <strong>${escapeHtml(item.lead_name || 'Lead')} replied</strong>
-          <div class="call-meta">${escapeHtml(item.phone_number)} · ${escapeHtml(item.lead_status || '')} · confidence ${confidence}</div>
+          <strong>${escapeHtml(item.lead_name || 'Lead')} — paused for you</strong>
+          <div class="call-meta">${escapeHtml(item.phone_number || '')} · ${escapeHtml(item.lead_status || '')}</div>
           <div class="call-summary"><strong>Lead said:</strong> ${escapeHtml(item.inbound_body || '')}</div>
           <div class="call-summary"><strong>Summary:</strong> ${escapeHtml(item.summary || '')}</div>
-          <div class="call-summary"><strong>Intent:</strong> ${escapeHtml(item.intent || '')}</div>
-          <div class="call-summary"><strong>Next step:</strong> ${escapeHtml(item.next_best_step || '')}</div>
-          <div class="call-summary"><strong>Recommended action:</strong> ${escapeHtml(item.recommended_action || '')}</div>
-          ${escalate}
-          ${statusCard}${fuCard}${tasksCard}${apptCard}
+          <div class="call-meta" style="color:#b45309;margin-top:8px;"><strong>Compliance or sensitive topic</strong>${topics ? ` · ${escapeHtml(topics)}` : ''}</div>
           <label class="checkbox-row" style="margin-top:10px;">
             <input type="checkbox" id="suggest-consent-${item.id}" />
             <span>I certify this person authorized SMS from me/my business, I have a supporting consent record, and TopAI does not independently verify that record.</span>
           </label>
           <textarea id="suggest-body-${item.id}" maxlength="480" style="width:100%;min-height:80px;margin-top:8px;padding:10px;border:1.5px solid #dde3f0;border-radius:8px;">${escapeHtml(item.suggested_reply || '')}</textarea>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
-            <button type="button" class="btn-generate" style="padding:8px 12px;font-size:12px;" onclick="sendSmsSuggestion(${item.id}, false, ${item.requires_manual_review ? 'true' : 'false'})">Approve &amp; Send</button>
+            <button type="button" class="btn-generate" style="padding:8px 12px;font-size:12px;" onclick="sendSmsSuggestion(${item.id}, false, true)">Send after review</button>
             <button type="button" class="logout-btn" style="padding:8px 12px;" onclick="dismissSmsSuggestion(${item.id})">Dismiss</button>
             <button type="button" class="billing-link" style="padding:8px 12px;" onclick="openSmsLead(${item.lead_id})">View conversation</button>
             ${item.lead_id ? `<a class="billing-link" style="padding:8px 12px;" href="/crm/leads/${item.lead_id}">Open CRM lead</a>` : ''}
           </div>
-          ${pitch}
         </div>`;
       }).join('');
       placeholder.style.display = 'none';
