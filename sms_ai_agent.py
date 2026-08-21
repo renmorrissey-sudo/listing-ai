@@ -80,11 +80,11 @@ def process_inbound_ai(user_id, lead_id, inbound_id, inbound_body, receiving_num
         return {"replied": False, "reason": coach.get("error") or "no_analysis"}
 
     logger.info(
-        "SMS_AI_COMPLETED inbound_id=%s lead_id=%s tenant=%s manual_review=%s",
+        "SMS_AI_COMPLETED inbound_id=%s lead_id=%s tenant=%s auto_execute=%s",
         inbound_id,
         lead_id,
         user_id,
-        bool(analysis.get("requires_manual_review")),
+        bool(coach.get("auto_execute")),
     )
 
     if not auto_reply_configured():
@@ -93,6 +93,22 @@ def process_inbound_ai(user_id, lead_id, inbound_id, inbound_body, receiving_num
     lead = db.get_lead(lead_id, user_id)
     if not lead:
         return {"replied": False, "reason": "lead_missing"}
+
+    import scheduling
+
+    details = analysis.get("appointment_details") if isinstance(analysis.get("appointment_details"), dict) else {}
+    if inbound_body:
+        details = dict(details)
+        details.setdefault("text", inbound_body)
+        analysis["appointment_details"] = details
+    sched = scheduling.handle_inbound_scheduling(user_id, lead, analysis)
+    if sched.get("action") in {"scheduled", "rescheduled"}:
+        analysis["draft_reply"] = sched.get("message") or analysis.get("draft_reply")
+        analysis["suggested_reply"] = analysis["draft_reply"]
+        analysis["suggested_lead_status"] = "appointment_scheduled"
+    elif sched.get("action") == "offer" and sched.get("message"):
+        analysis["draft_reply"] = sched.get("message")
+        analysis["suggested_reply"] = analysis["draft_reply"]
 
     allowed, reason = _auto_reply_allowed(user_id, lead, analysis)
     if not allowed:
@@ -218,7 +234,7 @@ def process_inbound_ai(user_id, lead_id, inbound_id, inbound_body, receiving_num
         lead_id,
         user_id,
         "sms_ai_reply",
-        "AI SMS Agent replied automatically",
+        "AI SMS — Reply sent",
         {
             "message_id": message_id,
             "reply_to_message_id": inbound_id,
@@ -278,7 +294,14 @@ def _auto_reply_allowed(user_id, lead, analysis):
         return False, "inquiry_blocked"
 
     topics = set(analysis.get("escalation_topics") or [])
-    if analysis.get("sensitive_topic") and topics & _NO_AUTO_REPLY_TOPICS:
+    if analysis.get("sensitive_topic") or topics & {
+        "legal",
+        "financing",
+        "fair_housing",
+        "complaint",
+        "negotiation",
+        "uncertain_property_fact",
+    }:
         return False, "escalation_topic"
 
     toll_ok, _err = check_telnyx_toll_free_send_allowed()

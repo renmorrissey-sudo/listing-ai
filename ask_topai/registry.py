@@ -12,10 +12,23 @@ WRITE_TOOLS = frozenset(
         "add_lead_note",
         "create_task",
         "update_property_criteria",
+        "create_follow_up",
+        "update_lead_status",
+        "create_calendar_event",
+        "reschedule_calendar_event",
     }
 )
 
-READ_TOOLS = frozenset({"find_lead", "get_lead_context", "list_lead_tasks"})
+READ_TOOLS = frozenset(
+    {
+        "find_lead",
+        "get_lead_context",
+        "list_lead_tasks",
+        "get_calendar_availability",
+        "find_available_slots",
+        "get_existing_appointment",
+    }
+)
 
 CONTROL_TOOLS = frozenset({"ask_clarification", "inform_user"})
 
@@ -28,9 +41,7 @@ FUTURE_TOOLS = (
     "send_email",
     "draft_sms",
     "send_sms",
-    "schedule_appointment",
     "initiate_ai_call",
-    "create_follow_up",
     "generate_listing_content",
 )
 
@@ -171,6 +182,117 @@ def anthropic_tools() -> list[dict]:
                     "property_type": {"type": "string"},
                     "property_types": {"type": "array", "items": {"type": "string"}},
                     "property_interest": {"type": "string"},
+                }
+            ),
+        },
+        {
+            "name": "create_follow_up",
+            "description": (
+                "Schedule a follow-up on a lead now. Use when the agent asks to follow up "
+                "on a specific date or if someone hasn't responded."
+            ),
+            "input_schema": _obj(
+                {
+                    "lead_id": {"type": "integer"},
+                    "lead_name": {"type": "string"},
+                    "due_date": {"type": "string"},
+                    "due_time": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
+                }
+            ),
+        },
+        {
+            "name": "update_lead_status",
+            "description": (
+                "Advance a lead to a routine CRM status such as contacted, qualified, "
+                "appointment_scheduled, or nurture. Never use for closed, lost, or do_not_contact."
+            ),
+            "input_schema": _obj(
+                {
+                    "lead_id": {"type": "integer"},
+                    "lead_name": {"type": "string"},
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "new",
+                            "attempting_contact",
+                            "contacted",
+                            "qualified",
+                            "appointment_scheduled",
+                            "nurture",
+                        ],
+                    },
+                }
+            ),
+        },
+        {
+            "name": "get_calendar_availability",
+            "description": "Inspect the agent's TopAI calendar (appointments) for a date or window.",
+            "input_schema": _obj(
+                {
+                    "date": {"type": "string", "description": "YYYY-MM-DD in the agent's timezone."},
+                    "start_at": {"type": "string"},
+                    "end_at": {"type": "string"},
+                }
+            ),
+        },
+        {
+            "name": "find_available_slots",
+            "description": (
+                "Find open appointment slots on the agent's calendar using account "
+                "duration, business hours, buffer, and minimum notice."
+            ),
+            "input_schema": _obj(
+                {
+                    "after": {"type": "string", "description": "ISO start of search window."},
+                    "before": {"type": "string", "description": "ISO end of search window."},
+                    "duration_minutes": {"type": "integer"},
+                }
+            ),
+        },
+        {
+            "name": "get_existing_appointment",
+            "description": "Load the lead's upcoming TopAI appointment, if any.",
+            "input_schema": _obj(
+                {
+                    "lead_id": {"type": "integer"},
+                    "lead_name": {"type": "string"},
+                    "appointment_id": {"type": "integer"},
+                }
+            ),
+        },
+        {
+            "name": "create_calendar_event",
+            "description": (
+                "Schedule an appointment on the agent's TopAI calendar now. Inspect "
+                "availability first. Do not book over an existing event."
+            ),
+            "input_schema": _obj(
+                {
+                    "lead_id": {"type": "integer"},
+                    "lead_name": {"type": "string"},
+                    "start_at": {"type": "string", "description": "ISO-8601 start time."},
+                    "end_at": {"type": "string"},
+                    "appointment_type": {"type": "string"},
+                    "location": {"type": "string"},
+                    "notes": {"type": "string"},
+                }
+            ),
+        },
+        {
+            "name": "reschedule_calendar_event",
+            "description": (
+                "Move an existing appointment to a new time. Updates the current event; "
+                "does not create a duplicate."
+            ),
+            "input_schema": _obj(
+                {
+                    "appointment_id": {"type": "integer"},
+                    "lead_id": {"type": "integer"},
+                    "lead_name": {"type": "string"},
+                    "start_at": {"type": "string"},
+                    "end_at": {"type": "string"},
                 }
             ),
         },

@@ -158,20 +158,19 @@
 
       <h3>When a lead replies</h3>
       <ol>
-        <li>Open <strong>Needs your review</strong> in the AI SMS panel (also surfaced on Dashboard and Needs Attention).</li>
-        <li>Read Claude’s summary, intent, recommended next action, and draft reply.</li>
-        <li>Edit the draft if needed, confirm consent, then click <strong>Approve &amp; Send</strong>.</li>
-        <li>If Claude suggests a status, follow-up, tasks, or appointment, use those <strong>Approve</strong> buttons separately — they do not apply until you click them.</li>
-        <li>Use <strong>View conversation</strong> or <strong>Open CRM lead</strong> to see the full thread and lead record.</li>
+        <li>TopAI reads the inbound SMS, checks CRM context and compliance, and sends a reply automatically when allowed.</li>
+        <li>Quiet hours defer the reply to the next permitted time instead of creating a review task.</li>
+        <li>Opt-out, DNC, and sensitive topics still stop sending. Those appear in AI SMS activity and Needs Attention.</li>
+        <li>Use <strong>View conversation</strong> or <strong>Open CRM lead</strong> to see the thread and what TopAI recorded.</li>
       </ol>
 
       <h3>Opt-out and escalations</h3>
       <ul>
-        <li>If the lead texts STOP, UNSUBSCRIBE, CANCEL, END, or QUIT, TopAI marks them <strong>Do Not Contact</strong>, cancels pending draft replies, and blocks further SMS.</li>
-        <li>Legal, financing, negotiation, fair housing, complaint, or uncertain property-fact topics require manual review before you can send.</li>
+        <li>If the lead texts STOP, UNSUBSCRIBE, CANCEL, END, or QUIT, TopAI marks them <strong>Do Not Contact</strong> and does not send further SMS.</li>
+        <li>Legal, financing, negotiation, fair housing, complaint, or uncertain property-fact topics pause for you instead of auto-sending.</li>
       </ul>
 
-      <div class="tip">Tip: TopAI never auto-sends AI replies and never auto-applies Claude’s CRM suggestions. You stay in control of every message and every pipeline change.</div>
+      <div class="tip">Tip: TopAI executes routine CRM and SMS work, then shows the activity history. You still handle exceptions, deletions, and anything compliance blocks.</div>
       <a class="cta" href="/app#sms">Go to AI SMS Assistant</a>
       <a class="cta secondary" href="#crm">Learn the CRM workflow</a>
     </section>
@@ -183,11 +182,11 @@
 
       <h3>Where to find CRM</h3>
       <ul>
-        <li><strong>Dashboard</strong> — pipeline stage counts, overdue follow-ups, drafts awaiting approval, and Needs Attention highlights.</li>
+        <li><strong>Dashboard</strong> — pipeline stage counts, overdue follow-ups, AI actions completed, and Needs Attention highlights.</li>
         <li><strong>Leads</strong> — filterable lead list; open any lead for the full record.</li>
         <li><strong>Tasks</strong> — overdue, due today, and upcoming work.</li>
-        <li><strong>Needs Attention</strong> — prioritized queue of items that need you now.</li>
-        <li><strong>AI SMS</strong> — conversation history plus Claude approve cards.</li>
+        <li><strong>Needs Attention</strong> — exceptions that still need you now.</li>
+        <li><strong>AI SMS</strong> — conversation history plus autonomous reply activity.</li>
       </ul>
 
       <h3>Lead statuses</h3>

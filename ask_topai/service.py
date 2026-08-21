@@ -1,4 +1,4 @@
-"""Interpret + confirm orchestration. Mutations run only after Confirm."""
+"""Interpret + execute orchestration. Routine commands run immediately."""
 
 from __future__ import annotations
 
@@ -64,7 +64,14 @@ def _attach_resolved_leads(user_id, commands: list, context: dict):
             resolved.append(item)
             continue
 
-        needs_lead = action in {"add_lead_note", "update_property_criteria"} or (
+        needs_lead = action in {
+            "add_lead_note",
+            "update_property_criteria",
+            "create_follow_up",
+            "update_lead_status",
+            "create_calendar_event",
+            "reschedule_calendar_event",
+        } or (
             action == "create_task"
             and (args.get("lead_name") or args.get("lead_id") or context.get("lead_id") or pending_create_name)
         )
@@ -124,7 +131,15 @@ def _refresh_hints(results: list) -> dict:
             hints["leads"] = True
         if action == "create_task":
             hints["tasks"] = True
-        if action in {"add_lead_note", "update_property_criteria", "create_lead"}:
+        if action in {
+            "add_lead_note",
+            "update_property_criteria",
+            "create_lead",
+            "create_follow_up",
+            "update_lead_status",
+            "create_calendar_event",
+            "reschedule_calendar_event",
+        }:
             hints["leads"] = True
         lead_id = item.get("lead_id")
         if lead_id:
@@ -383,11 +398,17 @@ def _run_commands(user_id, commands: list, grounding: str, context: dict):
         if error:
             failures.append({"action": action, "error": error, "choices": choices or []})
             continue
+        lead_id = (
+            cleaned.get("arguments", {}).get("lead_id")
+            or (payload or {}).get("lead_id")
+            or ((payload or {}).get("id") if action not in {"create_task", "create_calendar_event", "reschedule_calendar_event", "create_follow_up"} else None)
+        )
         item = {
             "action": action,
             "message": actions.success_message(action, payload),
-            "lead_id": (payload or {}).get("id") if action != "create_task" else cleaned.get("arguments", {}).get("lead_id"),
+            "lead_id": lead_id,
             "task_id": (payload or {}).get("id") if action == "create_task" else None,
+            "appointment_id": (payload or {}).get("id") if action in {"create_calendar_event", "reschedule_calendar_event"} else None,
         }
         results.append(item)
         if action == "create_lead" and payload:

@@ -61,9 +61,12 @@ def test_ai_auto_reply_sends_once_and_consumes_suggestion(two_users, monkeypatch
 
     stored = db.list_lead_messages(u1, lead_id)
     suggested = [m for m in stored if m["direction"] == "suggested"]
-    assert suggested
-    assert suggested[0]["status"] == "dismissed"
-    assert suggested[0]["direction"] == "suggested"
+    assert not suggested
+    outbound = [
+        m for m in stored
+        if m["direction"] == "outbound" and m.get("reply_to_message_id") == inbound_id
+    ]
+    assert len(outbound) == 1
 
     with db.get_db() as conn:
         insight = conn.execute(

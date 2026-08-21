@@ -254,14 +254,15 @@ def _handle_received(payload, *, app=None):
         "Inbound SMS received",
         {"message_id": message_id, "provider": "telnyx"},
     )
-    crm_db.upsert_needs_attention(
-        user_id,
-        lead_id,
-        "unreviewed_inbound",
-        priority="high",
-        source_ref_type="sms",
-        source_ref_id=message_id,
-    )
+    if keyword in {"opt_in", "help"}:
+        crm_db.upsert_needs_attention(
+            user_id,
+            lead_id,
+            "unreviewed_inbound",
+            priority="high",
+            source_ref_type="sms",
+            source_ref_id=message_id,
+        )
     _touch_inbound_lead_state(user_id, lead_id, lead, keyword)
 
     if keyword == "opt_out":

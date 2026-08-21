@@ -246,6 +246,120 @@ def execute_update_criteria(user_id, arguments: dict, context: dict | None):
     return updated, None, None
 
 
+def execute_create_follow_up(user_id, arguments: dict, context: dict | None):
+    lead, err, choices = resolve_lead(user_id, arguments, context)
+    if err:
+        return None, err, choices
+    result, error = crm_db.set_lead_follow_up(
+        user_id,
+        lead["id"],
+        arguments.get("due_at"),
+        arguments.get("reason") or "Follow up",
+        priority=arguments.get("priority") or "normal",
+        created_by=user_id,
+    )
+    if error:
+        return None, error, None
+    add_lead_audit(
+        user_id,
+        lead["id"],
+        f"Ask TopAI — Follow-up created for {lead.get('name')}",
+        {"action": "create_follow_up", "source": SOURCE, "due_at": arguments.get("due_at")},
+    )
+    payload = dict(result or {})
+    payload["name"] = lead.get("name")
+    payload["due_at"] = (result or {}).get("due_at") or arguments.get("due_at")
+    return payload, None, None
+
+
+def execute_update_status(user_id, arguments: dict, context: dict | None):
+    from autonomy import allowed_auto_status
+
+    lead, err, choices = resolve_lead(user_id, arguments, context)
+    if err:
+        return None, err, choices
+    status = allowed_auto_status(arguments.get("status") or "")
+    if not status:
+        return None, "That status cannot be applied automatically.", None
+    updated, error = crm_db.set_lead_status(user_id, lead["id"], status, from_automation=True)
+    if error:
+        return None, error, None
+    add_lead_audit(
+        user_id,
+        lead["id"],
+        f"Ask TopAI updated {lead.get('name')} to {status}",
+        {"action": "update_lead_status", "source": SOURCE, "status": status},
+    )
+    return updated, None, None
+
+
+def execute_create_calendar_event(user_id, arguments: dict, context: dict | None):
+    import scheduling
+
+    lead, err, choices = resolve_lead(user_id, arguments, context)
+    if err:
+        return None, err, choices
+    payload = dict(arguments or {})
+    payload["lead_id"] = lead["id"]
+    appt, error, alternatives = scheduling.create_calendar_event(user_id, payload)
+    if error:
+        if alternatives:
+            labels = ", ".join(scheduling.format_slot_sms(s) for s in alternatives[:3])
+            return None, f"{error} Nearby times: {labels}. Which works?", None
+        return None, error, None
+    add_lead_audit(
+        user_id,
+        lead["id"],
+        f"Ask TopAI — Appointment scheduled with {lead.get('name')}",
+        {
+            "action": "create_calendar_event",
+            "source": SOURCE,
+            "appointment_id": (appt or {}).get("id"),
+            "start_at": (appt or {}).get("start_at"),
+        },
+    )
+    return appt, None, None
+
+
+def execute_reschedule_calendar_event(user_id, arguments: dict, context: dict | None):
+    import scheduling
+
+    appt_id = arguments.get("appointment_id")
+    lead = None
+    if not appt_id:
+        lead, err, choices = resolve_lead(user_id, arguments, context)
+        if err:
+            return None, err, choices
+        existing = scheduling.get_existing_appointment(user_id, lead_id=lead["id"])
+        if not existing:
+            return None, "I could not find an existing appointment to reschedule.", None
+        appt_id = existing["id"]
+    else:
+        existing = scheduling.get_existing_appointment(user_id, appointment_id=appt_id)
+        if not existing:
+            return None, "Appointment not found.", None
+        lead = db.get_lead(existing["lead_id"], user_id)
+    updated, error, alternatives = scheduling.reschedule_calendar_event(user_id, appt_id, arguments)
+    if error:
+        if alternatives:
+            labels = ", ".join(scheduling.format_slot_sms(s) for s in alternatives[:3])
+            return None, f"{error} Nearby times: {labels}. Which works?", None
+        return None, error, None
+    if lead:
+        add_lead_audit(
+            user_id,
+            lead["id"],
+            f"Ask TopAI — Appointment rescheduled for {lead.get('name')}",
+            {
+                "action": "reschedule_calendar_event",
+                "source": SOURCE,
+                "appointment_id": appt_id,
+                "start_at": (updated or {}).get("start_at"),
+            },
+        )
+    return updated, None, None
+
+
 def execute_command(user_id, command: dict, context: dict | None):
     action = command.get("action")
     arguments = command.get("arguments") or {}
@@ -257,6 +371,14 @@ def execute_command(user_id, command: dict, context: dict | None):
         return "create_task", *execute_create_task(user_id, arguments, context)
     if action == "update_property_criteria":
         return "update_property_criteria", *execute_update_criteria(user_id, arguments, context)
+    if action == "create_follow_up":
+        return "create_follow_up", *execute_create_follow_up(user_id, arguments, context)
+    if action == "update_lead_status":
+        return "update_lead_status", *execute_update_status(user_id, arguments, context)
+    if action == "create_calendar_event":
+        return "create_calendar_event", *execute_create_calendar_event(user_id, arguments, context)
+    if action == "reschedule_calendar_event":
+        return "reschedule_calendar_event", *execute_reschedule_calendar_event(user_id, arguments, context)
     return action, None, "That command is not allowed.", None
 
 
@@ -273,4 +395,16 @@ def success_message(action: str, payload) -> str:
         return f"Task created: {title}"
     if action == "update_property_criteria":
         return f"Property criteria updated for {(payload or {}).get('name') or 'lead'}"
+    if action == "create_follow_up":
+        due = (payload or {}).get("due_at") or ""
+        return f"Follow-up scheduled{((' for ' + str(due)[:16].replace('T', ' ')) if due else '')}."
+    if action == "update_lead_status":
+        return f"Updated {(payload or {}).get('name') or 'lead'} to {((payload or {}).get('status') or 'the new status')}."
+    if action == "create_calendar_event":
+        lead = (payload or {}).get("lead_name") or "the lead"
+        start = str((payload or {}).get("start_at") or "")[:16].replace("T", " ")
+        return f"Appointment scheduled with {lead} for {start}."
+    if action == "reschedule_calendar_event":
+        start = str((payload or {}).get("start_at") or "")[:16].replace("T", " ")
+        return f"Appointment moved to {start}."
     return "Done."

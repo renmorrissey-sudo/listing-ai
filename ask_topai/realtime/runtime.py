@@ -17,10 +17,17 @@ WRITE_ORDER = {
     "find_lead": 0,
     "get_lead_context": 1,
     "list_lead_tasks": 1,
+    "get_calendar_availability": 1,
+    "find_available_slots": 1,
+    "get_existing_appointment": 1,
     "create_lead": 2,
     "update_property_criteria": 3,
     "add_lead_note": 3,
+    "update_lead_status": 3,
     "create_task": 4,
+    "create_follow_up": 4,
+    "create_calendar_event": 5,
+    "reschedule_calendar_event": 5,
 }
 
 

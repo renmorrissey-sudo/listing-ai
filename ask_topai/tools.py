@@ -139,10 +139,56 @@ def list_lead_tasks(user_id, arguments: dict, _context: dict | None = None) -> d
     return {"lead_id": lead_id, "tasks": tasks[:20]}
 
 
+def get_calendar_availability(user_id, arguments: dict, _context: dict | None = None) -> dict:
+    import scheduling
+
+    return scheduling.get_calendar_availability(
+        user_id,
+        start_at=arguments.get("start_at"),
+        end_at=arguments.get("end_at"),
+        date=arguments.get("date"),
+    )
+
+
+def find_available_slots(user_id, arguments: dict, _context: dict | None = None) -> dict:
+    import scheduling
+
+    slots = scheduling.find_available_slots(
+        user_id,
+        after=arguments.get("after"),
+        before=arguments.get("before"),
+        duration_minutes=arguments.get("duration_minutes"),
+        limit=8,
+    )
+    return {"slots": slots, "count": len(slots)}
+
+
+def get_existing_appointment(user_id, arguments: dict, context: dict | None = None) -> dict:
+    import scheduling
+
+    lead = None
+    lead_id = arguments.get("lead_id") or (context or {}).get("lead_id")
+    appointment_id = arguments.get("appointment_id")
+    if arguments.get("lead_name") and not lead_id:
+        lead, err, choices = actions.resolve_lead(user_id, arguments, context)
+        if err:
+            return {"error": err, "choices": choices}
+        lead_id = lead["id"]
+    appt = scheduling.get_existing_appointment(
+        user_id, lead_id=lead_id, appointment_id=appointment_id
+    )
+    if not appt:
+        return {"appointment": None, "message": "No upcoming appointment found."}
+    return {"appointment": appt}
+
+
 READ_HANDLERS = {
     "find_lead": find_lead,
     "get_lead_context": get_lead_context,
     "list_lead_tasks": list_lead_tasks,
+    "get_calendar_availability": get_calendar_availability,
+    "find_available_slots": find_available_slots,
+    "get_existing_appointment": get_existing_appointment,
 }
 
 

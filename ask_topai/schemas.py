@@ -15,6 +15,10 @@ ALLOWED_ACTIONS = frozenset(
         "add_lead_note",
         "create_task",
         "update_property_criteria",
+        "create_follow_up",
+        "update_lead_status",
+        "create_calendar_event",
+        "reschedule_calendar_event",
     }
 )
 
@@ -28,7 +32,6 @@ BLOCKED_ACTIONS = frozenset(
         "delete_lead",
         "change_consent",
         "change_sms_qualification",
-        "create_appointment",
         "sql",
         "execute_sql",
         "raw_query",
@@ -383,12 +386,60 @@ def sanitize_update_criteria(arguments: dict, transcript: str) -> tuple[dict, st
     return cleaned, None
 
 
+def sanitize_create_follow_up(arguments: dict, transcript: str) -> tuple[dict, str | None]:
+    lead_id = _clean_int(arguments.get("lead_id"))
+    lead_name = _clean_str(arguments.get("lead_name") or arguments.get("name"), 200)
+    reason = _clean_str(arguments.get("reason") or arguments.get("title"), 500) or "Follow up"
+    due_at = parse_due_at(arguments, transcript=transcript)
+    priority = _clean_str(arguments.get("priority"), 20) or "normal"
+    cleaned = {
+        "lead_id": lead_id,
+        "lead_name": lead_name,
+        "reason": reason,
+        "due_at": due_at,
+        "priority": priority,
+    }
+    if not due_at:
+        return cleaned, "A follow-up date is required."
+    return cleaned, None
+
+
+def sanitize_update_status(arguments: dict) -> tuple[dict, str | None]:
+    from autonomy import allowed_auto_status
+
+    lead_id = _clean_int(arguments.get("lead_id"))
+    lead_name = _clean_str(arguments.get("lead_name") or arguments.get("name"), 200)
+    status = allowed_auto_status(arguments.get("status") or "")
+    cleaned = {"lead_id": lead_id, "lead_name": lead_name, "status": status}
+    if not status:
+        return cleaned, "That status cannot be applied automatically."
+    return cleaned, None
+
+
+def sanitize_calendar_event(arguments: dict) -> tuple[dict, str | None]:
+    cleaned = {
+        "lead_id": _clean_int(arguments.get("lead_id")),
+        "lead_name": _clean_str(arguments.get("lead_name") or arguments.get("name"), 200),
+        "appointment_id": _clean_int(arguments.get("appointment_id")),
+        "start_at": _clean_str(arguments.get("start_at"), 80),
+        "end_at": _clean_str(arguments.get("end_at"), 80),
+        "appointment_type": _clean_str(arguments.get("appointment_type"), 80),
+        "location": _clean_str(arguments.get("location"), 200),
+        "notes": _clean_str(arguments.get("notes"), 1500),
+        "duration_minutes": _clean_int(arguments.get("duration_minutes")),
+    }
+    cleaned = {k: v for k, v in cleaned.items() if v not in (None, "")}
+    if not cleaned.get("start_at"):
+        return cleaned, "A start time is required."
+    return cleaned, None
+
+
 def sanitize_command(command: dict, transcript: str) -> tuple[dict | None, str | None]:
     if not isinstance(command, dict):
         return None, "Invalid command."
     action = str(command.get("action") or "").strip()
     if action in BLOCKED_ACTIONS or action not in ALLOWED_ACTIONS:
-        return None, "Ask TopAI cannot do that yet. Phase 1 supports creating leads, adding notes, creating tasks, and updating property criteria."
+        return None, "Ask TopAI cannot do that yet."
     arguments = command.get("arguments") if isinstance(command.get("arguments"), dict) else {}
     arguments = alias_location_fields(arguments)
     if action == "create_lead":
@@ -397,8 +448,14 @@ def sanitize_command(command: dict, transcript: str) -> tuple[dict | None, str |
         cleaned, err = sanitize_add_note(arguments)
     elif action == "create_task":
         cleaned, err = sanitize_create_task(arguments, transcript)
-    else:
+    elif action == "update_property_criteria":
         cleaned, err = sanitize_update_criteria(arguments, transcript)
+    elif action == "create_follow_up":
+        cleaned, err = sanitize_create_follow_up(arguments, transcript)
+    elif action == "update_lead_status":
+        cleaned, err = sanitize_update_status(arguments)
+    else:
+        cleaned, err = sanitize_calendar_event(arguments)
     return {"action": action, "arguments": cleaned}, err
 
 
@@ -447,4 +504,24 @@ def preview_rows(command: dict) -> list[tuple[str, str]]:
         interest = build_property_interest(args)
         if interest:
             rows.append(("Criteria", interest))
+    elif action == "create_follow_up":
+        rows.append(("Action", "Create Follow-up"))
+        if args.get("lead_name"):
+            rows.append(("Lead", args["lead_name"]))
+        if args.get("due_at"):
+            rows.append(("Due", str(args["due_at"])[:16].replace("T", " ")))
+        if args.get("reason"):
+            rows.append(("Reason", args["reason"]))
+    elif action == "update_lead_status":
+        rows.append(("Action", "Update Status"))
+        if args.get("lead_name"):
+            rows.append(("Lead", args["lead_name"]))
+        if args.get("status"):
+            rows.append(("Status", args["status"]))
+    elif action in {"create_calendar_event", "reschedule_calendar_event"}:
+        rows.append(("Action", "Schedule Appointment" if action == "create_calendar_event" else "Reschedule Appointment"))
+        if args.get("lead_name"):
+            rows.append(("Lead", args["lead_name"]))
+        if args.get("start_at"):
+            rows.append(("When", str(args["start_at"])[:16].replace("T", " ")))
     return rows
