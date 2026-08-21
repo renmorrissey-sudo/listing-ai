@@ -49,6 +49,13 @@
     @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
     .card { background: white; border-radius: 12px; padding: 28px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
     .card h2 { font-size: 16px; font-weight: 600; margin-bottom: 20px; color: #1a1a2e; }
+    .voice-log-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+    .voice-log-header h2 { margin-bottom: 0; }
+    .voice-log-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .scope-btn { padding: 5px 10px; font-size: 12px; }
+    .scope-btn.active { background: #1a1a2e; color: white; border-color: #1a1a2e; }
+    .scope-btn.active:hover { color: white; border-color: #1a1a2e; }
+    .voice-log-meta { font-size: 12px; color: #667; margin-bottom: 12px; }
     .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .form-group { margin-bottom: 14px; }
     .form-group label { display: block; font-size: 12px; font-weight: 600; color: #556; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
@@ -119,7 +126,7 @@
     .field-section-label { font-size: 11px; font-weight: 800; color: #8899aa; text-transform: uppercase; letter-spacing: 0.6px; margin: 20px 0 10px; padding-top: 16px; border-top: 1px solid #eef2f7; }
     .field-section-label:first-child { margin-top: 0; padding-top: 0; border-top: none; }
     .success-msg { background: #f0fdf4; border: 1.5px solid #86efac; color: #15803d; border-radius: 8px; padding: 12px 16px; font-size: 13px; margin-top: 12px; display: none; }
-    .call-history { display: flex; flex-direction: column; gap: 12px; max-height: 560px; overflow-y: auto; }
+    .call-history { display: flex; flex-direction: column; gap: 12px; max-height: min(70vh, 720px); overflow-y: auto; }
     .call-item { background: #f8fafc; border: 1.5px solid #e0e4ed; border-radius: 8px; padding: 14px; font-size: 13px; line-height: 1.5; }
     .call-item strong { color: #1a1a2e; }
     .call-meta { color: #667; font-size: 12px; margin: 3px 0 8px; }
@@ -383,9 +390,17 @@
       </form>
     </div>
     <div class="card results-panel">
-      <h2>Recent Calls</h2>
+      <div class="voice-log-header">
+        <h2>Recent Calls</h2>
+        <div class="voice-log-actions">
+          <button type="button" class="btn scope-btn" id="voice-scope-recent" data-scope="recent">Recent</button>
+          <button type="button" class="btn scope-btn active" id="voice-scope-all" data-scope="all">All calls</button>
+          <button type="button" class="btn secondary btn-sm" id="voice-refresh-btn">Refresh</button>
+        </div>
+      </div>
+      <p class="voice-log-meta" id="voice-log-meta">Calls for every CRM lead on this account.</p>
       <div class="placeholder" id="voice-placeholder">
-        <p>Start an AI call or refresh history<br/>to see call outcomes here.</p>
+        <p>No AI calls yet.<br/>Calls for every CRM lead will appear here after you start one.</p>
       </div>
       <div class="call-history" id="voice-history" style="display:none;"></div>
     </div>
@@ -1098,22 +1113,51 @@
     }
   }
 
+  let voiceCallsScope = 'all';
+
+  function setVoiceCallScope(scope) {
+    voiceCallsScope = scope === 'recent' ? 'recent' : 'all';
+    document.querySelectorAll('.scope-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.scope === voiceCallsScope);
+    });
+    loadVoiceCalls();
+  }
+
   async function loadVoiceCalls() {
     const history = document.getElementById('voice-history');
     const placeholder = document.getElementById('voice-placeholder');
+    const meta = document.getElementById('voice-log-meta');
     if (!history || !placeholder) return;
     try {
-      const data = await fetchJson('/voice/calls', {cache: 'no-store'});
-      if (!data || !data.calls.length) {
+      const data = await fetchJson(`/voice/calls?scope=${encodeURIComponent(voiceCallsScope)}`, {cache: 'no-store'});
+      const calls = (data && data.calls) || [];
+      const total = data && typeof data.total === 'number' ? data.total : calls.length;
+      if (meta) {
+        if (!total) {
+          meta.textContent = 'Calls for every CRM lead on this account.';
+        } else if (data.truncated) {
+          meta.textContent = `Showing ${calls.length} of ${total} calls across all leads. Older calls remain on each lead timeline.`;
+        } else if (voiceCallsScope === 'recent' && total > calls.length) {
+          meta.textContent = `Showing the ${calls.length} most recent of ${total} calls across all leads.`;
+        } else {
+          meta.textContent = `${total} call${total === 1 ? '' : 's'} across all CRM leads.`;
+        }
+      }
+      if (!calls.length) {
         history.style.display = 'none';
         placeholder.style.display = 'flex';
+        placeholder.innerHTML = '<p>No AI calls yet.<br/>Calls for every CRM lead will appear here after you start one.</p>';
         stopVoiceCallRefresh();
         return;
       }
-      history.innerHTML = data.calls.map(call => {
+      history.innerHTML = calls.map(call => {
         const appointment = call.appointment_requested ? ' | Appointment requested' : '';
         const duration = formatCallDuration(call.recording_duration_seconds);
         const when = call.completed_at || call.created_at || '';
+        const leadLabel = escapeHtml(call.lead_name || 'Lead');
+        const leadHeading = call.lead_id
+          ? `<a class="call-link" href="/crm/leads/${call.lead_id}">${leadLabel}</a>`
+          : leadLabel;
         let recordingBlock = '';
         if (call.recording_url) {
           recordingBlock = `
@@ -1133,8 +1177,8 @@
           recordingBlock = `<div class="call-meta" style="margin-top:6px;">${label}</div>`;
         }
         return `<div class="call-item">
-          <strong>${escapeHtml(call.lead_name || 'Lead')} - ${escapeHtml(call.status)}</strong>
-          <div class="call-meta">${escapeHtml(call.persona_name || 'AI Calling Assistant')} | ${escapeHtml(call.phone_number)}${appointment}</div>
+          <strong>${leadHeading} — ${escapeHtml(call.status || '')}</strong>
+          <div class="call-meta">${escapeHtml(call.persona_name || 'AI Calling Assistant')} | ${escapeHtml(call.phone_number || '')}${appointment}</div>
           <div class="call-meta">${duration ? escapeHtml(duration) + ' · ' : ''}${escapeHtml((when || '').slice(0, 16).replace('T', ' '))}${when ? ' UTC' : ''}</div>
           <div class="call-summary">${escapeHtml(call.summary || call.outcome || 'Call started. Summary will appear after the provider webhook is received.')}</div>
           ${recordingBlock}
@@ -1142,11 +1186,12 @@
       }).join('');
       placeholder.style.display = 'none';
       history.style.display = 'flex';
-      updateVoiceCallRefresh(data.calls);
+      updateVoiceCallRefresh(calls);
     } catch (err) {
       history.style.display = 'none';
       placeholder.style.display = 'flex';
       placeholder.innerHTML = `<p>${err.message}</p>`;
+      if (meta) meta.textContent = 'Could not load the call log.';
       stopVoiceCallRefresh();
     }
   }
@@ -1595,6 +1640,9 @@
   });
 
   document.getElementById('profile-save-btn')?.addEventListener('click', saveBusinessProfile);
+  document.getElementById('voice-scope-recent')?.addEventListener('click', () => setVoiceCallScope('recent'));
+  document.getElementById('voice-scope-all')?.addEventListener('click', () => setVoiceCallScope('all'));
+  document.getElementById('voice-refresh-btn')?.addEventListener('click', loadVoiceCalls);
 
   document.getElementById('voice-form').addEventListener('submit', async e => {
     e.preventDefault();

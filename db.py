@@ -629,17 +629,25 @@ def voice_call_has_recording(call_row):
     )
 
 
+VOICE_CALLS_RECENT_LIMIT = 20
+VOICE_CALLS_ALL_LIMIT = 500
+
+
+def _voice_call_select_sql(where_sql):
+    return f"""
+            SELECT vc.*, vp.name AS persona_name, l.name AS crm_lead_name
+            FROM voice_calls vc
+            LEFT JOIN voice_personas vp ON vp.id = vc.persona_id
+            LEFT JOIN leads l ON l.id = vc.lead_id AND l.user_id = vc.user_id
+            WHERE {where_sql}
+            """
+
+
 def list_voice_calls_for_lead(user_id, lead_id, limit=50):
     with get_db() as conn:
         rows = conn.execute(
-            """
-            SELECT vc.*, vp.name AS persona_name
-            FROM voice_calls vc
-            LEFT JOIN voice_personas vp ON vp.id = vc.persona_id
-            WHERE vc.user_id = ? AND vc.lead_id = ?
-            ORDER BY vc.created_at DESC
-            LIMIT ?
-            """,
+            _voice_call_select_sql("vc.user_id = ? AND vc.lead_id = ?")
+            + "ORDER BY vc.created_at DESC LIMIT ?",
             (user_id, lead_id, limit),
         ).fetchall()
         return [dict(row) for row in rows]
@@ -648,29 +656,29 @@ def list_voice_calls_for_lead(user_id, lead_id, limit=50):
 def get_voice_call(call_id, user_id):
     with get_db() as conn:
         row = conn.execute(
-            """
-            SELECT vc.*, vp.name AS persona_name
-            FROM voice_calls vc
-            LEFT JOIN voice_personas vp ON vp.id = vc.persona_id
-            WHERE vc.id = ? AND vc.user_id = ?
-            """,
+            _voice_call_select_sql("vc.id = ? AND vc.user_id = ?"),
             (call_id, user_id),
         ).fetchone()
         return dict(row) if row else None
 
 
-def list_voice_calls(user_id, limit=20):
+def count_voice_calls(user_id):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS count FROM voice_calls WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return int(row["count"] if row else 0)
+
+
+def list_voice_calls(user_id, limit=VOICE_CALLS_RECENT_LIMIT):
+    if limit is None or int(limit) < 1:
+        limit = VOICE_CALLS_RECENT_LIMIT
     with get_db() as conn:
         rows = conn.execute(
-            """
-            SELECT vc.*, vp.name AS persona_name
-            FROM voice_calls vc
-            LEFT JOIN voice_personas vp ON vp.id = vc.persona_id
-            WHERE vc.user_id = ?
-            ORDER BY vc.created_at DESC
-            LIMIT ?
-            """,
-            (user_id, limit),
+            _voice_call_select_sql("vc.user_id = ?")
+            + "ORDER BY vc.created_at DESC LIMIT ?",
+            (user_id, int(limit)),
         ).fetchall()
         return [dict(row) for row in rows]
 

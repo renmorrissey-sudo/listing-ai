@@ -1035,7 +1035,7 @@ def _voice_call_public_dict(c):
         "id": c["id"],
         "lead_id": c.get("lead_id"),
         "persona_name": c.get("persona_name"),
-        "lead_name": c.get("lead_name"),
+        "lead_name": c.get("crm_lead_name") or c.get("lead_name"),
         "phone_number": c.get("phone_number"),
         "lead_type": c.get("lead_type"),
         "status": c.get("status"),
@@ -1095,8 +1095,19 @@ def _serve_voice_call_recording(call_id, user_id):
 @auth.subscription_required
 def voice_calls():
     user = auth.get_current_user()
-    calls = db.list_voice_calls(user["id"])
-    return jsonify({"calls": [_voice_call_public_dict(c) for c in calls]})
+    scope = (request.args.get("scope") or "recent").strip().lower()
+    if scope not in {"recent", "all"}:
+        scope = "recent"
+    limit = db.VOICE_CALLS_ALL_LIMIT if scope == "all" else db.VOICE_CALLS_RECENT_LIMIT
+    calls = db.list_voice_calls(user["id"], limit=limit)
+    total = db.count_voice_calls(user["id"])
+    return jsonify({
+        "calls": [_voice_call_public_dict(c) for c in calls],
+        "scope": scope,
+        "total": total,
+        "limit": limit,
+        "truncated": total > len(calls),
+    })
 
 
 @app.route("/voice/calls/<int:call_id>/recording")

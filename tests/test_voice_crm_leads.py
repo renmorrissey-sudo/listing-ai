@@ -1,6 +1,6 @@
 """AI Calling Assistant ↔ CRM Leads integration."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import crm_db
 import db
@@ -249,3 +249,134 @@ def test_old_calls_without_lead_id_do_not_break_lists(two_users):
     assert calls[0].get("lead_id") in (None, "")
     # Leads page query still works with zero voice-linked leads.
     assert db.list_leads(u1) == []
+
+
+def _insert_voice_call(conn, user_id, *, lead_id=None, lead_name, phone, created_at, status="completed", summary=""):
+    cur = conn.execute(
+        """
+        INSERT INTO voice_calls
+            (user_id, persona_id, lead_id, provider, direction, lead_name, phone_number,
+             status, summary, created_at)
+        VALUES (?, NULL, ?, 'vapi', 'outbound', ?, ?, ?, ?, ?)
+        """,
+        (user_id, lead_id, lead_name, phone, status, summary, created_at),
+    )
+    return cur.lastrowid
+
+
+def test_voice_calls_log_lists_every_lead_and_hides_other_tenants(app_client, two_users):
+    u1, u2 = two_users
+    apply_pending_migrations()
+    now = datetime.now(timezone.utc)
+    with db.get_db() as conn:
+        lead_ids = []
+        for i, name in enumerate(["Lisa Smith", "Mark Flanagan", "Clyde Smalls"]):
+            lead_cur = conn.execute(
+                """
+                INSERT INTO leads (user_id, name, phone_number, status, source, created_at, updated_at)
+                VALUES (?, ?, ?, 'contacted', 'voice', ?, ?)
+                """,
+                (u1, name, f"+1303555010{i}", now.isoformat(), now.isoformat()),
+            )
+            lead_id = lead_cur.lastrowid
+            lead_ids.append(lead_id)
+            _insert_voice_call(
+                conn,
+                u1,
+                lead_id=lead_id,
+                lead_name=name,
+                phone=f"+1303555010{i}",
+                created_at=(now - timedelta(minutes=i)).isoformat(),
+                summary=f"Summary for {name}",
+            )
+        _insert_voice_call(
+            conn,
+            u2,
+            lead_name="Other Tenant",
+            phone="+15550009999",
+            created_at=now.isoformat(),
+            summary="Should not leak",
+        )
+
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+    res = app_client.get("/voice/calls?scope=all")
+    assert res.status_code == 200
+    payload = res.get_json()
+    names = [c["lead_name"] for c in payload["calls"]]
+    assert names == ["Lisa Smith", "Mark Flanagan", "Clyde Smalls"]
+    assert payload["total"] == 3
+    assert payload["scope"] == "all"
+    assert payload["truncated"] is False
+    assert {c["lead_id"] for c in payload["calls"]} == set(lead_ids)
+
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u2
+    other = app_client.get("/voice/calls?scope=all").get_json()
+    assert other["total"] == 1
+    assert other["calls"][0]["lead_name"] == "Other Tenant"
+
+
+def test_voice_calls_recent_caps_all_returns_remaining(app_client, two_users):
+    u1, _ = two_users
+    apply_pending_migrations()
+    now = datetime.now(timezone.utc)
+    with db.get_db() as conn:
+        for i in range(25):
+            _insert_voice_call(
+                conn,
+                u1,
+                lead_name=f"Lead {i:02d}",
+                phone=f"+13035551{i:03d}",
+                created_at=(now - timedelta(minutes=i)).isoformat(),
+                summary=f"Call {i}",
+            )
+
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+    recent = app_client.get("/voice/calls").get_json()
+    all_calls = app_client.get("/voice/calls?scope=all").get_json()
+    bogus = app_client.get("/voice/calls?scope=nope").get_json()
+
+    assert recent["scope"] == "recent"
+    assert recent["total"] == 25
+    assert len(recent["calls"]) == 20
+    assert recent["truncated"] is True
+    assert recent["calls"][0]["lead_name"] == "Lead 00"
+    assert all_calls["scope"] == "all"
+    assert len(all_calls["calls"]) == 25
+    assert all_calls["truncated"] is False
+    assert {c["lead_name"] for c in all_calls["calls"]} == {f"Lead {i:02d}" for i in range(25)}
+    assert bogus["scope"] == "recent"
+    assert len(bogus["calls"]) == 20
+
+
+def test_voice_calls_list_uses_current_crm_lead_name(app_client, two_users):
+    u1, _ = two_users
+    apply_pending_migrations()
+    now = datetime.now(timezone.utc).isoformat()
+    with db.get_db() as conn:
+        lead_cur = conn.execute(
+            """
+            INSERT INTO leads (user_id, name, phone_number, status, source, created_at, updated_at)
+            VALUES (?, 'Old Name', '+13035550999', 'contacted', 'voice', ?, ?)
+            """,
+            (u1, now, now),
+        )
+        lead_id = lead_cur.lastrowid
+        _insert_voice_call(
+            conn,
+            u1,
+            lead_id=lead_id,
+            lead_name="Old Name",
+            phone="+13035550999",
+            created_at=now,
+            summary="Dialed Old Name",
+        )
+        conn.execute("UPDATE leads SET name = ? WHERE id = ? AND user_id = ?", ("Lisa Smith", lead_id, u1))
+
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+    payload = app_client.get("/voice/calls?scope=all").get_json()
+    assert payload["calls"][0]["lead_name"] == "Lisa Smith"
+    assert payload["calls"][0]["lead_id"] == lead_id
