@@ -23,6 +23,7 @@ from crm_constants import (
     cancel_reason_label,
     normalize_lead_status,
     outcome_label,
+    sms_consent_filter_statuses,
     status_label,
 )
 from crm_time import (
@@ -2846,8 +2847,13 @@ def filter_leads(
                     " OR l.opt_out_status = 'opted_out')"
                 )
             else:
-                sql += " AND l.sms_consent_status = ?"
-                params.append(sms_consent_status)
+                # Unverified/Verified dashboard cards use legacy query values;
+                # stored rows may be not_certified / user_certified after migration 012.
+                consent_values = sms_consent_filter_statuses(sms_consent_status)
+                if consent_values:
+                    placeholders = ", ".join("?" for _ in consent_values)
+                    sql += f" AND l.sms_consent_status IN ({placeholders})"
+                    params.extend(consent_values)
         if sms_sending_blocked is not None:
             from db_backend import sql_is_true
 

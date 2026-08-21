@@ -260,8 +260,20 @@ def test_consent_and_sms_filters_match_dashboard_counts(app_client, two_users):
     _lead(u1, name="Unverified", sms_consent_status="unverified", sms_sending_blocked=True)
     _lead(
         u1,
+        name="Not Certified",
+        sms_consent_status="not_certified",
+        sms_sending_blocked=True,
+    )
+    _lead(
+        u1,
         name="Verified",
         sms_consent_status="verified",
+        sms_sending_blocked=False,
+    )
+    _lead(
+        u1,
+        name="User Certified",
+        sms_consent_status="user_certified",
         sms_sending_blocked=False,
     )
     _lead(u1, name="Opted Consent", sms_consent_status="opted_out")
@@ -279,8 +291,34 @@ def test_consent_and_sms_filters_match_dashboard_counts(app_client, two_users):
     )
     # Cross-tenant noise
     _lead(u2, name="Other Verified", sms_consent_status="verified", sms_sending_blocked=False)
+    _lead(
+        u2,
+        name="Other Certified",
+        sms_consent_status="user_certified",
+        sms_sending_blocked=False,
+    )
 
     metrics = crm_db.get_pipeline_metrics(u1, local_date=day, tz_offset_minutes=0)
+    # Current CRM rows use not_certified / user_certified; legacy unverified / verified
+    # must still count on the same Pipeline cards.
+    unverified_names = {
+        lead["name"]
+        for lead in crm_db.filter_leads(u1, sms_consent_status="unverified")
+    }
+    verified_names = {
+        lead["name"]
+        for lead in crm_db.filter_leads(
+            u1, sms_consent_status="verified", sms_sending_blocked=False
+        )
+    }
+    assert "Not Certified" in unverified_names
+    assert "Unverified" in unverified_names
+    assert "User Certified" not in unverified_names
+    assert "User Certified" in verified_names
+    assert "Verified" in verified_names
+    assert "Not Certified" not in verified_names
+    assert metrics["unverified_consent"] == len(unverified_names)
+    assert metrics["verified_consent"] == 2
     _login(app_client, u1)
 
     cases = [

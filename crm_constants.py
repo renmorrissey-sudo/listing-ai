@@ -270,11 +270,16 @@ PROTECTED_RESOLVE_REASONS = {"opt_out", "delivery_failed", "sensitive_topic", "c
 
 SMS_CONSENT_STATUSES = (
     "unverified",
+    "not_certified",
     "verified",
+    "user_certified",
     "opted_out",
     "revoked",
     "not_permitted",
 )
+
+# Stored as "Unverified" in the UI. Migration 012 renamed unverified → not_certified.
+SMS_CONSENT_UNVERIFIED_STATUSES = {"unverified", "not_certified"}
 
 # Statuses that mean "an agent/carrier has established valid consent" — SMS is
 # allowed for these (subject to sms_sending_blocked / other checks), so the UI
@@ -282,6 +287,7 @@ SMS_CONSENT_STATUSES = (
 # value; "user_certified" is the current agent-self-certification value set by
 # external_leads/consent_workflow.py::confirm_qualifying_consent and
 # sms_authorization.py::record_one_to_one_attestation.
+# Migration 012 renamed verified → user_certified.
 SMS_CONSENT_CERTIFIED_STATUSES = {"verified", "user_certified"}
 
 SMS_CONSENT_STATUS_LABELS = {
@@ -300,6 +306,27 @@ SMS_CONSENT_STATUS_LABELS = {
 def sms_consent_is_certified(sms_consent_status):
     """True when SMS consent has been established (verified or user-certified)."""
     return (sms_consent_status or "").strip().lower() in SMS_CONSENT_CERTIFIED_STATUSES
+
+
+def sms_consent_is_unverified(sms_consent_status):
+    """True when SMS consent has not been established (legacy unverified or not_certified)."""
+    return (sms_consent_status or "").strip().lower() in SMS_CONSENT_UNVERIFIED_STATUSES
+
+
+def sms_consent_filter_statuses(sms_consent_status):
+    """Expand a leads/dashboard consent filter to the stored status values it should match.
+
+    Pipeline cards and `/crm/leads?consent=` still use `unverified` / `verified`, but
+    live CRM rows after migration 012 store `not_certified` / `user_certified`.
+    """
+    key = (sms_consent_status or "").strip().lower()
+    if not key:
+        return ()
+    if key in SMS_CONSENT_UNVERIFIED_STATUSES:
+        return tuple(sorted(SMS_CONSENT_UNVERIFIED_STATUSES))
+    if key in SMS_CONSENT_CERTIFIED_STATUSES:
+        return tuple(sorted(SMS_CONSENT_CERTIFIED_STATUSES))
+    return (key,)
 
 
 def sms_consent_label(sms_consent_status):

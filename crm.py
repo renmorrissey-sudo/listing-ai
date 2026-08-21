@@ -31,7 +31,14 @@ from crm_constants import (
 )
 
 PIPELINE_STAGE_IDS = {stage_id for stage_id, _label, _members in PIPELINE_STAGES}
-ALLOWED_SMS_CONSENT = {"unverified", "verified", "user_certified", "opted_out", "not_permitted"}
+ALLOWED_SMS_CONSENT = {
+    "unverified",
+    "not_certified",
+    "verified",
+    "user_certified",
+    "opted_out",
+    "not_permitted",
+}
 ALLOWED_POND = {"claimable", "claimed", "assigned", "unassigned"}
 ALLOWED_FOLLOW_UP_RANGES = {
     "today": "today",
