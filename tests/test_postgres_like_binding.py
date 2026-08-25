@@ -61,6 +61,31 @@ class _PgFormatValidatingRaw:
         pass
 
 
+class _PgLastrowidRaw:
+    def __init__(self, sequences=None):
+        self.sequences = sequences or {}
+        self.statements = []
+
+    def execute(self, sql, params=None):
+        self.statements.append((sql, params))
+        cur = _PgFormatValidatingCursor()
+        if sql.startswith("SELECT pg_get_serial_sequence"):
+            table = params[0]
+            cur._rows = [{"seq": self.sequences.get(table)}]
+        elif sql.startswith("SELECT lastval()"):
+            cur._rows = [{"id": 42}]
+        return cur
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        pass
+
+
 @contextmanager
 def _postgres_format_db():
     conn = CompatConnection(_PgFormatValidatingRaw(), "postgres")
@@ -87,6 +112,36 @@ def test_legacy_like_sql_fails_postgres_placeholder_conversion():
     )
     with pytest.raises(ValueError, match="unsupported format character"):
         old_external_sql % (1, 200)
+
+
+def test_postgres_insert_without_id_sequence_does_not_call_lastval():
+    raw = _PgLastrowidRaw(sequences={"sms_worker_heartbeats": None})
+    conn = CompatConnection(raw, "postgres")
+
+    cur = conn.execute(
+        """
+        INSERT INTO sms_worker_heartbeats
+            (worker_id, status, last_seen_at, metadata_json)
+        VALUES (?, ?, ?, ?)
+        """,
+        ("worker-1", "running", "2026-08-25T13:00:00+00:00", "{}"),
+    )
+
+    assert cur.lastrowid is None
+    assert not any(sql.startswith("SELECT lastval()") for sql, _ in raw.statements)
+
+
+def test_postgres_insert_with_id_sequence_still_sets_lastrowid():
+    raw = _PgLastrowidRaw(sequences={"users": "public.users_id_seq"})
+    conn = CompatConnection(raw, "postgres")
+
+    cur = conn.execute(
+        "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
+        ("agent@example.com", "hash", "2026-08-25T13:00:00+00:00"),
+    )
+
+    assert cur.lastrowid == 42
+    assert any(sql.startswith("SELECT lastval()") for sql, _ in raw.statements)
 
 
 def test_find_lead_owner_by_phone_like_binding_is_postgres_safe(two_users):
