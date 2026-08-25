@@ -10,6 +10,10 @@ from urllib.parse import urlparse
 import config
 
 _PLACEHOLDER = re.compile(r"\?")
+_INSERT_TABLE = re.compile(
+    r"^\s*INSERT\s+INTO\s+(?:ONLY\s+)?(?P<table>(?:\"[^\"]+\"|[A-Za-z_][\w$]*)(?:\.(?:\"[^\"]+\"|[A-Za-z_][\w$]*))?)",
+    re.IGNORECASE,
+)
 
 
 class CompatCursor:
@@ -37,6 +41,7 @@ class CompatConnection:
     def __init__(self, raw, engine: str):
         self._raw = raw
         self.engine = engine  # "postgres" | "sqlite"
+        self._pg_id_sequence_cache = {}
 
     def execute(self, sql, params=None):
         if isinstance(params, list):
@@ -52,8 +57,7 @@ class CompatConnection:
             else:
                 cur = self._raw.execute(sql)
             lastrowid = None
-            stripped = sql.lstrip().upper()
-            if stripped.startswith("INSERT") and params:
+            if params and self._postgres_insert_has_id_sequence(sql):
                 try:
                     row = self._raw.execute("SELECT lastval() AS id").fetchone()
                     if row is not None:
@@ -66,6 +70,26 @@ class CompatConnection:
             params = ()
         cur = self._raw.execute(sql_exec, params)
         return CompatCursor(cur, lastrowid=getattr(cur, "lastrowid", None))
+
+    def _postgres_insert_has_id_sequence(self, sql: str) -> bool:
+        match = _INSERT_TABLE.match(sql or "")
+        if not match:
+            return False
+        table = match.group("table")
+        cached = self._pg_id_sequence_cache.get(table)
+        if cached is not None:
+            return cached
+        try:
+            row = self._raw.execute(
+                "SELECT pg_get_serial_sequence(%s, 'id') AS seq",
+                (table.replace('"', ""),),
+            ).fetchone()
+            seq = row["seq"] if isinstance(row, dict) else row[0]
+            has_sequence = bool(seq)
+        except Exception:
+            has_sequence = False
+        self._pg_id_sequence_cache[table] = has_sequence
+        return has_sequence
 
     def commit(self):
         self._raw.commit()
