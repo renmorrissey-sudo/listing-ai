@@ -62,16 +62,17 @@ class _PgFormatValidatingRaw:
 
 
 class _PgLastrowidRaw:
-    def __init__(self, sequences=None):
-        self.sequences = sequences or {}
+    def __init__(self, id_defaults=None):
+        self.id_defaults = id_defaults or {}
         self.statements = []
 
     def execute(self, sql, params=None):
         self.statements.append((sql, params))
         cur = _PgFormatValidatingCursor()
-        if sql.startswith("SELECT pg_get_serial_sequence"):
+        if "information_schema.columns" in sql:
             table = params[0]
-            cur._rows = [{"seq": self.sequences.get(table)}]
+            if table in self.id_defaults:
+                cur._rows = [{"default_value": self.id_defaults[table]}]
         elif sql.startswith("SELECT lastval()"):
             cur._rows = [{"id": 42}]
         return cur
@@ -115,7 +116,7 @@ def test_legacy_like_sql_fails_postgres_placeholder_conversion():
 
 
 def test_postgres_insert_without_id_sequence_does_not_call_lastval():
-    raw = _PgLastrowidRaw(sequences={"sms_worker_heartbeats": None})
+    raw = _PgLastrowidRaw()
     conn = CompatConnection(raw, "postgres")
 
     cur = conn.execute(
@@ -132,7 +133,9 @@ def test_postgres_insert_without_id_sequence_does_not_call_lastval():
 
 
 def test_postgres_insert_with_id_sequence_still_sets_lastrowid():
-    raw = _PgLastrowidRaw(sequences={"users": "public.users_id_seq"})
+    raw = _PgLastrowidRaw(
+        id_defaults={"users": "nextval('users_id_seq'::regclass)"}
+    )
     conn = CompatConnection(raw, "postgres")
 
     cur = conn.execute(
