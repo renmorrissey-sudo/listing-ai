@@ -81,11 +81,19 @@ class CompatConnection:
             return cached
         try:
             row = self._raw.execute(
-                "SELECT pg_get_serial_sequence(%s, 'id') AS seq",
-                (table.replace('"', ""),),
+                """
+                SELECT column_default AS default_value
+                FROM information_schema.columns
+                WHERE table_name = %s
+                  AND column_name = 'id'
+                  AND table_schema = ANY(current_schemas(false))
+                ORDER BY CASE WHEN table_schema = current_schema() THEN 0 ELSE 1 END
+                LIMIT 1
+                """,
+                (_unqualified_table_name(table),),
             ).fetchone()
-            seq = row["seq"] if isinstance(row, dict) else row[0]
-            has_sequence = bool(seq)
+            default_value = row["default_value"] if isinstance(row, dict) else row[0]
+            has_sequence = bool(default_value and "nextval(" in str(default_value).lower())
         except Exception:
             has_sequence = False
         self._pg_id_sequence_cache[table] = has_sequence
@@ -122,6 +130,13 @@ def _normalize_row(row):
         return dict(row)
     # tuple fallback
     return row
+
+
+def _unqualified_table_name(table: str) -> str:
+    name = (table or "").split(".")[-1]
+    if len(name) >= 2 and name[0] == '"' and name[-1] == '"':
+        return name[1:-1].replace('""', '"')
+    return name
 
 
 def connect():
