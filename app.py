@@ -2418,6 +2418,40 @@ def listings_archive_search():
     return jsonify(result)
 
 
+def _annotate_listing_archive_items(user_id, items):
+    try:
+        from listing_publish import annotate_publish_status
+
+        items = annotate_publish_status(user_id, items)
+    except Exception:
+        logger.exception("Failed to annotate publish status for listing archive")
+    try:
+        items = email_marketing_db.annotate_campaign_status(user_id, items)
+    except Exception:
+        logger.exception("Failed to annotate email campaign status for listing archive")
+    return items
+
+
+@app.route("/listings/archive/address/<path:normalized_address>", methods=["GET"])
+@auth.subscription_required
+def listings_archive_address_page(normalized_address):
+    user = auth.get_current_user()
+    versions = listing_db.list_versions_for_address(user["id"], normalized_address)
+    if not versions:
+        return redirect(url_for("listings_archive_page"))
+    versions = _annotate_listing_archive_items(user["id"], versions)
+    return render_template(
+        "listing_archive_address.html",
+        email=user["email"],
+        has_billing_portal=bool(user.get("stripe_customer_id")),
+        active_nav="listing-archive",
+        product_name=config.PRODUCT_NAME,
+        address=versions[0].get("display_address") or normalized_address,
+        normalized_address=normalized_address,
+        listings=versions,
+    )
+
+
 @app.route("/listings/<int:generation_id>", methods=["GET"])
 @auth.subscription_required
 def listings_get_one(generation_id):
@@ -2448,6 +2482,17 @@ def listings_get_one(generation_id):
             for v in versions
         ],
     })
+
+
+@app.route("/listings/<int:generation_id>", methods=["DELETE"])
+@auth.subscription_required
+@limiter.limit("30 per minute", key_func=_user_rate_limit_key)
+def listings_delete_one(generation_id):
+    user = auth.get_current_user()
+    deleted = listing_db.delete_generation(user["id"], generation_id)
+    if not deleted:
+        return jsonify({"error": "Listing not found or no longer retained."}), 404
+    return jsonify({"ok": True, "listing_id": generation_id})
 
 
 @app.route("/listings/save-retry", methods=["POST"])

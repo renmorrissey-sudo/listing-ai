@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ address }} - Listing Archive - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+  <style>
+    .archive-address-main { max-width: 980px; }
+    .listing-version {
+      border: 1px solid #eef2f7;
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 12px;
+      background: #fff;
+    }
+    .listing-version-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .listing-version-title { font-weight: 800; font-size: 15px; }
+    .listing-version-meta { color: #667; font-size: 12px; margin-top: 4px; }
+    .listing-version-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .listing-output {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 12px;
+      color: #172033;
+      font-size: 13px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .posted-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    .archive-empty { color: #667; text-align: center; padding: 30px 0; }
+    @media (max-width: 700px) {
+      .listing-version-actions, .listing-version-actions .btn { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  {% set page_tagline = 'Listing Archive' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main class="archive-address-main">
+    <div class="page-header">
+      <div class="page-header-titles">
+        <h1>{{ address }}</h1>
+        <p class="muted">{{ listings|length }} saved listing{% if listings|length != 1 %}s{% endif %} for this address.</p>
+      </div>
+      <div class="page-header-actions">
+        <a class="btn secondary" href="/listings/archive">Back to Archive</a>
+        <a class="btn" href="/app">+ New Listing</a>
+      </div>
+    </div>
+
+    <div class="card" id="address-listings">
+      {% for listing in listings %}
+      <section class="listing-version" data-listing-id="{{ listing.id }}">
+        <div class="listing-version-header">
+          <div>
+            <div class="listing-version-title">Listing #{{ listing.id }}</div>
+            <div class="listing-version-meta">Generated {{ listing.created_at }}</div>
+            <div class="posted-badges">
+              {% set statuses = listing.publish_status or {} %}
+              {% if statuses %}
+                {% for provider, status in statuses.items() %}
+                  <span class="pill {% if status == 'published' %}success{% elif status == 'failed' %}danger{% else %}warn{% endif %}">{{ provider|title }}</span>
+                {% endfor %}
+              {% else %}
+                <span class="pill muted">Not posted</span>
+              {% endif %}
+              {% if listing.email_campaign and listing.email_campaign.status == 'draft_created' %}
+                <span class="pill success">Email Draft</span>
+              {% elif listing.email_campaign and listing.email_campaign.status in ['failed', 'unknown'] %}
+                <span class="pill warn">Email Draft needs attention</span>
+              {% endif %}
+            </div>
+          </div>
+          <div class="listing-version-actions">
+            <a class="btn secondary" href="/app?listing={{ listing.id }}">Open</a>
+            <button class="btn danger delete-listing-btn" type="button" data-listing-id="{{ listing.id }}">Delete</button>
+          </div>
+        </div>
+        <div class="listing-output">{{ (listing.output_snapshot or {}).get('listing') or 'No listing text saved for this version.' }}</div>
+      </section>
+      {% endfor %}
+      <div class="archive-empty" id="empty-address-archive" style="display:none;">No saved listings remain for this address.</div>
+    </div>
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+  <script>
+    (function () {
+      const listEl = document.getElementById('address-listings');
+      const emptyEl = document.getElementById('empty-address-archive');
+      function refreshEmptyState() {
+        const rows = listEl.querySelectorAll('.listing-version');
+        if (emptyEl) emptyEl.style.display = rows.length ? 'none' : 'block';
+      }
+      document.querySelectorAll('.delete-listing-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const listingId = btn.getAttribute('data-listing-id');
+          if (!listingId) return;
+          if (!window.confirm('Delete this listing from your archive?')) return;
+          btn.disabled = true;
+          try {
+            const res = await fetch(`/listings/${encodeURIComponent(listingId)}`, {
+              method: 'DELETE',
+              headers: { 'Accept': 'application/json' },
+              credentials: 'same-origin'
+            });
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}));
+              throw new Error(data.error || 'Could not delete listing.');
+            }
+            const row = btn.closest('.listing-version');
+            if (row) row.remove();
+            refreshEmptyState();
+          } catch (err) {
+            alert(err.message || 'Could not delete listing.');
+            btn.disabled = false;
+          }
+        });
+      });
+      refreshEmptyState();
+    })();
+  </script>
+</body>
+</html>

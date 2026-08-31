@@ -185,6 +185,27 @@ def list_versions_for_address(user_id, normalized_address: str):
     return [_row_to_dict(r) for r in rows]
 
 
+def delete_generation(user_id, generation_id):
+    """Hard-delete one retained generation owned by this user."""
+    generation = get_by_id(user_id, generation_id)
+    if not generation:
+        return False
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM listing_email_campaigns WHERE listing_generation_id = ?",
+            (generation_id,),
+        )
+        conn.execute(
+            "DELETE FROM social_publications WHERE listing_generation_id = ?",
+            (generation_id,),
+        )
+        cur = conn.execute(
+            "DELETE FROM listing_generations WHERE id = ? AND user_id = ?",
+            (generation_id, user_id),
+        )
+    return (cur.rowcount or 0) > 0
+
+
 def cleanup_expired():
     """Hard-delete rows past their retention window, cascading social_publications.
 

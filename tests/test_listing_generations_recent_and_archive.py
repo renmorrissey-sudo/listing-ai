@@ -14,8 +14,9 @@ def _login(client, user_id):
 
 
 def _make(user_id, address, **kwargs):
+    output_snapshot = kwargs.pop("output_snapshot", {"listing": address})
     return listing_db.create_generation(
-        user_id, display_address=address, output_snapshot={"listing": address}, **kwargs
+        user_id, display_address=address, output_snapshot=output_snapshot, **kwargs
     )
 
 
@@ -148,3 +149,46 @@ def test_archive_route_returns_json_for_logged_in_user(app_client, two_users):
     assert res.status_code == 200
     data = res.get_json()
     assert data["total"] == 1
+
+
+def test_address_archive_page_shows_all_versions_and_delete_buttons(app_client, two_users):
+    u1, _ = two_users
+    _login(app_client, u1)
+    db.update_user_subscription(u1, "active")
+    first = _make(u1, "12015 Wandsworth Dr", output_snapshot={"listing": "First version"})
+    second = _make(
+        u1,
+        "12015 Wandsworth Drive, Tampa FL",
+        output_snapshot={"listing": "Second version"},
+    )
+
+    archive = app_client.get("/listings/archive").get_data(as_text=True)
+    assert "/listings/archive/address/" in archive
+
+    res = app_client.get(f"/listings/archive/address/{first['normalized_address']}")
+    assert res.status_code == 200
+    html = res.get_data(as_text=True)
+    assert "First version" in html
+    assert "Second version" in html
+    assert f'data-listing-id="{first["id"]}"' in html
+    assert f'data-listing-id="{second["id"]}"' in html
+    assert "Delete" in html
+
+
+def test_delete_listing_removes_only_requested_tenant_listing(app_client, two_users):
+    u1, u2 = two_users
+    _login(app_client, u1)
+    db.update_user_subscription(u1, "active")
+    owned = _make(u1, "1 Delete St")
+    keep = _make(u1, "1 Delete St", output_snapshot={"listing": "Keep me"})
+    other = _make(u2, "1 Delete St")
+
+    missing = app_client.delete(f"/listings/{other['id']}")
+    assert missing.status_code == 404
+    assert listing_db.get_by_id(u2, other["id"]) is not None
+
+    res = app_client.delete(f"/listings/{owned['id']}")
+    assert res.status_code == 200
+    assert res.get_json()["ok"] is True
+    assert listing_db.get_by_id(u1, owned["id"]) is None
+    assert listing_db.get_by_id(u1, keep["id"]) is not None

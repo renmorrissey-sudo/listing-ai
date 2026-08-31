@@ -11,7 +11,8 @@
     .archive-toolbar input[type="search"] { flex: 1 1 280px; min-width: 200px; }
     .archive-card { border: 1px solid #eef2f7; border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
     .archive-card-main { min-width: 0; flex: 1 1 auto; }
-    .archive-card-address { font-weight: 700; font-size: 15px; }
+    .archive-card-address { color: #1d4ed8; font-weight: 700; font-size: 15px; text-decoration: none; }
+    .archive-card-address:hover { text-decoration: underline; }
     .archive-card-meta { color: #667; font-size: 12px; margin-top: 4px; display: flex; gap: 10px; flex-wrap: wrap; }
     .archive-card-posted { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
     .archive-pagination { display: flex; justify-content: center; gap: 10px; align-items: center; margin-top: 14px; }
@@ -26,7 +27,7 @@
     <div class="page-header">
       <div class="page-header-titles">
         <h1>Listing Archive</h1>
-        <p class="muted">Every listing generated in the past {{ retention_days }} days. Search by property address to reopen exactly what was generated.</p>
+        <p class="muted">Every listing generated in the past {{ retention_days }} days. Click an address to view every saved version for that property.</p>
       </div>
       <div class="page-header-actions">
         <a class="btn" href="/app">+ New Listing</a>
@@ -83,6 +84,10 @@
       return badges.join('');
     }
 
+    function addressUrl(item) {
+      return `/listings/archive/address/${encodeURIComponent(item.normalized_address || '')}`;
+    }
+
     async function loadArchive() {
       const listEl = document.getElementById('archive-list');
       const paginationEl = document.getElementById('archive-pagination');
@@ -101,7 +106,7 @@
         listEl.innerHTML = items.map(item => `
           <div class="archive-card">
             <div class="archive-card-main">
-              <div class="archive-card-address">${escapeHtml(item.display_address)}</div>
+              <a class="archive-card-address" href="${addressUrl(item)}">${escapeHtml(item.display_address)}</a>
               <div class="archive-card-meta">
                 <span>Generated ${formatDate(item.created_at)}</span>
               </div>
