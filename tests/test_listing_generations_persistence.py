@@ -48,6 +48,12 @@ def test_successful_generation_automatically_persists(app_client, two_users):
     assert saved is not None
     assert saved["display_address"] == VALID_PAYLOAD["address"]
     assert saved["output_snapshot"]["listing"] == "A great home."
+    assert saved["output_snapshot"]["social"] == "1. [INSTAGRAM] hi"
+    assert saved["output_snapshot"]["email"] == "Subject: Hi\n\nBody."
+    assert saved["social_content"]
+    assert data["social"] == "1. [INSTAGRAM] hi"
+    assert data["email"] == "Subject: Hi\n\nBody."
+    assert data["social_content"] == saved["social_content"]
 
 
 def test_failed_generation_is_not_falsely_stored_as_successful(app_client, two_users):
@@ -84,6 +90,8 @@ def test_persistence_failure_returns_content_with_warning_and_retry_payload(app_
     assert res.status_code == 200
     data = res.get_json()
     assert data["listing"] == "A great home."
+    assert data["social"] == "1. [INSTAGRAM] hi"
+    assert data["email"] == "Subject: Hi\n\nBody."
     assert "generation_id" not in data
     assert data.get("save_warning")
     assert data["save_retry_payload"]["address"] == VALID_PAYLOAD["address"]
@@ -106,6 +114,8 @@ def test_save_retry_persists_without_new_ai_call(app_client, two_users):
     saved = listing_db.get_by_id(u1, gen_id)
     assert saved["display_address"] == "999 Retry Lane"
     assert saved["output_snapshot"]["listing"] == "L"
+    assert saved["output_snapshot"]["social"] == "S"
+    assert saved["output_snapshot"]["email"] == "E"
 
 
 def test_save_retry_missing_content_is_rejected(app_client, two_users):

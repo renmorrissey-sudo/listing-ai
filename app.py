@@ -2336,6 +2336,7 @@ def generate():
         user = auth.get_current_user()
         output_snapshot = {"listing": listing, "social": social, "email": email}
         response_body = dict(output_snapshot)
+        social_content = build_social_content_snapshot(social)
         if user:
             db.record_tool_usage(user["id"], "listing_generator", "generated")
             try:
@@ -2344,10 +2345,11 @@ def generate():
                     display_address=cleaned.get("address", ""),
                     input_snapshot=cleaned,
                     output_snapshot=output_snapshot,
-                    social_content=build_social_content_snapshot(social),
+                    social_content=social_content,
                 )
                 response_body["generation_id"] = generation["id"]
                 response_body["created_at"] = generation["created_at"]
+                response_body["social_content"] = generation.get("social_content")
             except Exception:
                 # Generated content is still returned to the user — persistence
                 # failure must never destroy or hide work that already succeeded.
@@ -2359,7 +2361,7 @@ def generate():
                     "address": cleaned.get("address", ""),
                     "input_snapshot": cleaned,
                     "output_snapshot": output_snapshot,
-                    "social_content": build_social_content_snapshot(social),
+                    "social_content": social_content,
                 }
         return jsonify(response_body)
     except Exception:

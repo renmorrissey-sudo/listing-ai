@@ -155,11 +155,23 @@ def test_address_archive_page_shows_all_versions_and_delete_buttons(app_client, 
     u1, _ = two_users
     _login(app_client, u1)
     db.update_user_subscription(u1, "active")
-    first = _make(u1, "12015 Wandsworth Dr", output_snapshot={"listing": "First version"})
+    first = _make(
+        u1,
+        "12015 Wandsworth Dr",
+        output_snapshot={
+            "listing": "First listing version",
+            "social": "First social version",
+            "email": "First email version",
+        },
+    )
     second = _make(
         u1,
         "12015 Wandsworth Drive, Tampa FL",
-        output_snapshot={"listing": "Second version"},
+        output_snapshot={
+            "listing": "Second listing version",
+            "social": "Second social version",
+            "email": "Second email version",
+        },
     )
 
     archive = app_client.get("/listings/archive").get_data(as_text=True)
@@ -168,8 +180,15 @@ def test_address_archive_page_shows_all_versions_and_delete_buttons(app_client, 
     res = app_client.get(f"/listings/archive/address/{first['normalized_address']}")
     assert res.status_code == 200
     html = res.get_data(as_text=True)
-    assert "First version" in html
-    assert "Second version" in html
+    assert "First listing version" in html
+    assert "First social version" in html
+    assert "First email version" in html
+    assert "Second listing version" in html
+    assert "Second social version" in html
+    assert "Second email version" in html
+    assert "Listing" in html
+    assert "Social" in html
+    assert "Email" in html
     assert f'data-listing-id="{first["id"]}"' in html
     assert f'data-listing-id="{second["id"]}"' in html
     assert "Delete" in html

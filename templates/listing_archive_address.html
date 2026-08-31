@@ -26,6 +26,14 @@
     .listing-version-title { font-weight: 800; font-size: 15px; }
     .listing-version-meta { color: #667; font-size: 12px; margin-top: 4px; }
     .listing-version-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .listing-output-section { margin-top: 12px; }
+    .listing-output-heading {
+      color: #334155;
+      font-size: 12px;
+      font-weight: 800;
+      margin: 0 0 6px;
+      text-transform: uppercase;
+    }
     .listing-output {
       background: #f8fafc;
       border: 1px solid #e2e8f0;
@@ -88,7 +96,19 @@
             <button class="btn danger delete-listing-btn" type="button" data-listing-id="{{ listing.id }}">Delete</button>
           </div>
         </div>
-        <div class="listing-output">{{ (listing.output_snapshot or {}).get('listing') or 'No listing text saved for this version.' }}</div>
+        {% set snapshot = listing.output_snapshot or {} %}
+        <div class="listing-output-section">
+          <h2 class="listing-output-heading">Listing</h2>
+          <div class="listing-output">{{ snapshot.get('listing') or 'No listing text saved for this version.' }}</div>
+        </div>
+        <div class="listing-output-section">
+          <h2 class="listing-output-heading">Social</h2>
+          <div class="listing-output">{{ snapshot.get('social') or 'No social post text saved for this version.' }}</div>
+        </div>
+        <div class="listing-output-section">
+          <h2 class="listing-output-heading">Email</h2>
+          <div class="listing-output">{{ snapshot.get('email') or 'No prospect email text saved for this version.' }}</div>
+        </div>
       </section>
       {% endfor %}
       <div class="archive-empty" id="empty-address-archive" style="display:none;">No saved listings remain for this address.</div>
