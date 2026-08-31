@@ -182,3 +182,53 @@ def test_voice_tool_saves_email_draft_to_lead_timeline(app_client, two_users):
     activities = crm_db.list_lead_activities(u1, lead_id)
     assert activities[0]["event_type"] == "email_draft_created"
     assert "Checking in" in activities[0]["summary"]
+
+
+def test_voice_tool_sends_email_to_lead(app_client, two_users, monkeypatch):
+    u1, _ = two_users
+    apply_pending_migrations()
+    call_id = _voice_call(u1)
+    lead_id = _lead(u1, "Email Lead", email="lead@example.com")
+    sent = {}
+
+    def fake_send(user_id, selected_lead_id, **kwargs):
+        sent.update(
+            {
+                "user_id": user_id,
+                "lead_id": selected_lead_id,
+                "subject": kwargs["subject"],
+                "body": kwargs["body"],
+            }
+        )
+        return {
+            "ok": True,
+            "to_email": "lead@example.com",
+            "provider_status": "sent",
+        }, None
+
+    monkeypatch.setattr("voice_tools.send_lead_email", fake_send)
+
+    res = app_client.post(
+        "/webhook/voice",
+        json=_tool_payload(
+            call_id,
+            "vapi_tools",
+            "send_lead_email",
+            {
+                "lead_id": lead_id,
+                "subject": "Showing follow-up",
+                "body": "Would you like to see the home this week?",
+            },
+        ),
+    )
+
+    assert res.status_code == 200
+    result = _tool_result(res)
+    assert result["ok"] is True
+    assert result["email"]["provider_status"] == "sent"
+    assert sent == {
+        "user_id": u1,
+        "lead_id": lead_id,
+        "subject": "Showing follow-up",
+        "body": "Would you like to see the home this week?",
+    }

@@ -35,3 +35,9 @@ class BaseEmailCampaignProvider:
 
     def create_draft(self, **kwargs):
         raise NotImplementedError
+
+    def send_email(self, **kwargs):
+        raise EmailCampaignProviderError(
+            "This email provider cannot send one-to-one lead emails from TopAI.",
+            error_code="send_not_supported",
+        )

@@ -36,6 +36,7 @@ CRM TOOL USE:
 - If the agent asks to update a lead status, use update_lead_status. You can update any supported CRM pipeline status.
 - If the agent asks to mark a lead SMS Verified or change SMS permission, use update_lead_sms_consent_status.
 - If the agent asks you to draft an email for a lead, compose a subject and concise body, then use draft_lead_email so the draft is saved for review.
+- If the agent explicitly asks you to send an email to a lead, compose the email and use send_lead_email. Confirm the result from the tool before saying it was sent.
 - When a tool returns multiple open leads, walk through the named leads one at a time without requiring the agent to say each lead name first.
 
 POST-CALL SUMMARY REQUIREMENTS:

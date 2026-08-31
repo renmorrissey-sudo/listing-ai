@@ -211,3 +211,38 @@ class SendGridEmailCampaignProvider(BaseEmailCampaignProvider):
             "warnings": result.get("warnings") or [],
             "has_recipients": bool(selected_lists),
         }
+
+    def send_email(
+        self,
+        *,
+        to_email,
+        subject,
+        html_content,
+        plain_content,
+        sender_name=None,
+        sender_email=None,
+        **_,
+    ):
+        if not sender_email:
+            raise EmailCampaignProviderError(
+                "Choose a verified SendGrid sender before sending lead email.",
+                error_code="missing_sender",
+            )
+        payload = {
+            "personalizations": [{"to": [{"email": to_email}]}],
+            "from": {
+                "email": sender_email,
+                **({"name": sender_name} if sender_name else {}),
+            },
+            "subject": subject,
+            "content": [
+                {"type": "text/plain", "value": plain_content},
+                {"type": "text/html", "value": html_content},
+            ],
+            "categories": ["TopAI", "CRM Lead Email"],
+        }
+        result = self._request("POST", "/mail/send", body=payload)
+        return {
+            "provider_message_id": result.get("id"),
+            "provider_status": "sent",
+        }

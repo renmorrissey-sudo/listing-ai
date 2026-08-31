@@ -180,6 +180,7 @@ def test_outbound_payload_includes_assistant_overrides(monkeypatch):
         "update_lead_status",
         "update_lead_sms_consent_status",
         "draft_lead_email",
+        "send_lead_email",
     }.issubset(tool_names)
     assert all(tool["server"]["url"].endswith("/webhook/voice") for tool in tools)
     messages = payload["assistantOverrides"]["model"]["messages"]
