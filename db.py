@@ -809,6 +809,59 @@ def update_lead_contact_fields(
         )
 
 
+def update_lead_contact_info(
+    lead_id,
+    user_id,
+    *,
+    name=_UNSET,
+    phone_number=_UNSET,
+    email=_UNSET,
+    lead_type=_UNSET,
+    property_interest=_UNSET,
+    notes=_UNSET,
+    next_action=_UNSET,
+):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE leads
+            SET name = CASE WHEN ? THEN ? ELSE name END,
+                phone_number = CASE WHEN ? THEN ? ELSE phone_number END,
+                email = CASE WHEN ? THEN ? ELSE email END,
+                lead_type = CASE WHEN ? THEN ? ELSE lead_type END,
+                property_interest = CASE WHEN ? THEN ? ELSE property_interest END,
+                notes = CASE WHEN ? THEN ? ELSE notes END,
+                next_action = CASE WHEN ? THEN ? ELSE next_action END,
+                updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                bind_bool(name is not _UNSET),
+                (name or "").strip()[:200] or "Lead" if name is not _UNSET else None,
+                bind_bool(phone_number is not _UNSET),
+                (phone_number or "").strip()[:40] if phone_number is not _UNSET else None,
+                bind_bool(email is not _UNSET),
+                (email or "").strip()[:200] or None if email is not _UNSET else None,
+                bind_bool(lead_type is not _UNSET),
+                (lead_type or "").strip()[:80] or None if lead_type is not _UNSET else None,
+                bind_bool(property_interest is not _UNSET),
+                (
+                    (property_interest or "").strip()[:500] or None
+                    if property_interest is not _UNSET
+                    else None
+                ),
+                bind_bool(notes is not _UNSET),
+                (notes or "").strip()[:1500] or None if notes is not _UNSET else None,
+                bind_bool(next_action is not _UNSET),
+                (next_action or "").strip()[:500] or None if next_action is not _UNSET else None,
+                now,
+                lead_id,
+                user_id,
+            ),
+        )
+
+
 def touch_lead_call_timestamps(lead_id, user_id):
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:

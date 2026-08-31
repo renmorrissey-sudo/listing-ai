@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, flash, get_flashed_messages, jsonify, redirect, render_template, request, url_for
@@ -10,6 +9,7 @@ from flask import Blueprint, flash, get_flashed_messages, jsonify, redirect, ren
 import auth
 import crm_db
 import db
+import lead_contact_service
 from crm_constants import (
     APPOINTMENT_OUTCOMES,
     APPOINTMENT_TYPES,
@@ -44,7 +44,6 @@ ALLOWED_FOLLOW_UP_RANGES = {
 
 crm_bp = Blueprint("crm", __name__)
 logger = logging.getLogger(__name__)
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _user_or_redirect():
@@ -677,29 +676,16 @@ def api_patch_lead(lead_id):
 @auth.subscription_required
 def api_update_lead_contact(lead_id):
     user = auth.get_current_user()
-    lead = db.get_lead(lead_id, user["id"])
-    if not lead:
-        return jsonify({"error": "Lead not found."}), 404
     data = request.get_json(silent=True) or {}
-    email = str(data.get("email") or "").strip()[:200]
-    if email and not EMAIL_RE.match(email):
-        return jsonify({"error": "Enter a valid email address."}), 400
-    previous = lead.get("email") or ""
-    db.update_lead_contact_fields(
-        lead_id,
+    updated, error, status_code = lead_contact_service.update_lead_contact_info(
         user["id"],
-        email=email,
+        lead_id,
+        data,
+        actor_user_id=user["id"],
+        source="crm_api",
     )
-    updated = db.get_lead(lead_id, user["id"])
-    if (previous or "") != (updated.get("email") or ""):
-        crm_db.add_lead_activity(
-            lead_id,
-            user["id"],
-            "contact_updated",
-            "Lead email updated" if updated.get("email") else "Lead email cleared",
-            {"previous_email": previous, "email": updated.get("email") or ""},
-            actor_user_id=user["id"],
-        )
+    if error:
+        return jsonify({"error": error}), status_code
     return jsonify({"ok": True, "lead": updated})
 
 

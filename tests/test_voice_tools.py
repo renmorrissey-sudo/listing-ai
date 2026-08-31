@@ -156,6 +156,46 @@ def test_voice_tool_can_mark_lead_sms_verified(app_client, two_users):
     assert not bool(lead["sms_sending_blocked"])
 
 
+def test_voice_tool_updates_lead_contact_info(app_client, two_users):
+    u1, _ = two_users
+    apply_pending_migrations()
+    call_id = _voice_call(u1)
+    lead_id = _lead(u1, "Contact Lead", phone="+13035550105", email="old@example.com")
+
+    res = app_client.post(
+        "/webhook/voice",
+        json=_tool_payload(
+            call_id,
+            "vapi_tools",
+            "update_lead_contact_info",
+            {
+                "lead_id": lead_id,
+                "name": "Contact Lead Updated",
+                "phone_number": "(303) 555-0106",
+                "email": "new@example.com",
+                "lead_type": "seller",
+                "property_interest": "Listing consultation",
+                "notes": "Asked for a CMA",
+                "next_action": "Schedule listing appointment",
+            },
+        ),
+    )
+
+    assert res.status_code == 200
+    result = _tool_result(res)
+    assert result["ok"] is True
+    lead = db.get_lead(lead_id, u1)
+    assert lead["name"] == "Contact Lead Updated"
+    assert lead["phone_number"] == "+13035550106"
+    assert lead["email"] == "new@example.com"
+    assert lead["lead_type"] == "seller"
+    assert lead["property_interest"] == "Listing consultation"
+    assert lead["notes"] == "Asked for a CMA"
+    assert lead["next_action"] == "Schedule listing appointment"
+    activities = crm_db.list_lead_activities(u1, lead_id)
+    assert activities[0]["event_type"] == "contact_updated"
+
+
 def test_voice_tool_saves_email_draft_to_lead_timeline(app_client, two_users):
     u1, _ = two_users
     apply_pending_migrations()

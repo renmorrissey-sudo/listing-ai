@@ -98,11 +98,25 @@ def test_api_update_lead_contact_email(app_client, two_users):
 
     res = app_client.post(
         f"/api/crm/leads/{lead_id}/contact",
-        json={"email": "capture@example.com"},
+        json={
+            "name": "Email Capture Updated",
+            "phone_number": "(555) 123-9014",
+            "email": "capture@example.com",
+            "lead_type": "buyer",
+            "property_interest": "Condo near downtown",
+            "notes": "Prefers afternoon calls",
+            "next_action": "Send listings",
+        },
     )
     assert res.status_code == 200
-    assert res.get_json()["lead"]["email"] == "capture@example.com"
-    assert db.get_lead(lead_id, u1)["email"] == "capture@example.com"
+    updated = res.get_json()["lead"]
+    assert updated["name"] == "Email Capture Updated"
+    assert updated["phone_number"] == "+15551239014"
+    assert updated["email"] == "capture@example.com"
+    assert updated["lead_type"] == "buyer"
+    assert updated["property_interest"] == "Condo near downtown"
+    assert updated["notes"] == "Prefers afternoon calls"
+    assert updated["next_action"] == "Send listings"
 
     detail = app_client.get(f"/api/crm/leads/{lead_id}").get_json()
     assert detail["lead"]["email"] == "capture@example.com"
@@ -114,6 +128,28 @@ def test_api_update_lead_contact_email(app_client, two_users):
     html = app_client.get(f"/crm/leads/{lead_id}").get_data(as_text=True)
     assert "capture@example.com" in html
     assert 'href="mailto:capture@example.com"' in html
+
+
+def test_api_update_lead_contact_rejects_duplicate_phone(app_client, two_users):
+    u1, _ = two_users
+    _login(app_client, u1)
+    first = app_client.post(
+        "/api/crm/leads",
+        json={"first_name": "First", "last_name": "Lead", "phone": "+15551239015"},
+    ).get_json()
+    second = app_client.post(
+        "/api/crm/leads",
+        json={"first_name": "Second", "last_name": "Lead", "phone": "+15551239016"},
+    ).get_json()
+
+    res = app_client.post(
+        f"/api/crm/leads/{second['lead_id']}/contact",
+        json={"phone_number": "(555) 123-9015"},
+    )
+
+    assert res.status_code == 409
+    assert db.get_lead(second["lead_id"], u1)["phone_number"] == "+15551239016"
+    assert "First Lead" in res.get_json()["error"]
 
 
 def test_api_create_lead_missing_phone_returns_400(app_client, two_users):
