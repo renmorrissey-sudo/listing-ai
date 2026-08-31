@@ -99,6 +99,12 @@ def test_parser_uses_exact_saved_email_and_html_escapes_content():
 def test_export_uses_tenant_settings_and_persists_draft(two_users, monkeypatch):
     user_id, _ = two_users
     generation = _generation(user_id)
+    db.update_business_profile(
+        user_id,
+        agent_name="Khristina Morrissey",
+        phone_number="720-289-1700",
+        brokerage_name="Home Real Estate",
+    )
     _connect(user_id, monkeypatch)
     provider = _FakeProvider()
     monkeypatch.setattr(
@@ -116,8 +122,13 @@ def test_export_uses_tenant_settings_and_persists_draft(two_users, monkeypatch):
     call = provider.calls[0]
     assert call["subject"] == "Exact saved subject"
     assert call["plain_content"] == (
-        "Hello prospect,\n\nThis exact saved body must be used."
+        "Hello prospect,\n\nThis exact saved body must be used.\n\n"
+        "Warm regards,\nKhristina Morrissey\n720-289-1700\nHome Real Estate"
     )
+    assert "Warm regards," in call["html_content"]
+    assert "Khristina Morrissey" in call["html_content"]
+    assert "720-289-1700" in call["html_content"]
+    assert "Home Real Estate" in call["html_content"]
     assert call["sender_id"] == 123
     assert call["list_ids"] == ["list-abc"]
     assert call["suppression_group_id"] == 456

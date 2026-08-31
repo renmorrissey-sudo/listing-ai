@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+import db
 import email_marketing_db as marketing_db
 import listing_generations_db as listing_db
 from email_campaign_providers.base import EmailCampaignProviderError
@@ -23,6 +24,32 @@ def _campaign_name(address: str) -> str:
     return f"{address} - {stamp}"[:100]
 
 
+def _email_signature(user_id):
+    profile = db.get_business_profile(user_id) or {}
+    lines = ["Warm regards,"]
+    for value in (
+        profile.get("agent_name"),
+        profile.get("phone_number"),
+        profile.get("brokerage_name") or profile.get("company_name"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            lines.append(text)
+    return "\n".join(lines)
+
+
+def _with_business_profile_signature(user_id, body):
+    text = str(body or "").strip()
+    if not text:
+        return text
+    if "warm regards" in text.lower():
+        return text
+    signature = _email_signature(user_id)
+    if not signature:
+        return text
+    return f"{text.rstrip()}\n\n{signature}"
+
+
 def export_listing_email(
     user_id,
     listing_generation_id,
@@ -36,6 +63,7 @@ def export_listing_email(
     parsed = parse_listing_email(
         snapshot.get("email"), generation.get("display_address")
     )
+    email_body = _with_business_profile_signature(user_id, parsed["body"])
 
     export, created = marketing_db.create_or_get_export(
         user_id,
@@ -93,7 +121,7 @@ def export_listing_email(
     provider = get_provider("sendgrid", api_key=credentials["api_key"])
     html_content = render_listing_email_html(
         subject=parsed["subject"],
-        body=parsed["body"],
+        body=email_body,
         property_address=generation["display_address"],
     )
     try:
@@ -101,7 +129,7 @@ def export_listing_email(
             name=_campaign_name(generation["display_address"]),
             subject=parsed["subject"],
             html_content=html_content,
-            plain_content=parsed["body"],
+            plain_content=email_body,
             sender_id=credentials.get("sender_id"),
             list_ids=credentials.get("default_list_ids"),
             suppression_group_id=credentials.get("suppression_group_id"),
