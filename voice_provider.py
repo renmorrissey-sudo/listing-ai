@@ -2,8 +2,10 @@ import json
 import logging
 import urllib.error
 import urllib.request
+from urllib.parse import urljoin
 
 import config
+from voice_tools import voice_tool_definitions
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +114,17 @@ class VapiVoiceProvider:
             },
             "assistantOverrides": {
                 "variableValues": {key: values.get(key, "") for key in VAPI_VARIABLE_KEYS},
+                "model": {
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": prompt,
+                        }
+                    ],
+                    "tools": voice_tool_definitions(
+                        urljoin(config.APP_URL.rstrip("/") + "/", "webhook/voice")
+                    ),
+                },
             },
             "metadata": {
                 "topai_call_id": str(call_id),

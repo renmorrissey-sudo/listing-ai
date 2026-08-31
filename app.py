@@ -57,6 +57,7 @@ from voice_provider import (
     validate_vapi_variable_values,
 )
 from voice_validation import validate_voice_call_payload, validate_voice_persona_payload
+from voice_tools import handle_vapi_tool_calls, is_vapi_tool_call_payload
 from crm_constants import normalize_lead_status
 
 config.validate_config()
@@ -1917,11 +1918,18 @@ def _twiml_empty_response():
 @limiter.exempt
 def voice_webhook():
     if config.VOICE_PROVIDER_WEBHOOK_SECRET:
-        supplied = request.headers.get("X-Voice-Webhook-Secret") or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+        supplied = (
+            request.headers.get("X-Voice-Webhook-Secret")
+            or request.headers.get("X-Vapi-Secret")
+            or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+        )
         if supplied != config.VOICE_PROVIDER_WEBHOOK_SECRET:
             return jsonify({"error": "Invalid signature."}), 401
 
     payload = request.get_json(silent=True) or {}
+    if is_vapi_tool_call_payload(payload):
+        return jsonify(handle_vapi_tool_calls(payload)), 200
+
     normalized = normalize_voice_webhook(payload)
     if not normalized.get("provider_call_id") and not normalized.get("call_id"):
         return jsonify({"error": "Missing provider call ID."}), 400

@@ -173,6 +173,17 @@ def test_outbound_payload_includes_assistant_overrides(monkeypatch):
         "property_interest": "Townhome",
         "desired_outcome": "Book consultation",
     }
+    tools = payload["assistantOverrides"]["model"]["tools"]
+    tool_names = {tool["function"]["name"] for tool in tools}
+    assert {
+        "list_open_leads",
+        "update_lead_status",
+        "update_lead_sms_consent_status",
+        "draft_lead_email",
+    }.issubset(tool_names)
+    assert all(tool["server"]["url"].endswith("/webhook/voice") for tool in tools)
+    messages = payload["assistantOverrides"]["model"]["messages"]
+    assert messages == [{"role": "system", "content": "prompt unused"}]
 
 
 def test_start_voice_call_blocks_missing_business_profile(app_client, two_users):
