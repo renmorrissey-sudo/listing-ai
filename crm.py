@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, flash, get_flashed_messages, jsonify, redirect, render_template, request, url_for
@@ -43,6 +44,7 @@ ALLOWED_FOLLOW_UP_RANGES = {
 
 crm_bp = Blueprint("crm", __name__)
 logger = logging.getLogger(__name__)
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _user_or_redirect():
@@ -590,6 +592,7 @@ def api_list_leads():
                 "id": lead["id"],
                 "name": lead.get("name"),
                 "phone_number": lead.get("phone_number"),
+                "email": lead.get("email"),
                 "lead_type": lead.get("lead_type"),
                 "property_interest": lead.get("property_interest"),
                 "status": normalize_lead_status(lead.get("status")),
@@ -667,6 +670,36 @@ def api_patch_lead(lead_id):
         actor_user_id=user["id"],
     )
     updated = db.get_lead(lead_id, user["id"])
+    return jsonify({"ok": True, "lead": updated})
+
+
+@crm_bp.route("/api/crm/leads/<int:lead_id>/contact", methods=["POST"])
+@auth.subscription_required
+def api_update_lead_contact(lead_id):
+    user = auth.get_current_user()
+    lead = db.get_lead(lead_id, user["id"])
+    if not lead:
+        return jsonify({"error": "Lead not found."}), 404
+    data = request.get_json(silent=True) or {}
+    email = str(data.get("email") or "").strip()[:200]
+    if email and not EMAIL_RE.match(email):
+        return jsonify({"error": "Enter a valid email address."}), 400
+    previous = lead.get("email") or ""
+    db.update_lead_contact_fields(
+        lead_id,
+        user["id"],
+        email=email,
+    )
+    updated = db.get_lead(lead_id, user["id"])
+    if (previous or "") != (updated.get("email") or ""):
+        crm_db.add_lead_activity(
+            lead_id,
+            user["id"],
+            "contact_updated",
+            "Lead email updated" if updated.get("email") else "Lead email cleared",
+            {"previous_email": previous, "email": updated.get("email") or ""},
+            actor_user_id=user["id"],
+        )
     return jsonify({"ok": True, "lead": updated})
 
 

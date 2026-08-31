@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 import config
 from db_backend import bind_bool, connect as backend_connect, sql_is_true
 
+_UNSET = object()
+
 
 def _connect():
     return backend_connect()
@@ -694,6 +696,7 @@ def create_lead_record(
     phone_number,
     *,
     name,
+    email=None,
     lead_type=None,
     property_interest=None,
     status="new",
@@ -708,15 +711,16 @@ def create_lead_record(
         cur = conn.execute(
             """
             INSERT INTO leads
-                (user_id, name, phone_number, lead_type, property_interest, status, source,
+                (user_id, name, phone_number, email, lead_type, property_interest, status, source,
                  notes, assigned_user_id, created_at, updated_at,
                  last_contacted_at, latest_call_at, last_outbound_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
                 name or "Lead",
                 phone_number,
+                (email or "").strip()[:200] or None,
                 lead_type,
                 property_interest,
                 status or "new",
@@ -738,6 +742,7 @@ def update_lead_contact_fields(
     user_id,
     *,
     name=None,
+    email=_UNSET,
     lead_type=None,
     property_interest=None,
     notes=None,
@@ -768,6 +773,7 @@ def update_lead_contact_fields(
             UPDATE leads
             SET name = COALESCE(?, name),
                 lead_type = COALESCE(?, lead_type),
+                email = CASE WHEN ? THEN ? ELSE email END,
                 property_interest = COALESCE(?, property_interest),
                 notes = CASE
                     WHEN CAST(? AS TEXT) IS NOT NULL
@@ -784,6 +790,8 @@ def update_lead_contact_fields(
             (
                 name,
                 lead_type,
+                bind_bool(email is not _UNSET),
+                (email or "").strip()[:200] or None if email is not _UNSET else None,
                 property_interest,
                 notes,
                 notes,

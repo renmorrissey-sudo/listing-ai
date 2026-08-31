@@ -23,13 +23,23 @@
     <div class="card">
       <h1>{{ lead.name or 'Lead' }}</h1>
       {% set shown_source = public_lead_source(lead.source) %}
-      <div class="muted">{{ lead.phone_number }} · {{ lead.lead_type or 'N/A' }}{% if shown_source %} · {{ shown_source }}{% elif not lead.source %} · sms{% endif %}</div>
+      <div class="muted">
+        {{ lead.phone_number }}
+        {% if lead.email %} · {{ lead.email }}{% endif %}
+        · {{ lead.lead_type or 'N/A' }}{% if shown_source %} · {{ shown_source }}{% elif not lead.source %} · sms{% endif %}
+      </div>
       <form id="lead-identity-form" style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
         <label class="muted" style="font-size:12px;">Name
           <input id="lead-name-input" name="name" value="{{ lead.name or '' }}" maxlength="200" required style="display:block;min-width:220px;padding:8px 10px;border:1px solid #e0e4ed;border-radius:8px;" />
         </label>
         <button class="btn secondary" type="submit">Save name</button>
       </form>
+      <div class="row" style="margin:12px 0;align-items:flex-end;">
+        <label class="muted" for="lead-email" style="font-size:12px;"><strong>Email</strong>
+          <input id="lead-email" type="email" value="{{ lead.email or '' }}" placeholder="lead@example.com" style="display:block;min-width:240px;padding:8px 10px;border:1px solid #e0e4ed;border-radius:8px;" />
+        </label>
+        <button class="btn secondary" type="button" onclick="saveLeadEmail()">Save email</button>
+      </div>
       {% if historical_sms_name and historical_sms_name != (lead.name or '') %}
       <div class="flash" style="display:block;background:#fff7ed;border-color:#fdba74;color:#9a3412;">
         SMS history used the name “{{ historical_sms_name }}”.
@@ -91,6 +101,7 @@
 
       <div class="quick-actions">
         <a class="btn" href="/app#sms">Draft SMS</a>
+        {% if lead.email %}<a class="btn secondary" href="mailto:{{ lead.email }}">Email</a>{% endif %}
         <a class="btn secondary" href="tel:{{ lead.phone_number }}">Call</a>
         <button class="btn secondary" type="button" onclick="document.getElementById('task-panel').scrollIntoView()">Create Task</button>
         <button class="btn secondary" type="button" onclick="document.getElementById('fu-panel').scrollIntoView()">Schedule Follow-Up</button>
@@ -448,6 +459,17 @@
       const data = await res.json();
       if (!res.ok) return showFlash(data.error || 'Failed', true);
       location.reload();
+    }
+    async function saveLeadEmail() {
+      const email = document.getElementById('lead-email').value.trim();
+      const res = await fetch(`/api/crm/leads/${leadId}/contact`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({email}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return showFlash(data.error || 'Could not save email.', true);
+      showFlash(email ? 'Lead email saved.' : 'Lead email cleared.');
+      setTimeout(() => location.reload(), 500);
     }
     function formatLocalLabel(iso) {
       const d = new Date(iso);

@@ -135,6 +135,33 @@ def test_sms_and_voice_share_one_lead(two_users):
     assert len(db.list_leads(u1)) == 1
 
 
+def test_shared_lead_upsert_captures_email(two_users):
+    u1, _ = two_users
+    apply_pending_migrations()
+    lead_id, created, lead = upsert_crm_lead(
+        u1,
+        "3038703110",
+        {"lead_name": "Email Buyer", "email": "buyer@example.com"},
+        source=VOICE_SOURCE,
+        initial_status="attempting_contact",
+        touch_call=True,
+    )
+    assert created is True
+    assert lead_id
+    assert lead["email"] == "buyer@example.com"
+
+    lead_id2, created2, lead2 = upsert_crm_lead(
+        u1,
+        "(303) 870-3110",
+        {"email": "updated@example.com"},
+        source=SMS_SOURCE,
+        touch_sms=True,
+    )
+    assert created2 is False
+    assert lead_id2 == lead_id
+    assert lead2["email"] == "updated@example.com"
+
+
 def test_tenants_isolated_same_phone(two_users):
     u1, u2 = two_users
     apply_pending_migrations()

@@ -75,9 +75,45 @@ def test_api_create_lead_creates_via_shared_ingest(app_client, two_users):
     assert lead is not None
     assert lead["name"] == "Casey Buyer"
     assert lead["phone_number"] == "+15551239003"
+    assert lead["email"] == "casey@example.com"
     # Same safe defaults as every other ingestion path (CSV/webhook/manual form).
     assert lead["sms_consent_status"] == "not_certified"
     assert int(lead["sms_sending_blocked"]) == 1
+
+
+def test_api_update_lead_contact_email(app_client, two_users):
+    u1, _ = two_users
+    _login(app_client, u1)
+    created = app_client.post(
+        "/api/crm/leads",
+        json={"first_name": "Email", "last_name": "Capture", "phone": "+15551239013"},
+    ).get_json()
+    lead_id = created["lead_id"]
+
+    bad = app_client.post(
+        f"/api/crm/leads/{lead_id}/contact",
+        json={"email": "not-an-email"},
+    )
+    assert bad.status_code == 400
+
+    res = app_client.post(
+        f"/api/crm/leads/{lead_id}/contact",
+        json={"email": "capture@example.com"},
+    )
+    assert res.status_code == 200
+    assert res.get_json()["lead"]["email"] == "capture@example.com"
+    assert db.get_lead(lead_id, u1)["email"] == "capture@example.com"
+
+    detail = app_client.get(f"/api/crm/leads/{lead_id}").get_json()
+    assert detail["lead"]["email"] == "capture@example.com"
+    listed = app_client.get("/api/crm/leads").get_json()["leads"]
+    assert any(
+        item["id"] == lead_id and item["email"] == "capture@example.com"
+        for item in listed
+    )
+    html = app_client.get(f"/crm/leads/{lead_id}").get_data(as_text=True)
+    assert "capture@example.com" in html
+    assert 'href="mailto:capture@example.com"' in html
 
 
 def test_api_create_lead_missing_phone_returns_400(app_client, two_users):
