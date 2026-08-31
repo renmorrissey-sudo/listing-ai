@@ -8,6 +8,7 @@
     <details class="account-menu" id="account-menu">
       <summary aria-label="Open account menu">Account <span aria-hidden="true">&#9662;</span></summary>
       <div class="account-menu-panel" role="menu" aria-label="Account">
+        <a href="/settings/business-profile" role="menuitem" {% if active_nav == 'business-profile' %}aria-current="page"{% endif %}>Business Profile</a>
         <a href="/billing" role="menuitem" {% if active_nav == 'billing' %}aria-current="page"{% endif %}>Billing</a>
         <a href="/social/connections" role="menuitem" {% if active_nav == 'social-connections' %}aria-current="page"{% endif %}>Social Media</a>
         <a href="/integrations/email-marketing" role="menuitem" {% if active_nav == 'email-marketing' %}aria-current="page"{% endif %}>Email Marketing</a>

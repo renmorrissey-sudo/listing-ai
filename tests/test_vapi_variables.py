@@ -267,3 +267,29 @@ def test_business_profile_round_trip(app_client, two_users):
         "company_name": "Ada Homes",
         "timezone": "America/Denver",
     }
+
+
+def test_business_profile_settings_page_is_in_account_menu(app_client, two_users):
+    u1, _ = two_users
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+    db.update_business_profile(
+        u1,
+        agent_name="Ada Agent",
+        phone_number="(303) 555-0199",
+        brokerage_name="Ada Realty",
+    )
+
+    app_html = app_client.get("/app").get_data(as_text=True)
+    assert 'href="/settings/business-profile"' in app_html
+    assert "Business Profile" in app_html
+
+    res = app_client.get("/settings/business-profile")
+    assert res.status_code == 200
+    html = res.get_data(as_text=True)
+    assert "Business profile &amp; email signature" in html
+    assert 'id="profile-agent-name"' in html
+    assert 'value="Ada Agent"' in html
+    assert 'id="profile-phone-number"' in html
+    assert 'value="(303) 555-0199"' in html
+    assert "SendGrid lead email signature" in html

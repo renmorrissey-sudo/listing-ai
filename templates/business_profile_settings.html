@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Business Profile — {{ product_name }}</title>
+  <meta name="robots" content="noindex, nofollow" />
+  {% include 'crm_base_styles.html' %}
+  <style>
+    .settings-main { max-width: 820px; }
+    .settings-panel {
+      background: #fff;
+      border: 1px solid #e5ebf5;
+      border-radius: 12px;
+      padding: 22px;
+      box-shadow: 0 1px 5px rgba(0,0,0,0.06);
+    }
+    .settings-intro { color: #667; font-size: 14px; margin: 0 0 18px; }
+    .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 18px; }
+    .profile-field label {
+      display: block;
+      color: #334155;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .profile-field input, .profile-field select {
+      width: 100%;
+      border: 1px solid #cfd8e7;
+      border-radius: 8px;
+      color: #172033;
+      font-size: 15px;
+      padding: 11px 12px;
+      box-sizing: border-box;
+    }
+    .signature-preview {
+      margin-top: 20px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 14px 16px;
+    }
+    .signature-preview .label {
+      color: #64748b;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .signature-preview pre {
+      margin: 0;
+      white-space: pre-wrap;
+      color: #172033;
+      font-family: inherit;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 20px; }
+    .settings-save {
+      background: #1e3a8a;
+      border: 0;
+      border-radius: 10px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 750;
+      padding: 13px 18px;
+    }
+    .settings-save:hover { background: #1e40af; }
+    .settings-save:disabled { opacity: 0.65; cursor: wait; }
+    .settings-message { color: #065f46; font-size: 14px; font-weight: 650; }
+    .settings-error { color: #b91c1c; font-size: 14px; font-weight: 650; }
+    @media (max-width: 700px) {
+      .settings-grid { grid-template-columns: 1fr; }
+      .settings-panel { padding: 16px; }
+      .settings-save { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  {% set page_tagline = 'Business profile & email signature' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main class="settings-main">
+    <h1>Business Profile</h1>
+    <p class="settings-intro">These account details are used for AI calls and automatically added to SendGrid lead email signatures.</p>
+
+    <section class="settings-panel" aria-label="Business profile settings">
+      <div class="settings-grid">
+        <div class="profile-field">
+          <label for="profile-agent-name">Agent name</label>
+          <input type="text" id="profile-agent-name" maxlength="120" value="{{ profile.agent_name }}" autocomplete="name" />
+        </div>
+        <div class="profile-field">
+          <label for="profile-phone-number">Phone number</label>
+          <input type="tel" id="profile-phone-number" maxlength="40" value="{{ profile.phone_number }}" autocomplete="tel" />
+        </div>
+        <div class="profile-field">
+          <label for="profile-brokerage-name">Brokerage</label>
+          <input type="text" id="profile-brokerage-name" maxlength="200" value="{{ profile.brokerage_name }}" />
+        </div>
+        <div class="profile-field">
+          <label for="profile-company-name">Company</label>
+          <input type="text" id="profile-company-name" maxlength="200" value="{{ profile.company_name }}" />
+        </div>
+        <div class="profile-field">
+          <label for="profile-timezone">Timezone</label>
+          <select id="profile-timezone">
+            {% for tz in ['America/Denver','America/Phoenix','America/Los_Angeles','America/Chicago','America/New_York','America/Anchorage','Pacific/Honolulu','UTC'] %}
+            <option value="{{ tz }}" {% if profile.timezone == tz %}selected{% endif %}>{{ tz }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="signature-preview" aria-label="Email signature preview">
+        <div class="label">SendGrid lead email signature</div>
+        <pre id="signature-preview">Warm regards,</pre>
+      </div>
+
+      <div class="settings-actions">
+        <button type="button" class="settings-save" id="profile-save-btn">Save business profile</button>
+        <span class="settings-message" id="profile-status" role="status"></span>
+        <span class="settings-error" id="profile-error" role="alert"></span>
+      </div>
+    </section>
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+  <script>
+    (function () {
+      const fields = {
+        agent: document.getElementById('profile-agent-name'),
+        phone: document.getElementById('profile-phone-number'),
+        brokerage: document.getElementById('profile-brokerage-name'),
+        company: document.getElementById('profile-company-name'),
+        timezone: document.getElementById('profile-timezone')
+      };
+      const preview = document.getElementById('signature-preview');
+      const statusEl = document.getElementById('profile-status');
+      const errorEl = document.getElementById('profile-error');
+      const saveBtn = document.getElementById('profile-save-btn');
+
+      function updatePreview() {
+        const lines = ['Warm regards,'];
+        [fields.agent?.value, fields.phone?.value, fields.brokerage?.value || fields.company?.value].forEach(value => {
+          const text = (value || '').trim();
+          if (text) lines.push(text);
+        });
+        preview.textContent = lines.join('\n');
+      }
+
+      Object.values(fields).forEach(el => el && el.addEventListener('input', updatePreview));
+      updatePreview();
+
+      saveBtn.addEventListener('click', async () => {
+        statusEl.textContent = '';
+        errorEl.textContent = '';
+        saveBtn.disabled = true;
+        try {
+          const res = await fetch('/account/business-profile', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+            credentials: 'same-origin',
+            body: JSON.stringify({
+              agent_name: fields.agent?.value || '',
+              phone_number: fields.phone?.value || '',
+              brokerage_name: fields.brokerage?.value || '',
+              company_name: fields.company?.value || '',
+              timezone: fields.timezone?.value || 'America/Denver'
+            })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok) throw new Error(data.error || 'Could not save business profile.');
+          statusEl.textContent = 'Business profile saved.';
+          updatePreview();
+        } catch (err) {
+          errorEl.textContent = err.message || 'Could not save business profile.';
+        } finally {
+          saveBtn.disabled = false;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

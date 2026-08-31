@@ -1158,6 +1158,28 @@ def business_profile():
     return jsonify({"ok": True, "profile": profile})
 
 
+@app.route("/settings/business-profile")
+@auth.subscription_required
+def business_profile_settings_page():
+    user = auth.get_current_user()
+    profile = db.get_business_profile(user["id"]) or {
+        "agent_name": "",
+        "phone_number": "",
+        "brokerage_name": "",
+        "company_name": "",
+        "timezone": "America/Denver",
+    }
+    return render_template(
+        "business_profile_settings.html",
+        email=user["email"],
+        has_billing_portal=bool(user.get("stripe_customer_id")),
+        needs_billing_attention=auth.user_needs_billing_attention(user),
+        active_nav="business-profile",
+        profile=profile,
+        product_name=config.PRODUCT_NAME,
+    )
+
+
 @app.route("/voice/calls", methods=["POST"])
 @auth.subscription_required
 @limiter.limit(lambda: f"{config.VOICE_DAILY_CALL_LIMIT} per day", key_func=_user_rate_limit_key)
