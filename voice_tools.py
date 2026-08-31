@@ -161,16 +161,23 @@ def voice_tool_definitions(server_url):
             "function": {
                 "name": "send_lead_email",
                 "description": (
-                    "Send a one-to-one email to a CRM lead using the account's "
-                    "connected SendGrid email integration."
+                    "Compose and send a one-to-one email to a CRM lead using the "
+                    "account's connected SendGrid email integration. Use the user's "
+                    "plain-language request to write the subject and body."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "lead_id": {"type": "integer"},
                         "lead_name": {"type": "string"},
-                        "subject": {"type": "string"},
-                        "body": {"type": "string"},
+                        "subject": {
+                            "type": "string",
+                            "description": "The subject line you wrote for the requested email.",
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": "The complete email body you wrote from the user's request.",
+                        },
                     },
                     "required": ["subject", "body"],
                 },

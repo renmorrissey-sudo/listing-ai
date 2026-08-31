@@ -101,7 +101,13 @@
 
       <div class="quick-actions">
         <a class="btn" href="/app#sms">Draft SMS</a>
-        {% if lead.email %}<a class="btn secondary" href="mailto:{{ lead.email }}">Email</a>{% endif %}
+        {% if lead.email %}
+        <a class="btn secondary" href="mailto:{{ lead.email|urlencode }}">Email</a>
+        <a
+          class="btn secondary"
+          href="mailto:{{ lead.email|urlencode }}?subject={{ ('Competitive market analysis for ' ~ (lead.property_interest or 'your property'))|urlencode }}&body={{ ('Hi ' ~ (lead.name or 'there') ~ ',\n\nI wanted to follow up with a competitive market analysis for ' ~ (lead.property_interest or 'your property') ~ '. I can send over comparable sales, current market activity, and a pricing range so you have a clear picture of where things stand.\n\nWould you like me to prepare that CMA for you?\n\nBest,')|urlencode }}"
+        >CMA Email</a>
+        {% endif %}
         <a class="btn secondary" href="tel:{{ lead.phone_number }}">Call</a>
         <button class="btn secondary" type="button" onclick="document.getElementById('task-panel').scrollIntoView()">Create Task</button>
         <button class="btn secondary" type="button" onclick="document.getElementById('fu-panel').scrollIntoView()">Schedule Follow-Up</button>

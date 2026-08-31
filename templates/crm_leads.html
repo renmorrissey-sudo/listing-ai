@@ -160,6 +160,12 @@
             <span class="pill">{{ status_label(lead.status) }}</span>
             <span class="pill {% if lead.sms_sending_blocked %}danger{% endif %}">{{ sms_consent_label(lead.sms_consent_status) }}</span>
             {% if lead.sms_sending_blocked %}<span class="pill danger">SMS blocked</span>{% endif %}
+            {% if lead.email and lead.status not in ['closed_won', 'closed_lost', 'do_not_contact'] %}
+            <a
+              class="btn secondary"
+              href="mailto:{{ lead.email|urlencode }}?subject={{ ('Following up from TopAI Real Estate Tools')|urlencode }}&body={{ ('Hi ' ~ (lead.name or 'there') ~ ',\n\nI wanted to follow up with you. Let me know what questions I can answer or what would be helpful next.\n\nBest,')|urlencode }}"
+            >Email</a>
+            {% endif %}
           </div>
           <a class="lead-row-open" href="/crm/leads/{{ lead.id }}" aria-label="Open lead {{ lead.name or 'Lead' }}">Open &rarr;</a>
         </div>

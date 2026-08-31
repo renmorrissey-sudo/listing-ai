@@ -179,9 +179,13 @@ def test_outbound_payload_includes_assistant_overrides(monkeypatch):
         "list_open_leads",
         "update_lead_status",
         "update_lead_sms_consent_status",
+        "update_lead_contact_info",
         "draft_lead_email",
         "send_lead_email",
     }.issubset(tool_names)
+    send_tool = next(tool for tool in tools if tool["function"]["name"] == "send_lead_email")
+    assert "plain-language request" in send_tool["function"]["description"]
+    assert "complete email body" in send_tool["function"]["parameters"]["properties"]["body"]["description"]
     assert all(tool["server"]["url"].endswith("/webhook/voice") for tool in tools)
     messages = payload["assistantOverrides"]["model"]["messages"]
     assert messages == [{"role": "system", "content": "prompt unused"}]
