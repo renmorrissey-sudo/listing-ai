@@ -335,12 +335,15 @@
         Start with consent-based one-to-one calls only. You are responsible for TCPA, DNC, state recording laws, brokerage policy, and local regulations.
       </div>
       <div class="notice" style="margin-bottom:14px;">
-        <strong>Business profile</strong> (used on every AI call — saved to your account)
+        <strong>Business profile</strong> (used on AI calls and lead email signatures — saved to your account)
         <div class="form-row" style="margin-top:10px;">
           <div class="form-group"><label>Agent name *</label><input type="text" id="profile-agent-name" maxlength="120" placeholder="Your name as said on calls" /></div>
-          <div class="form-group"><label>Brokerage name</label><input type="text" id="profile-brokerage-name" maxlength="200" placeholder="Your brokerage (optional if company set)" /></div>
+          <div class="form-group"><label>Phone number</label><input type="tel" id="profile-phone-number" maxlength="40" placeholder="Your callback number" /></div>
         </div>
-        <div class="form-group"><label>Company name</label><input type="text" id="profile-company-name" maxlength="200" placeholder="Your company (optional if brokerage set)" /></div>
+        <div class="form-row">
+          <div class="form-group"><label>Brokerage name</label><input type="text" id="profile-brokerage-name" maxlength="200" placeholder="Your brokerage (optional if company set)" /></div>
+          <div class="form-group"><label>Company name</label><input type="text" id="profile-company-name" maxlength="200" placeholder="Your company (optional if brokerage set)" /></div>
+        </div>
         <div class="form-group"><label>Timezone</label>
           <select id="profile-timezone">
             <option value="America/Denver">America/Denver</option>
@@ -680,6 +683,7 @@
 
   async function loadBusinessProfile() {
     const agentEl = document.getElementById('profile-agent-name');
+    const phoneEl = document.getElementById('profile-phone-number');
     const brokerageEl = document.getElementById('profile-brokerage-name');
     const companyEl = document.getElementById('profile-company-name');
     const tzEl = document.getElementById('profile-timezone');
@@ -689,6 +693,7 @@
       const data = await fetchJson('/account/business-profile');
       if (!data || !data.profile) return;
       agentEl.value = data.profile.agent_name || '';
+      if (phoneEl) phoneEl.value = data.profile.phone_number || '';
       brokerageEl.value = data.profile.brokerage_name || '';
       companyEl.value = data.profile.company_name || '';
       if (tzEl) tzEl.value = data.profile.timezone || 'America/Denver';
@@ -716,6 +721,7 @@
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
           agent_name: document.getElementById('profile-agent-name')?.value || '',
+          phone_number: document.getElementById('profile-phone-number')?.value || '',
           brokerage_name: document.getElementById('profile-brokerage-name')?.value || '',
           company_name: document.getElementById('profile-company-name')?.value || '',
           timezone: document.getElementById('profile-timezone')?.value || 'America/Denver',

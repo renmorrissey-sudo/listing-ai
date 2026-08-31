@@ -74,6 +74,12 @@ def test_sendgrid_direct_send_uses_mail_send(monkeypatch):
 def test_lead_email_service_sends_and_logs_timeline(two_users, monkeypatch):
     user_id, _ = two_users
     lead_id = _lead(user_id)
+    db.update_business_profile(
+        user_id,
+        agent_name="Ada Agent",
+        phone_number="(303) 555-0199",
+        brokerage_name="Ada Realty",
+    )
     _connect_sendgrid(user_id, monkeypatch)
     sent = {}
 
@@ -94,6 +100,12 @@ def test_lead_email_service_sends_and_logs_timeline(two_users, monkeypatch):
     assert result["ok"] is True
     assert result["to_email"] == "lead@example.com"
     assert sent["sender_email"] == "agent@example.com"
+    assert sent["plain_content"].startswith("Hi Email,")
+    assert sent["plain_content"].endswith(
+        "Warm regards,\nAda Agent\n(303) 555-0199\nAda Realty"
+    )
+    assert "Hi Email," in sent["html_content"]
+    assert "Ada Realty" in sent["html_content"]
     activities = crm_db.list_lead_activities(user_id, lead_id)
     assert activities[0]["event_type"] == "email_sent"
 

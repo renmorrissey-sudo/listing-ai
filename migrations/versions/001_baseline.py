@@ -30,6 +30,7 @@ POSTGRES_TABLES = {
             created_at TEXT NOT NULL,
             role TEXT DEFAULT 'agent',
             agent_name TEXT,
+            phone_number TEXT,
             brokerage_name TEXT,
             company_name TEXT
         )
@@ -343,6 +344,7 @@ def upgrade_sqlite(conn):
             created_at TEXT NOT NULL,
             role TEXT DEFAULT 'agent',
             agent_name TEXT,
+            phone_number TEXT,
             brokerage_name TEXT,
             company_name TEXT
         )

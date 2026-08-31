@@ -84,6 +84,12 @@ def test_api_create_lead_creates_via_shared_ingest(app_client, two_users):
 def test_api_update_lead_contact_email(app_client, two_users):
     u1, _ = two_users
     _login(app_client, u1)
+    db.update_business_profile(
+        u1,
+        agent_name="Ada Agent",
+        phone_number="(303) 555-0199",
+        brokerage_name="Ada Realty",
+    )
     created = app_client.post(
         "/api/crm/leads",
         json={"first_name": "Email", "last_name": "Capture", "phone": "+15551239013"},
@@ -129,9 +135,17 @@ def test_api_update_lead_contact_email(app_client, two_users):
     assert "capture@example.com" in html
     assert 'href="mailto:capture%40example.com"' in html
     assert "Competitive%20market%20analysis%20for%20Condo%20near%20downtown" in html
+    assert (
+        "Warm%20regards%2C%0AAda%20Agent%0A%28303%29%20555-0199%0AAda%20Realty"
+        in html
+    )
 
     leads_html = app_client.get("/crm/leads?active=1").get_data(as_text=True)
     assert 'href="mailto:capture%40example.com?subject=Following%20up%20from%20TopAI%20Real%20Estate%20Tools' in leads_html
+    assert (
+        "Warm%20regards%2C%0AAda%20Agent%0A%28303%29%20555-0199%0AAda%20Realty"
+        in leads_html
+    )
 
 
 def test_api_update_lead_contact_rejects_duplicate_phone(app_client, two_users):

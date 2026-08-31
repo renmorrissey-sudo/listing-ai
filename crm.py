@@ -182,6 +182,20 @@ def _format_activity_when(value):
     return f"{local.strftime('%B')} {local.day}, {local.year} at {hour}:{local.strftime('%M %p')}"
 
 
+def _email_signature_text(user_id):
+    profile = db.get_business_profile(user_id) or {}
+    lines = ["Warm regards,"]
+    for value in (
+        profile.get("agent_name"),
+        profile.get("phone_number"),
+        profile.get("brokerage_name") or profile.get("company_name"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            lines.append(text)
+    return "\n".join(lines)
+
+
 def _enrich_lead_activities(user_id, activities):
     """Attach voice recording controls for timeline rendering (auth proxy paths only)."""
     enriched = []
@@ -374,6 +388,7 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
         "consent_audit": audit,
         "external_source": external_source,
         "historical_sms_name": db.earliest_sms_lead_name(user["id"], lead_id),
+        "email_signature": _email_signature_text(user["id"]),
         **_nav_context(user, "leads"),
     }
 
@@ -480,6 +495,7 @@ def crm_leads_page():
         status_label=status_label,
         sms_consent_label=sms_consent_label,
         has_active_filters=bool(active_filter),
+        email_signature=_email_signature_text(user["id"]),
         **_nav_context(user, "leads"),
     )
 

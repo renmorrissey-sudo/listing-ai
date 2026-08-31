@@ -247,18 +247,23 @@ def test_business_profile_round_trip(app_client, two_users):
         "/account/business-profile",
         json={
             "agent_name": "Ada Agent",
+            "phone_number": "(303) 555-0199",
             "brokerage_name": "Ada Realty",
             "company_name": "Ada Homes",
+            "timezone": "America/Denver",
         },
     )
     assert res.status_code == 200
     assert res.get_json()["profile"]["agent_name"] == "Ada Agent"
+    assert res.get_json()["profile"]["phone_number"] == "(303) 555-0199"
 
     res = app_client.get("/account/business-profile")
     assert res.status_code == 200
     profile = res.get_json()["profile"]
     assert profile == {
         "agent_name": "Ada Agent",
+        "phone_number": "(303) 555-0199",
         "brokerage_name": "Ada Realty",
         "company_name": "Ada Homes",
+        "timezone": "America/Denver",
     }

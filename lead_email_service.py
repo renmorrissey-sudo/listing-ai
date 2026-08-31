@@ -33,6 +33,69 @@ def _render_html(body):
     return "".join(paragraphs) or "<p></p>"
 
 
+def _first_name(value):
+    text = str(value or "").strip()
+    return text.split(" ")[0] if text else "there"
+
+
+def _greeting_line(body):
+    lines = str(body or "").strip().splitlines()
+    return lines[0].strip() if lines else ""
+
+
+def _has_greeting(body):
+    first_line = _greeting_line(body).lower()
+    return first_line.startswith(("hi ", "hello ", "dear ", "hey "))
+
+
+def _personalize_greeting(lead, body):
+    first = _first_name(lead.get("name"))
+    desired = f"Hi {first},"
+    stripped = str(body or "").strip()
+    if not stripped:
+        return stripped
+    first_line = _greeting_line(stripped)
+    generic = first_line.lower().rstrip(",.!") in {
+        "hi",
+        "hello",
+        "hey",
+        "hi there",
+        "hello there",
+        "hey there",
+        "dear lead",
+    }
+    if generic:
+        return stripped.replace(first_line, desired, 1)
+    if not _has_greeting(stripped):
+        return f"{desired}\n\n{stripped}"
+    return stripped
+
+
+def _email_signature(user_id):
+    profile = db.get_business_profile(user_id) or {}
+    lines = ["Warm regards,"]
+    for value in (
+        profile.get("agent_name"),
+        profile.get("phone_number"),
+        profile.get("brokerage_name") or profile.get("company_name"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            lines.append(text)
+    return "\n".join(lines)
+
+
+def personalize_lead_email_body(user_id, lead, body):
+    body = str(body or "").strip()
+    if not body:
+        return body
+    body = _personalize_greeting(lead, body)
+    signature = _email_signature(user_id)
+    if signature and "warm regards" not in body.lower():
+        body = f"{body.rstrip()}\n\n{signature}"
+    return body[:5000]
+
+
 def send_lead_email(user_id, lead_id, *, subject, body, actor_user_id=None):
     lead = db.get_lead(lead_id, user_id)
     if not lead:
@@ -44,6 +107,7 @@ def send_lead_email(user_id, lead_id, *, subject, body, actor_user_id=None):
     body = str(body or "").strip()[:5000]
     if not subject or not body:
         return None, "Subject and body are required before sending email."
+    body = personalize_lead_email_body(user_id, lead, body)
 
     try:
         credentials = email_marketing_db.get_credentials(user_id, "sendgrid")

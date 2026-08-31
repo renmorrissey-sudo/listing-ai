@@ -1139,6 +1139,7 @@ def business_profile():
     if request.method == "GET":
         profile = db.get_business_profile(user["id"]) or {
             "agent_name": "",
+            "phone_number": "",
             "brokerage_name": "",
             "company_name": "",
             "timezone": "America/Denver",
@@ -1149,6 +1150,7 @@ def business_profile():
     profile = db.update_business_profile(
         user["id"],
         agent_name=str(data.get("agent_name") or ""),
+        phone_number=str(data.get("phone_number") or ""),
         brokerage_name=str(data.get("brokerage_name") or ""),
         company_name=str(data.get("company_name") or ""),
         timezone=str(data.get("timezone") or "") or None,

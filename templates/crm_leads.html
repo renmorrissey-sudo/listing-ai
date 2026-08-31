@@ -163,7 +163,7 @@
             {% if lead.email and lead.status not in ['closed_won', 'closed_lost', 'do_not_contact'] %}
             <a
               class="btn secondary"
-              href="mailto:{{ lead.email|urlencode }}?subject={{ ('Following up from TopAI Real Estate Tools')|urlencode }}&body={{ ('Hi ' ~ (lead.name or 'there') ~ ',\n\nI wanted to follow up with you. Let me know what questions I can answer or what would be helpful next.\n\nBest,')|urlencode }}"
+              href="mailto:{{ lead.email|urlencode }}?subject={{ ('Following up from TopAI Real Estate Tools')|urlencode }}&body={{ ('Hi ' ~ (lead.name or 'there') ~ ',\n\nI wanted to follow up with you. Let me know what questions I can answer or what would be helpful next.\n\n' ~ email_signature)|urlencode }}"
             >Email</a>
             {% endif %}
           </div>

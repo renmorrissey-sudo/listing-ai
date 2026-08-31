@@ -368,7 +368,7 @@ def get_business_profile(user_id):
         try:
             row = conn.execute(
                 """
-                SELECT agent_name, brokerage_name, company_name, timezone
+                SELECT agent_name, phone_number, brokerage_name, company_name, timezone
                 FROM users WHERE id = ?
                 """,
                 (user_id,),
@@ -386,6 +386,7 @@ def get_business_profile(user_id):
         data = dict(row)
         return {
             "agent_name": (data.get("agent_name") or "").strip(),
+            "phone_number": (data.get("phone_number") or "").strip(),
             "brokerage_name": (data.get("brokerage_name") or "").strip(),
             "company_name": (data.get("company_name") or "").strip(),
             "timezone": (data.get("timezone") or "").strip() or "America/Denver",
@@ -393,7 +394,12 @@ def get_business_profile(user_id):
 
 
 def update_business_profile(
-    user_id, agent_name=None, brokerage_name=None, company_name=None, timezone=None
+    user_id,
+    agent_name=None,
+    phone_number=None,
+    brokerage_name=None,
+    company_name=None,
+    timezone=None,
 ):
     tz = (timezone or "").strip()[:80] or None
     with get_db() as conn:
@@ -403,6 +409,7 @@ def update_business_profile(
                 """
                 UPDATE users
                 SET agent_name = ?,
+                    phone_number = ?,
                     brokerage_name = ?,
                     company_name = ?,
                     timezone = COALESCE(?, timezone)
@@ -410,6 +417,7 @@ def update_business_profile(
                 """,
                 (
                     (agent_name or "").strip()[:120] or None,
+                    (phone_number or "").strip()[:40] or None,
                     (brokerage_name or "").strip()[:200] or None,
                     (company_name or "").strip()[:200] or None,
                     tz,
