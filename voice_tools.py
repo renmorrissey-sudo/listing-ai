@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+
+import config
 import crm_db
 import db
 import external_leads_db
@@ -38,17 +41,39 @@ SMS_CONSENT_ALIASES = {
 }
 
 
-def voice_tool_definitions(server_url):
+LIVE_VOICE_TOKEN_SALT = "topai-live-voice-account-v1"
+LIVE_VOICE_TOKEN_MAX_AGE_SECONDS = 12 * 60 * 60
+
+
+def create_live_voice_account_token(user_id):
+    serializer = URLSafeTimedSerializer(config.FLASK_SECRET_KEY, salt=LIVE_VOICE_TOKEN_SALT)
+    return serializer.dumps({"user_id": int(user_id)})
+
+
+def resolve_live_voice_account_token(token):
+    if not token:
+        return None
+    serializer = URLSafeTimedSerializer(config.FLASK_SECRET_KEY, salt=LIVE_VOICE_TOKEN_SALT)
+    try:
+        payload = serializer.loads(token, max_age=LIVE_VOICE_TOKEN_MAX_AGE_SECONDS)
+        return int(payload.get("user_id"))
+    except (BadSignature, SignatureExpired, TypeError, ValueError, AttributeError):
+        return None
+
+
+def voice_tool_definitions(server_url, account_token=None):
     """Return Vapi function tools the assistant can use for CRM work."""
     server = {"url": server_url}
-    return [
+    tools = [
         {
             "type": "function",
             "function": {
                 "name": "list_open_leads",
                 "description": (
-                    "List every active/open CRM lead for this account by name with "
-                    "current status, SMS consent, next action, and latest update."
+                    "Count or list every active/open CRM lead for this account. "
+                    "Use this when the agent asks how many leads are currently open, "
+                    "or asks to hear open leads by name with current status, SMS "
+                    "consent, next action, and latest update."
                 ),
                 "parameters": {
                     "type": "object",
@@ -130,6 +155,12 @@ def voice_tool_definitions(server_url):
             "server": server,
         },
     ]
+    if account_token:
+        for tool in tools:
+            tool["parameters"] = [
+                {"key": "topai_account_token", "value": "{{topai_account_token}}"}
+            ]
+    return tools
 
 
 def resolve_voice_tool_user_id(payload):
@@ -138,6 +169,21 @@ def resolve_voice_tool_user_id(payload):
     message = message if isinstance(message, dict) else {}
     call = message.get("call") or payload.get("call") or {}
     metadata = message.get("metadata") or call.get("metadata") or payload.get("metadata") or {}
+
+    # In browser calls, Vapi injects this signed, LLM-invisible value into every
+    # tool call from assistantOverrides.variableValues via static parameters.
+    for tool_call in _tool_calls(payload):
+        _name, args = _tool_name_and_args(tool_call)
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                args = {}
+        token_user_id = resolve_live_voice_account_token(
+            args.get("topai_account_token") if isinstance(args, dict) else None
+        )
+        if token_user_id:
+            return token_user_id
 
     internal_call_id = metadata.get("topai_call_id") or metadata.get("call_id")
     if internal_call_id:
@@ -247,17 +293,23 @@ def _list_open_leads(user_id, args):
         limit = max(1, min(int(limit), 200))
     except (TypeError, ValueError):
         limit = 50
+    total_count = crm_db.count_filtered_leads(user_id, scope="active")
     leads = [
         _lead_summary(lead)
         for lead in crm_db.filter_leads(user_id, scope="active", limit=limit)
         if normalize_lead_status(lead.get("status")) not in OPEN_LEAD_EXCLUDED_STATUSES
     ]
-    if not leads:
+    if total_count == 0:
         return {"count": 0, "summary": "There are no open leads right now.", "leads": []}
     names = ", ".join(lead["name"] for lead in leads)
+    lead_word = "lead" if total_count == 1 else "leads"
     return {
-        "count": len(leads),
-        "summary": f"Open leads: {names}. Walk through each lead by name and current status.",
+        "count": total_count,
+        "summary": (
+            f"There are {total_count} open {lead_word} right now. "
+            f"Open leads returned: {names}. Walk through each returned lead by name "
+            "and current status only if the agent asks for details."
+        ),
         "leads": leads,
     }
 

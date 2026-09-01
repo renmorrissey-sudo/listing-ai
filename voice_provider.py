@@ -5,9 +5,61 @@ import urllib.request
 from urllib.parse import urljoin
 
 import config
+from voice_prompts import build_live_voice_prompt
 from voice_tools import voice_tool_definitions
 
 logger = logging.getLogger(__name__)
+
+
+def _conversation_quality_overrides():
+    """Stable, conservative English turn-taking for phone and browser calls."""
+    return {
+        "transcriber": {
+            "provider": "deepgram",
+            "model": "flux-general-en",
+            "language": "en",
+            "eotThreshold": 0.9,
+            "eotTimeoutMs": 7000,
+        },
+        "startSpeakingPlan": {"waitSeconds": 0.4},
+        "stopSpeakingPlan": {
+            "numWords": 0,
+            "voiceSeconds": 0.2,
+            "backoffSeconds": 1.0,
+        },
+    }
+
+
+def build_live_voice_assistant_overrides(profile, account_token):
+    """Build the browser CRM-copilot assistant without exposing private keys."""
+    agent_name = str((profile or {}).get("agent_name") or "there").strip()
+    tool_url = urljoin(config.APP_URL.rstrip("/") + "/", "webhook/voice")
+    return {
+        "variableValues": {
+            "agent_name": agent_name,
+            "topai_account_token": account_token,
+        },
+        "firstMessage": f"Hi {agent_name}. How can I help?",
+        "firstMessageMode": "assistant-speaks-first",
+        "maxDurationSeconds": 1800,
+        "backgroundSound": "off",
+        "clientMessages": [
+            "transcript",
+            "speech-update",
+            "user-interrupted",
+            "status-update",
+        ],
+        **_conversation_quality_overrides(),
+        "model": {
+            "provider": "openai",
+            "model": "chat-latest",
+            "temperature": 0.3,
+            "messages": [
+                {"role": "system", "content": build_live_voice_prompt(profile)}
+            ],
+            "tools": voice_tool_definitions(tool_url, account_token=account_token),
+        },
+    }
 
 VAPI_VARIABLE_KEYS = (
     "agent_name",
@@ -114,7 +166,10 @@ class VapiVoiceProvider:
             },
             "assistantOverrides": {
                 "variableValues": {key: values.get(key, "") for key in VAPI_VARIABLE_KEYS},
+                **_conversation_quality_overrides(),
                 "model": {
+                    "provider": "openai",
+                    "model": "chat-latest",
                     "messages": [
                         {
                             "role": "system",

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import crm_db
 import db
 from migrations.runner import apply_pending_migrations
+from voice_tools import create_live_voice_account_token
 
 
 def _lead(user_id, name, status="new", phone="+13035550101", **extra):
@@ -93,6 +94,62 @@ def test_voice_tool_lists_all_open_leads_by_name(app_client, two_users):
     assert names == {"Ada Buyer", "Ben Seller"}
     assert "Closed Client" not in result["summary"]
     assert "Other Tenant" not in result["summary"]
+
+
+def test_voice_tool_counts_current_open_leads(app_client, two_users):
+    u1, _ = two_users
+    apply_pending_migrations()
+    call_id = _voice_call(u1)
+    _lead(u1, "New Lead", status="new", phone="+13035550111")
+    _lead(u1, "Contacted Lead", status="contacted", phone="+13035550112")
+    _lead(u1, "Nurture Lead", status="nurture", phone="+13035550113")
+    _lead(u1, "Closed Lead", status="closed_lost", phone="+13035550114")
+    _lead(u1, "Do Not Contact Lead", status="do_not_contact", phone="+13035550115")
+
+    res = app_client.post(
+        "/webhook/voice",
+        json=_tool_payload(
+            call_id,
+            "vapi_tools",
+            "list_open_leads",
+            {"limit": 2},
+        ),
+    )
+
+    assert res.status_code == 200
+    result = _tool_result(res)
+    assert result["count"] == 3
+    assert len(result["leads"]) == 2
+    assert "There are 3 open leads right now." in result["summary"]
+
+
+def test_live_voice_signed_account_token_scopes_crm_tools(app_client, two_users):
+    u1, u2 = two_users
+    apply_pending_migrations()
+    _lead(u1, "Ada Buyer", status="new", phone="+13035550121")
+    _lead(u2, "Other Tenant", status="new", phone="+13035550122")
+    payload = {
+        "message": {
+            "type": "tool-calls",
+            "call": {"id": "web-call-without-phone-row"},
+            "toolCallList": [
+                {
+                    "id": "tool_1",
+                    "name": "list_open_leads",
+                    "arguments": {
+                        "topai_account_token": create_live_voice_account_token(u1)
+                    },
+                }
+            ],
+        }
+    }
+
+    res = app_client.post("/webhook/voice", json=payload)
+
+    assert res.status_code == 200
+    result = _tool_result(res)
+    assert result["count"] == 1
+    assert [lead["name"] for lead in result["leads"]] == ["Ada Buyer"]
 
 
 def test_voice_tool_can_update_every_pipeline_status(app_client, two_users):

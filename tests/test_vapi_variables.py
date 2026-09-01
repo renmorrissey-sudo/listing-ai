@@ -4,6 +4,7 @@ import db
 from voice_provider import (
     VAPI_VARIABLE_KEYS,
     VapiVoiceProvider,
+    build_live_voice_assistant_overrides,
     build_vapi_variable_values,
     log_variable_values_presence,
     validate_vapi_variable_values,
@@ -173,6 +174,22 @@ def test_outbound_payload_includes_assistant_overrides(monkeypatch):
         "property_interest": "Townhome",
         "desired_outcome": "Book consultation",
     }
+    overrides = payload["assistantOverrides"]
+    assert overrides["model"]["provider"] == "openai"
+    assert overrides["model"]["model"] == "chat-latest"
+    assert overrides["transcriber"] == {
+        "provider": "deepgram",
+        "model": "flux-general-en",
+        "language": "en",
+        "eotThreshold": 0.9,
+        "eotTimeoutMs": 7000,
+    }
+    assert overrides["startSpeakingPlan"] == {"waitSeconds": 0.4}
+    assert overrides["stopSpeakingPlan"] == {
+        "numWords": 0,
+        "voiceSeconds": 0.2,
+        "backoffSeconds": 1.0,
+    }
     tools = payload["assistantOverrides"]["model"]["tools"]
     tool_names = {tool["function"]["name"] for tool in tools}
     assert {
@@ -184,6 +201,51 @@ def test_outbound_payload_includes_assistant_overrides(monkeypatch):
     assert all(tool["server"]["url"].endswith("/webhook/voice") for tool in tools)
     messages = payload["assistantOverrides"]["model"]["messages"]
     assert messages == [{"role": "system", "content": "prompt unused"}]
+
+
+def test_live_voice_overrides_use_copilot_prompt_and_signed_static_tool_parameter():
+    overrides = build_live_voice_assistant_overrides(
+        {"agent_name": "Ada", "brokerage_name": "Ada Realty"},
+        "signed-account-token",
+    )
+
+    assert overrides["firstMessage"] == "Hi Ada. How can I help?"
+    assert overrides["firstMessageMode"] == "assistant-speaks-first"
+    assert overrides["model"]["model"] == "chat-latest"
+    prompt = overrides["model"]["messages"][0]["content"]
+    assert "live CRM copilot" in prompt
+    assert "Listen to the user's complete thought" in prompt
+    assert "not calling a lead" in prompt
+    for tool in overrides["model"]["tools"]:
+        assert tool["parameters"] == [
+            {"key": "topai_account_token", "value": "{{topai_account_token}}"}
+        ]
+
+
+def test_subscriber_app_renders_one_click_live_voice_without_private_key(
+    app_client, two_users, monkeypatch
+):
+    import config
+
+    u1, _ = two_users
+    db.update_business_profile(
+        u1, agent_name="Ada", brokerage_name="Ada Realty", company_name=""
+    )
+    monkeypatch.setattr(config, "VAPI_PUBLIC_API_KEY", "public-browser-key")
+    monkeypatch.setattr(config, "VOICE_PROVIDER_API_KEY", "private-server-key")
+    monkeypatch.setattr(config, "REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID", "assistant-123")
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+
+    response = app_client.get("/app")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'id="topai-live-button"' in html
+    assert "Ask TopAI" in html
+    assert "public-browser-key" in html
+    assert "assistant-123" in html
+    assert "private-server-key" not in html
 
 
 def test_start_voice_call_blocks_missing_business_profile(app_client, two_users):

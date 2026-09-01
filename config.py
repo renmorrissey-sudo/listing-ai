@@ -115,6 +115,10 @@ REGISTRATION_ALLOWLIST = _email_list("REGISTRATION_ALLOWLIST")
 
 VOICE_PROVIDER = _env("VOICE_PROVIDER", "vapi").lower()
 VOICE_PROVIDER_API_KEY = _env("VOICE_PROVIDER_API_KEY")
+# Browser-safe Vapi key. This is intentionally separate from the private
+# VOICE_PROVIDER_API_KEY and should be restricted to the production origin and
+# configured assistant in the Vapi dashboard.
+VAPI_PUBLIC_API_KEY = _env_strip("VAPI_PUBLIC_API_KEY")
 VOICE_PROVIDER_WEBHOOK_SECRET = _env("VOICE_PROVIDER_WEBHOOK_SECRET")
 # Prefer the lead-qualifier assistant ID; fall back to legacy VOICE_DEFAULT_ASSISTANT_ID.
 VOICE_DEFAULT_ASSISTANT_ID = (

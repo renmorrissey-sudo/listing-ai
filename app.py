@@ -50,6 +50,7 @@ import registration_gate
 import seo
 from voice_provider import (
     VoiceProviderError,
+    build_live_voice_assistant_overrides,
     build_vapi_variable_values,
     get_voice_provider,
     log_variable_values_presence,
@@ -57,7 +58,11 @@ from voice_provider import (
     validate_vapi_variable_values,
 )
 from voice_validation import validate_voice_call_payload, validate_voice_persona_payload
-from voice_tools import handle_vapi_tool_calls, is_vapi_tool_call_payload
+from voice_tools import (
+    create_live_voice_account_token,
+    handle_vapi_tool_calls,
+    is_vapi_tool_call_payload,
+)
 from crm_constants import normalize_lead_status
 
 config.validate_config()
@@ -96,6 +101,23 @@ def inject_business_context():
     path = request.path or "/"
     user = auth.get_current_user()
     can_signup = registration_gate.registration_allowed_for_user(user)
+    live_voice_config = {"enabled": False}
+    if (
+        user
+        and auth.user_has_active_subscription(user)
+        and config.VAPI_PUBLIC_API_KEY
+        and config.REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID
+    ):
+        account_token = create_live_voice_account_token(user["id"])
+        profile = db.get_business_profile(user["id"]) or {}
+        live_voice_config = {
+            "enabled": True,
+            "publicKey": config.VAPI_PUBLIC_API_KEY,
+            "assistantId": config.REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID,
+            "assistantOverrides": build_live_voice_assistant_overrides(
+                profile, account_token
+            ),
+        }
     return {
         "business_name": config.BUSINESS_NAME,
         "product_name": config.PRODUCT_NAME,
@@ -116,6 +138,7 @@ def inject_business_context():
             "Get 50% off your first month" if can_signup else "Private beta"
         ),
         "private_beta_supporting": registration_gate.PRIVATE_BETA_SUPPORTING,
+        "live_voice_config": live_voice_config,
     }
 
 

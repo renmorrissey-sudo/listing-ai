@@ -37,3 +37,6 @@
     window.location.href = '/';
   }
 </script>
+{% if live_voice_config.enabled %}
+<script type="module" src="{{ url_for('static', filename='topai_live_voice.js') }}"></script>
+{% endif %}
