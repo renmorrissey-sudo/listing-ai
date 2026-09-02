@@ -107,6 +107,7 @@ class TelnyxSMSProvider(BaseSMSProvider):
         }
 
     def _request(self, method, path, body=None):
+        # Outbound auth uses TELNYX_API_KEY only — never TELNYX_PUBLIC_KEY.
         url = f"{self.api_base}{path}"
         data = None
         headers = {
@@ -117,6 +118,21 @@ class TelnyxSMSProvider(BaseSMSProvider):
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"
+            if path == "/messages" and isinstance(body, dict):
+                from sms_send_diagnostics import safe_telnyx_payload
+
+                logger.info(
+                    "Telnyx provider_request method=%s url=%s auth=Bearer[TELNYX_API_KEY] payload=%s",
+                    method,
+                    url,
+                    safe_telnyx_payload(
+                        from_number=body.get("from"),
+                        to_number=body.get("to"),
+                        text=body.get("text"),
+                        messaging_profile_id=body.get("messaging_profile_id"),
+                        webhook_url=body.get("webhook_url"),
+                    ),
+                )
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:

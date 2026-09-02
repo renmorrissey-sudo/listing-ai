@@ -559,6 +559,7 @@
       const err = new Error(msg);
       err.providerCode = data.provider_code;
       err.payload = data;
+      err.correlationId = data.correlation_id;
       throw err;
     }
     return data;
