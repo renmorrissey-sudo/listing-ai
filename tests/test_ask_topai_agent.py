@@ -431,6 +431,67 @@ def test_cross_account_lead_access_is_impossible(app_client, two_users, monkeypa
     assert "cross account" not in (db.get_lead(sarah_id, u1).get("notes") or "")
 
 
+def test_list_open_leads_returns_exact_tenant_scoped_count(two_users):
+    u1, u2 = two_users
+    first_id, _ = _lead(u1, "Open One", "3035554201")
+    _lead(u1, "Open Two", "3035554202")
+    closed_id, _ = _lead(u1, "Closed Lead", "3035554203")
+    blocked_id, _ = _lead(u1, "Do Not Contact", "3035554204")
+    _lead(u2, "Other Account Lead", "3035554205")
+    crm_db.set_lead_status(u1, first_id, "contacted")
+    crm_db.set_lead_status(u1, closed_id, "closed_won")
+    crm_db.set_lead_status(u1, blocked_id, "do_not_contact")
+
+    result = tools.list_open_leads(u1, {"limit": 0})
+
+    assert result["count"] == 2
+    assert result["leads"] == []
+    assert "closed won" in result["definition"]
+
+
+def test_agent_answers_exact_open_lead_count(two_users, monkeypatch):
+    u1, _ = two_users
+    _lead(u1, "Open One", "3035554211")
+    _lead(u1, "Open Two", "3035554212")
+    calls = _script(
+        monkeypatch,
+        FakeResponse("tool_use", [_tool("list_open_leads", {"limit": 0}, "open1")]),
+        FakeResponse(
+            "end_turn",
+            [
+                _tool(
+                    "inform_user",
+                    {"kind": "informational", "message": "You currently have 2 open leads."},
+                    "answer1",
+                )
+            ],
+        ),
+    )
+
+    result = agent.complete(
+        u1,
+        "Tell me how many open Leads I currently have",
+        {},
+        session_id="s-open-count",
+    )
+
+    assert result["status"] == "informational"
+    assert result["message"] == "You currently have 2 open leads."
+    assert result["tools_invoked"] == ["list_open_leads", "inform_user"]
+    assert len(calls) == 2
+    tool_results = [
+        block
+        for message in calls[1]["messages"]
+        for block in (
+            message.get("content")
+            if isinstance(message.get("content"), list)
+            else []
+        )
+        if block.get("type") == "tool_result"
+    ]
+    assert any('"count": 2' in block["content"] for block in tool_results)
+
+
 def test_clarification_does_not_mutate(app_client, two_users, monkeypatch):
     u1, _ = two_users
     _login(app_client, u1)

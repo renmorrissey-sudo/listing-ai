@@ -17,6 +17,7 @@ WRITE_ORDER = {
     "find_lead": 0,
     "get_lead_context": 1,
     "list_lead_tasks": 1,
+    "list_open_leads": 1,
     "get_calendar_availability": 1,
     "find_available_slots": 1,
     "get_existing_appointment": 1,

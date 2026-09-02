@@ -63,6 +63,7 @@ def test_live_session_mints_ephemeral_key_not_openai_api_key(app_client, two_use
     assert {item["name"] for item in data["tools"]} >= {
         "find_lead",
         "get_lead_context",
+        "list_open_leads",
         "create_lead",
         "add_lead_note",
         "create_task",
@@ -74,6 +75,7 @@ def test_live_session_mints_ephemeral_key_not_openai_api_key(app_client, two_use
     assert "sk-proj-" not in body
     assert data["session_id"]
     assert data["instructions"]
+    assert "how many leads are currently open" in data["instructions"]
 
 
 def test_live_session_without_openai_key(app_client, two_users, monkeypatch):
@@ -360,6 +362,36 @@ def test_live_tools_are_tenant_scoped(app_client, two_users):
     ).get_json()
     assert res["results"][0]["output"]["ok"] is False
     assert "should not write" not in (db.get_lead(sarah_id, u1).get("notes") or "")
+
+
+def test_live_tool_answers_exact_open_lead_count(app_client, two_users):
+    u1, _ = two_users
+    _login(app_client, u1)
+    _lead(u1, "Open One", "3035559011")
+    closed_id, _ = _lead(u1, "Closed Lead", "3035559012")
+    crm_db.set_lead_status(u1, closed_id, "closed_lost")
+    session_id = "live-open-count"
+    sessions.save_session(u1, session_id, [], pending={"mode": "live"}, status="live")
+
+    data = app_client.post(
+        "/api/ask-topai/live/tools",
+        json={
+            "session_id": session_id,
+            "calls": [
+                {
+                    "call_id": "call_open_count",
+                    "name": "list_open_leads",
+                    "arguments": {"limit": 0},
+                }
+            ],
+            "transcript": "How many leads do I currently have open?",
+        },
+    ).get_json()
+
+    output = data["results"][0]["output"]
+    assert output["ok"] is True
+    assert output["count"] == 1
+    assert output["leads"] == []
 
 
 def test_widget_live_controls_and_no_secrets(app_client, two_users):

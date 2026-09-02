@@ -24,6 +24,7 @@ READ_TOOLS = frozenset(
         "find_lead",
         "get_lead_context",
         "list_lead_tasks",
+        "list_open_leads",
         "get_calendar_availability",
         "find_available_slots",
         "get_existing_appointment",
@@ -94,6 +95,24 @@ def anthropic_tools() -> list[dict]:
             "input_schema": _obj(
                 {"lead_id": {"type": "integer", "description": "CRM lead id."}},
                 required=["lead_id"],
+            ),
+        },
+        {
+            "name": "list_open_leads",
+            "description": (
+                "Get the exact count of this agent's currently open CRM leads and, "
+                "when useful, a bounded list of them. Always use this tool when the "
+                "agent asks how many leads are open, current, or active."
+            ),
+            "input_schema": _obj(
+                {
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100,
+                        "description": "Number of lead summaries to return. Use 0 for count only.",
+                    }
+                }
             ),
         },
         {

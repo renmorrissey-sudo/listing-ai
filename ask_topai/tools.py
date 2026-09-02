@@ -139,6 +139,20 @@ def list_lead_tasks(user_id, arguments: dict, _context: dict | None = None) -> d
     return {"lead_id": lead_id, "tasks": tasks[:20]}
 
 
+def list_open_leads(user_id, arguments: dict, _context: dict | None = None) -> dict:
+    """Return the current tenant's active lead count and a bounded lead list."""
+    try:
+        limit = max(0, min(int(arguments.get("limit", 20)), 100))
+    except (TypeError, ValueError):
+        limit = 20
+    leads = crm_db.filter_leads(user_id, scope="active", limit=limit)
+    return {
+        "count": crm_db.count_filtered_leads(user_id, scope="active"),
+        "leads": [_public_lead(lead) for lead in leads],
+        "definition": "Leads not marked closed won, closed lost, or do not contact.",
+    }
+
+
 def get_calendar_availability(user_id, arguments: dict, _context: dict | None = None) -> dict:
     import scheduling
 
@@ -186,6 +200,7 @@ READ_HANDLERS = {
     "find_lead": find_lead,
     "get_lead_context": get_lead_context,
     "list_lead_tasks": list_lead_tasks,
+    "list_open_leads": list_open_leads,
     "get_calendar_availability": get_calendar_availability,
     "find_available_slots": find_available_slots,
     "get_existing_appointment": get_existing_appointment,
