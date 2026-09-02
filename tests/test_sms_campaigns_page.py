@@ -278,6 +278,33 @@ def test_new_campaign_zero_prior_campaigns_empty_state_ok(
     assert "Create campaign" in res.get_data(as_text=True)
 
 
+def _raise_if_int_as_pg_bool(params, index=9, column="test_mode"):
+    """Reproduce Postgres DatatypeMismatch for INTEGER bound to BOOLEAN."""
+    from psycopg.errors import DatatypeMismatch
+
+    value = params[index]
+    # bool is a subclass of int; only pure ints (0/1) are the defective bind.
+    if type(value) is int:
+        raise DatatypeMismatch(
+            f'column "{column}" is of type boolean but expression is of type integer'
+        )
+
+
+def test_pre_fix_integer_test_mode_bind_raises_datatype_mismatch():
+    """Old create_campaign bound `1 if test_mode else 0`, which Postgres rejects."""
+    from psycopg.errors import DatatypeMismatch
+
+    for flag in (True, False, None):
+        old_bind = 1 if flag else 0
+        assert type(old_bind) is int
+        try:
+            _raise_if_int_as_pg_bool((None,) * 9 + (old_bind,))
+            raised = False
+        except DatatypeMismatch:
+            raised = True
+        assert raised, f"expected DatatypeMismatch for old bind {old_bind!r}"
+
+
 def test_create_campaign_uses_bind_bool_for_postgres(monkeypatch, two_users):
     """Regression for prod e522df439886: Postgres BOOLEAN rejects smallint 0/1."""
     from db_backend import bind_bool
@@ -286,18 +313,63 @@ def test_create_campaign_uses_bind_bool_for_postgres(monkeypatch, two_users):
     monkeypatch.setattr(config, "DB_ENGINE", "postgres")
     assert bind_bool(False) is False
     assert bind_bool(True) is True
-    # Exercise the same conversion create_campaign uses for test_mode.
     assert bind_bool(None) is False
+
+    for test_mode, expected in ((False, False), (True, True), (None, False)):
+        with patch("tenant_sms_db.get_db") as mock_get_db:
+            conn = mock_get_db.return_value.__enter__.return_value
+
+            def _execute(sql, params=None):
+                _raise_if_int_as_pg_bool(params)
+                cur = type("C", (), {"lastrowid": 99})()
+                return cur
+
+            conn.execute.side_effect = _execute
+            if test_mode is None:
+                cid = tdb.create_campaign(u1, "PG bool default")
+            else:
+                cid = tdb.create_campaign(u1, "PG bool", test_mode=test_mode)
+            assert cid == 99
+            params = conn.execute.call_args[0][1]
+            # test_mode is the 10th bound value in the INSERT tuple
+            assert params[9] is expected
+            assert type(params[9]) is bool
+
+
+def test_update_campaign_and_recipients_use_bind_bool(monkeypatch, two_users):
+    """Campaign UPDATE test_mode and recipient INSERT eligible must use bind_bool."""
+    from db_backend import bind_bool
+
+    u1, _ = two_users
+    monkeypatch.setattr(config, "DB_ENGINE", "postgres")
     with patch("tenant_sms_db.get_db") as mock_get_db:
         conn = mock_get_db.return_value.__enter__.return_value
-        cur = conn.execute.return_value
-        cur.lastrowid = 99
-        cid = tdb.create_campaign(u1, "PG bool")
-        assert cid == 99
-        args = conn.execute.call_args[0]
-        params = args[1]
-        # test_mode is the 10th bound value in the INSERT tuple
-        assert params[9] is False
+        assert tdb.update_campaign(1, u1, test_mode=True) is True
+        update_params = conn.execute.call_args[0][1]
+        assert update_params[0] is True
+        assert bind_bool(True) is True
+
+    with patch("tenant_sms_db.get_db") as mock_get_db:
+        conn = mock_get_db.return_value.__enter__.return_value
+        with patch("tenant_sms_db.update_campaign", return_value=True), patch(
+            "tenant_sms_db.invalidate_campaign_attestations"
+        ):
+            tdb.replace_campaign_recipients(
+                1,
+                u1,
+                [
+                    {"phone_number": "+15551234567", "eligible": False},
+                    {"phone_number": "+15557654321", "eligible": True},
+                ],
+            )
+        inserts = [
+            c[0][1]
+            for c in conn.execute.call_args_list
+            if "INSERT INTO sms_campaign_recipients" in str(c[0][0])
+        ]
+        assert len(inserts) == 2
+        assert inserts[0][6] is False
+        assert inserts[1][6] is True
 
 
 def test_new_campaign_create_failure_returns_html_not_json(
