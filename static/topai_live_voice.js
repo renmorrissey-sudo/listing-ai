@@ -18,10 +18,15 @@ if (button && panel && endButton && status && transcript && configElement) {
   const channel = "BroadcastChannel" in window ? new BroadcastChannel("topai-live") : null;
   const ACTIVE_KEY = "topai-live-active-session";
   const WINDOW_NAME = "topaiAskLive";
+  const ACTIVE_SESSION_TTL_MS = 10000;
+  const OPEN_WINDOW_TIMEOUT_MS = 5000;
+  const START_TIMEOUT_MS = 15000;
   const PLAYBACK_GUARD_MS = 650;
   const MIN_BARGE_IN_MS = 350;
   let callState = "idle";
   let callWindowRef = null;
+  let openWindowTimer = null;
+  let heartbeatTimer = null;
   let sessionId = config.sessionId || "";
   let turns = [];
   let assistantIsSpeaking = false;
@@ -43,7 +48,13 @@ if (button && panel && endButton && status && transcript && configElement) {
 
   function activeSession() {
     try {
-      return JSON.parse(localStorage.getItem(ACTIVE_KEY) || "null");
+      const data = JSON.parse(localStorage.getItem(ACTIVE_KEY) || "null");
+      if (!data) return null;
+      if (Date.now() - Number(data.updatedAt || 0) > ACTIVE_SESSION_TTL_MS) {
+        localStorage.removeItem(ACTIVE_KEY);
+        return null;
+      }
+      return data;
     } catch (error) {
       return null;
     }
@@ -64,11 +75,26 @@ if (button && panel && endButton && status && transcript && configElement) {
   }
 
   function broadcast(type, payload = {}) {
-    const message = {type, sessionId, state: callState, turns, ...payload};
+    const message = {type, sessionId, state: callState, turns, updatedAt: Date.now(), ...payload};
     if (channel) channel.postMessage(message);
     try {
       localStorage.setItem(`${ACTIVE_KEY}-ping`, JSON.stringify({...message, at: Date.now()}));
     } catch (error) {}
+  }
+
+  function startHeartbeat() {
+    if (!isCallWindow || heartbeatTimer) return;
+    heartbeatTimer = window.setInterval(() => {
+      if (callState === "idle") return;
+      setActiveSession({sessionId, state: callState, updatedAt: Date.now()});
+      broadcast("heartbeat");
+    }, 2000);
+  }
+
+  function stopHeartbeat() {
+    if (!heartbeatTimer) return;
+    window.clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
   }
 
   function playbackAge(now = Date.now()) {
@@ -285,6 +311,7 @@ if (button && panel && endButton && status && transcript && configElement) {
       : "TopAI could not connect. Please try again.";
     transcript.appendChild(line);
     setState("idle", "Disconnected");
+    stopHeartbeat();
     setActiveSession(null);
     broadcast("ended");
   }
@@ -303,6 +330,7 @@ if (button && panel && endButton && status && transcript && configElement) {
 
   function openLiveWindow() {
     ensureSessionId();
+    if (openWindowTimer) window.clearTimeout(openWindowTimer);
     const url = `/ask-topai-live?session_id=${encodeURIComponent(sessionId)}`;
     callWindowRef = window.open(url, WINDOW_NAME, "popup,width=430,height=620");
     if (!callWindowRef) {
@@ -311,10 +339,15 @@ if (button && panel && endButton && status && transcript && configElement) {
       setState("idle", "Popup blocked");
       return;
     }
-    setActiveSession({sessionId, state: "connecting", updatedAt: Date.now()});
     panel.hidden = false;
-    renderTurns(turns, "Ask TopAI is running in its live conversation window.");
+    renderTurns(turns, "Opening the Ask TopAI live conversation window...");
     setState("connecting", "Opening live conversation");
+    openWindowTimer = window.setTimeout(() => {
+      if (activeSession()?.sessionId === sessionId) return;
+      setState("idle", "Ready");
+      renderTurns([], "The live conversation window did not finish opening. Click Ask TopAI again and allow popups if Chrome asks.");
+      logEvent("live_window_open_timeout");
+    }, OPEN_WINDOW_TIMEOUT_MS);
   }
 
   async function startCall() {
@@ -336,9 +369,16 @@ if (button && panel && endButton && status && transcript && configElement) {
     setState("connecting", "Connecting...");
     ensureSessionId();
     setActiveSession({sessionId, state: "connecting", updatedAt: Date.now()});
+    startHeartbeat();
     broadcast("state");
     try {
-      await vapi.start(config.assistantId, config.assistantOverrides);
+      await Promise.race([
+        vapi.start(config.assistantId, config.assistantOverrides),
+        new Promise((_, reject) => window.setTimeout(
+          () => reject(new Error("Ask TopAI took too long to connect.")),
+          START_TIMEOUT_MS
+        )),
+      ]);
     } catch (error) {
       showError(error);
     }
@@ -361,6 +401,7 @@ if (button && panel && endButton && status && transcript && configElement) {
     logEvent("call_stop_requested");
     if (vapi) vapi.stop();
     await saveConversation("ended");
+    stopHeartbeat();
     setActiveSession(null);
     setState("idle", "Conversation ended");
     broadcast("ended");
@@ -427,6 +468,10 @@ if (button && panel && endButton && status && transcript && configElement) {
 
   function applyRemoteState(message) {
     if (!message || !message.sessionId) return;
+    if (openWindowTimer) {
+      window.clearTimeout(openWindowTimer);
+      openWindowTimer = null;
+    }
     sessionId = message.sessionId;
     if (Array.isArray(message.turns)) {
       turns = message.turns;
@@ -440,7 +485,7 @@ if (button && panel && endButton && status && transcript && configElement) {
     }
     const label = message.state === "speaking" ? "TopAI is speaking" : "Live conversation active";
     setState(message.state || "listening", label);
-    setActiveSession({sessionId, state: message.state || "listening", updatedAt: Date.now()});
+    setActiveSession({sessionId, state: message.state || "listening", updatedAt: message.updatedAt || Date.now()});
   }
 
   if (channel) {
@@ -468,6 +513,7 @@ if (button && panel && endButton && status && transcript && configElement) {
       logEvent("call-start");
       setState("listening", "Listening");
       setActiveSession({sessionId, state: "listening", updatedAt: Date.now()});
+      startHeartbeat();
       broadcast("state");
     });
     vapi.on("call-end", async () => {
@@ -477,6 +523,7 @@ if (button && panel && endButton && status && transcript && configElement) {
       currentResponseId = null;
       potentialInterruptionStartedAt = 0;
       await saveConversation("ended");
+      stopHeartbeat();
       setActiveSession(null);
       setState("idle", "Conversation ended");
       broadcast("ended");
@@ -563,6 +610,7 @@ if (button && panel && endButton && status && transcript && configElement) {
       if (callState !== "idle") {
         saveConversation("ended");
         if (vapi) vapi.stop();
+        stopHeartbeat();
         setActiveSession(null);
         broadcast("ended");
       }
