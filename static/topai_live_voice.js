@@ -510,7 +510,11 @@ if (button && panel && endButton && status && transcript && configElement) {
       setActiveSession(null);
       return;
     }
-    const label = message.state === "speaking" ? "TopAI is speaking" : "Live conversation active";
+    const label = message.state === "speaking"
+      ? "TopAI is speaking"
+      : message.type === "window-ready"
+        ? "Live window ready"
+        : "Live conversation active";
     setState(message.state || "listening", label);
     setActiveSession({sessionId, state: message.state || "listening", updatedAt: message.updatedAt || Date.now()});
   }
@@ -616,7 +620,9 @@ if (button && panel && endButton && status && transcript && configElement) {
 
   button.addEventListener("click", () => {
     const active = activeSession();
-    if (callState === "idle" && !active) startCall();
+    if (isCallWindow && callState === "idle") {
+      startCall();
+    } else if (callState === "idle" && !active) startCall();
     else if (!isCallWindow) {
       panel.hidden = false;
       if (active?.sessionId) {
@@ -633,23 +639,29 @@ if (button && panel && endButton && status && transcript && configElement) {
 
   if (isCallWindow) {
     panel.hidden = false;
-    button.disabled = true;
+    button.disabled = false;
     if (!sessionId) ensureSessionId();
     window.addEventListener("pagehide", () => {
       if (callState !== "idle") {
         saveConversation("ended");
         if (vapi) vapi.stop();
         stopHeartbeat();
-        setActiveSession(null);
-        broadcast("ended");
       }
+      setActiveSession(null);
+      broadcast("ended");
     });
-    startCall();
+    renderTurns([], "Click Ask TopAI to start the live conversation.");
+    setState("idle", "Ready");
+    setActiveSession({sessionId, state: "ready", updatedAt: Date.now()});
+    broadcast("window-ready", {state: "ready"});
   } else {
     const active = activeSession();
     if (active?.sessionId) {
       sessionId = active.sessionId;
-      setState(active.state || "listening", "Live conversation active");
+      setState(
+        active.state || "listening",
+        active.state === "ready" ? "Live window ready" : "Live conversation active"
+      );
     } else {
       setState("idle", "Ready");
     }
