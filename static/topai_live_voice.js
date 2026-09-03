@@ -118,7 +118,40 @@ if (button && panel && endButton && status && transcript && configElement) {
       windowRole: isCallWindow ? "call-window" : "site-page",
       ...details,
     };
-    console.debug("[TopAI Realtime]", entry);
+    console.debug("[TopAI Realtime]", JSON.stringify(entry));
+  }
+
+  function redactedDiagnosticValue(value) {
+    if (value === undefined || value === null) return null;
+    const text = String(value);
+    if (!text) return "";
+    if (/key|token|secret|authorization|bearer/i.test(text)) return "[redacted]";
+    return text.slice(0, 240);
+  }
+
+  function errorDiagnostic(error, stage) {
+    const source = error?.error || error || {};
+    return {
+      at: new Date().toISOString(),
+      stage,
+      name: redactedDiagnosticValue(source.name || error?.name),
+      message: redactedDiagnosticValue(source.message || error?.message || "Unknown voice startup error"),
+      code: redactedDiagnosticValue(source.code || error?.code),
+      status: redactedDiagnosticValue(source.status || error?.status),
+      type: redactedDiagnosticValue(source.type || error?.type),
+      configured: Boolean(config.configured),
+      publicKeyPresent: Boolean(config.publicKey),
+      assistantIdPresent: Boolean(config.assistantId),
+      assistantIsSpeaking,
+      uiState: callState,
+      sessionId,
+    };
+  }
+
+  function browserAssistantOverrides() {
+    const values = config.assistantOverrides?.variableValues;
+    if (!values || typeof values !== "object") return undefined;
+    return {variableValues: values};
   }
 
   function responseIdFromMessage(message) {
@@ -318,15 +351,21 @@ if (button && panel && endButton && status && transcript && configElement) {
     broadcast("state");
   }
 
-  function showError(error) {
-    const raw = error?.error?.message || error?.message || "The live conversation could not start.";
+  function showError(error, stage = "start") {
+    const diagnostic = errorDiagnostic(error, stage);
+    window.__topaiLastError = diagnostic;
+    console.error("[TopAI Realtime Error]", JSON.stringify(diagnostic));
+    logEvent("voice_error", diagnostic);
+    const raw = diagnostic.message || "The live conversation could not start.";
     panel.hidden = false;
     transcript.replaceChildren();
     const line = document.createElement("p");
     line.className = "topai-live-line topai-live-error";
-    line.textContent = /microphone/i.test(raw)
-      ? "Allow microphone access in your browser, then click Ask TopAI again."
-      : "TopAI could not connect. Please try again.";
+    line.textContent = /microphone|permission|notallowed|device|media/i.test(raw)
+      ? "Allow microphone access in Chrome for this site, then click Ask TopAI again."
+      : /auth|api key|apikey|forbidden|unauthorized|401|403/i.test(raw)
+        ? "TopAI voice was rejected by the voice service configuration. Please try again after the update finishes."
+        : `TopAI could not connect. ${raw.slice(0, 160)}`;
     transcript.appendChild(line);
     setState("idle", "Disconnected");
     stopHeartbeat();
@@ -399,15 +438,23 @@ if (button && panel && endButton && status && transcript && configElement) {
     startHeartbeat();
     broadcast("state");
     try {
+      const overrides = browserAssistantOverrides();
+      logEvent("vapi_start_requested", {
+        assistantIdPresent: Boolean(config.assistantId),
+        browserOverrideKeys: overrides ? Object.keys(overrides) : [],
+        variableValueKeys: overrides?.variableValues ? Object.keys(overrides.variableValues) : [],
+      });
       await Promise.race([
-        activeVapi.start(config.assistantId, config.assistantOverrides),
+        overrides
+          ? activeVapi.start(config.assistantId, overrides)
+          : activeVapi.start(config.assistantId),
         new Promise((_, reject) => window.setTimeout(
           () => reject(new Error("Ask TopAI took too long to connect.")),
           START_TIMEOUT_MS
         )),
       ]);
     } catch (error) {
-      showError(error);
+      showError(error, "vapi.start");
     }
   }
 

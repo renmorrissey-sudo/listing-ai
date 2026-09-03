@@ -248,6 +248,8 @@ def test_subscriber_app_renders_one_click_live_voice_without_private_key(
     assert "public-browser-key" in html
     assert "assistant-123" in html
     assert "private-server-key" not in html
+    assert "live CRM copilot" not in html
+    assert '"model"' not in html
 
 
 def test_live_voice_widget_renders_on_subscriber_and_marketing_pages(
