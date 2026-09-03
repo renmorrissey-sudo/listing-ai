@@ -154,6 +154,16 @@ if (button && panel && endButton && status && transcript && configElement) {
     return {variableValues: values};
   }
 
+  function resolveVapiConstructor(module) {
+    const candidates = [
+      module?.default,
+      module?.default?.default,
+      module?.Vapi,
+      module?.default?.Vapi,
+    ];
+    return candidates.find((candidate) => typeof candidate === "function") || null;
+  }
+
   function responseIdFromMessage(message) {
     return (
       message?.response?.id ||
@@ -295,7 +305,10 @@ if (button && panel && endButton && status && transcript && configElement) {
         SDK_LOAD_TIMEOUT_MS
       )),
     ]);
-    const Vapi = module.default;
+    const Vapi = resolveVapiConstructor(module);
+    if (!Vapi) {
+      throw new Error(`Ask TopAI voice library loaded with an unsupported export shape: ${Object.keys(module || {}).join(", ") || "empty"}.`);
+    }
     vapi = new Vapi(config.publicKey);
     attachVapiHandlers();
     logEvent("vapi_sdk_loaded");
