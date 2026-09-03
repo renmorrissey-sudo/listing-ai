@@ -250,6 +250,33 @@ def test_subscriber_app_renders_one_click_live_voice_without_private_key(
     assert "private-server-key" not in html
 
 
+def test_live_voice_widget_renders_on_subscriber_and_marketing_pages(
+    app_client, two_users, monkeypatch
+):
+    import config
+
+    u1, _ = two_users
+    db.update_business_profile(
+        u1, agent_name="Ada", brokerage_name="Ada Realty", company_name=""
+    )
+    monkeypatch.setattr(config, "VAPI_PUBLIC_API_KEY", "public-browser-key")
+    monkeypatch.setattr(config, "VOICE_PROVIDER_API_KEY", "private-server-key")
+    monkeypatch.setattr(config, "REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID", "assistant-123")
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+
+    for path in ("/app", "/dashboard", "/features", "/pricing", "/terms"):
+        response = app_client.get(path)
+        html = response.get_data(as_text=True)
+
+        assert response.status_code == 200
+        assert html.count('id="topai-live-button"') == 1
+        assert 'id="topai-live-config"' in html
+        assert "topai_live_voice.js" in html
+        assert "public-browser-key" in html
+        assert "assistant-123" in html
+        assert "private-server-key" not in html
+
 def test_start_voice_call_blocks_missing_business_profile(app_client, two_users):
     u1, _ = two_users
     persona_id = db.create_voice_persona(
