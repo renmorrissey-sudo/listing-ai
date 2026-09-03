@@ -1,5 +1,3 @@
-import Vapi from "https://cdn.jsdelivr.net/npm/@vapi-ai/web@2.6.1/+esm";
-
 const button = document.getElementById("topai-live-button");
 const panel = document.getElementById("topai-live-panel");
 const endButton = document.getElementById("topai-live-end");
@@ -14,12 +12,14 @@ if (button && panel && endButton && status && transcript && configElement) {
   const config = JSON.parse(configElement.textContent || "{}");
   const isCallWindow = config.mode === "window" || document.body.classList.contains("topai-live-window");
   const voiceConfigured = Boolean(config.configured && config.publicKey && config.assistantId);
-  const vapi = isCallWindow && voiceConfigured ? new Vapi(config.publicKey) : null;
+  let vapi = null;
+  let vapiHandlersAttached = false;
   const channel = "BroadcastChannel" in window ? new BroadcastChannel("topai-live") : null;
   const ACTIVE_KEY = "topai-live-active-session";
   const WINDOW_NAME = "topaiAskLive";
   const ACTIVE_SESSION_TTL_MS = 10000;
   const OPEN_WINDOW_TIMEOUT_MS = 5000;
+  const SDK_LOAD_TIMEOUT_MS = 10000;
   const START_TIMEOUT_MS = 15000;
   const PLAYBACK_GUARD_MS = 650;
   const MIN_BARGE_IN_MS = 350;
@@ -251,6 +251,24 @@ if (button && panel && endButton && status && transcript && configElement) {
     }
   }
 
+  async function loadVapi() {
+    if (vapi) return vapi;
+    if (!isCallWindow || !voiceConfigured) return null;
+    logEvent("vapi_sdk_loading");
+    const module = await Promise.race([
+      import("https://cdn.jsdelivr.net/npm/@vapi-ai/web@2.6.1/+esm"),
+      new Promise((_, reject) => window.setTimeout(
+        () => reject(new Error("Ask TopAI voice library took too long to load.")),
+        SDK_LOAD_TIMEOUT_MS
+      )),
+    ]);
+    const Vapi = module.default;
+    vapi = new Vapi(config.publicKey);
+    attachVapiHandlers();
+    logEvent("vapi_sdk_loaded");
+    return vapi;
+  }
+
   function handleUserSpeechStarted(source) {
     logEvent(source || "input_audio_buffer.speech_started");
     if (!assistantIsSpeaking) {
@@ -355,7 +373,17 @@ if (button && panel && endButton && status && transcript && configElement) {
       openLiveWindow();
       return;
     }
-    if (!vapi) {
+    panel.hidden = false;
+    renderTurns([], "Preparing live conversation...");
+    setState("connecting", "Preparing...");
+    let activeVapi = null;
+    try {
+      activeVapi = await loadVapi();
+    } catch (error) {
+      showError(error);
+      return;
+    }
+    if (!activeVapi) {
       logEvent("voice_config_unavailable", {
         configured: config.configured,
         publicKeyPresent: Boolean(config.publicKey),
@@ -364,7 +392,6 @@ if (button && panel && endButton && status && transcript && configElement) {
       showUnavailable();
       return;
     }
-    panel.hidden = false;
     renderTurns([], "Starting live conversation...");
     setState("connecting", "Connecting...");
     ensureSessionId();
@@ -373,7 +400,7 @@ if (button && panel && endButton && status && transcript && configElement) {
     broadcast("state");
     try {
       await Promise.race([
-        vapi.start(config.assistantId, config.assistantOverrides),
+        activeVapi.start(config.assistantId, config.assistantOverrides),
         new Promise((_, reject) => window.setTimeout(
           () => reject(new Error("Ask TopAI took too long to connect.")),
           START_TIMEOUT_MS
@@ -506,7 +533,9 @@ if (button && panel && endButton && status && transcript && configElement) {
     } catch (error) {}
   });
 
-  if (vapi) {
+  function attachVapiHandlers() {
+    if (!vapi || vapiHandlersAttached) return;
+    vapiHandlersAttached = true;
     vapi.on("call-start", () => {
       turns = [];
       renderTurns([], "Listening...");
