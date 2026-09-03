@@ -11,7 +11,7 @@ const historyList = document.getElementById("topai-live-history-list");
 if (button && panel && endButton && status && transcript && configElement) {
   const config = JSON.parse(configElement.textContent || "{}");
   const isCallWindow = config.mode === "window" || document.body.classList.contains("topai-live-window");
-  const voiceConfigured = Boolean(config.configured && config.publicKey && config.assistantId);
+  const voiceConfigured = Boolean(config.configured && config.publicKey && config.assistantConfig);
   let vapi = null;
   let vapiHandlersAttached = false;
   const channel = "BroadcastChannel" in window ? new BroadcastChannel("topai-live") : null;
@@ -142,6 +142,7 @@ if (button && panel && endButton && status && transcript && configElement) {
       configured: Boolean(config.configured),
       publicKeyPresent: Boolean(config.publicKey),
       assistantIdPresent: Boolean(config.assistantId),
+      assistantConfigPresent: Boolean(config.assistantConfig),
       assistantIsSpeaking,
       uiState: callState,
       sessionId,
@@ -152,6 +153,13 @@ if (button && panel && endButton && status && transcript && configElement) {
     const values = config.assistantOverrides?.variableValues;
     if (!values || typeof values !== "object") return undefined;
     return {variableValues: values};
+  }
+
+  function browserAssistantConfig() {
+    const assistantConfig = config.assistantConfig;
+    if (!assistantConfig || typeof assistantConfig !== "object") return null;
+    const values = browserAssistantOverrides()?.variableValues;
+    return values ? {...assistantConfig, variableValues: values} : assistantConfig;
   }
 
   function resolveVapiConstructor(module) {
@@ -440,6 +448,7 @@ if (button && panel && endButton && status && transcript && configElement) {
         configured: config.configured,
         publicKeyPresent: Boolean(config.publicKey),
         assistantIdPresent: Boolean(config.assistantId),
+        assistantConfigPresent: Boolean(config.assistantConfig),
       });
       showUnavailable();
       return;
@@ -451,16 +460,15 @@ if (button && panel && endButton && status && transcript && configElement) {
     startHeartbeat();
     broadcast("state");
     try {
-      const overrides = browserAssistantOverrides();
+      const assistantConfig = browserAssistantConfig();
+      if (!assistantConfig) throw new Error("Ask TopAI live copilot configuration is missing.");
       logEvent("vapi_start_requested", {
         assistantIdPresent: Boolean(config.assistantId),
-        browserOverrideKeys: overrides ? Object.keys(overrides) : [],
-        variableValueKeys: overrides?.variableValues ? Object.keys(overrides.variableValues) : [],
+        assistantConfigKeys: Object.keys(assistantConfig),
+        variableValueKeys: assistantConfig.variableValues ? Object.keys(assistantConfig.variableValues) : [],
       });
       await Promise.race([
-        overrides
-          ? activeVapi.start(config.assistantId, overrides)
-          : activeVapi.start(config.assistantId),
+        activeVapi.start(assistantConfig),
         new Promise((_, reject) => window.setTimeout(
           () => reject(new Error("Ask TopAI took too long to connect.")),
           START_TIMEOUT_MS

@@ -248,8 +248,10 @@ def test_subscriber_app_renders_one_click_live_voice_without_private_key(
     assert "public-browser-key" in html
     assert "assistant-123" in html
     assert "private-server-key" not in html
-    assert "live CRM copilot" not in html
-    assert '"model"' not in html
+    assert "live CRM copilot" in html
+    assert '"assistantConfig"' in html
+    assert '"model"' in html
+    assert "Hi Ada. How can I help?" in html
 
 
 def test_live_voice_widget_renders_on_subscriber_and_marketing_pages(
@@ -277,6 +279,7 @@ def test_live_voice_widget_renders_on_subscriber_and_marketing_pages(
         assert "topai_live_voice.js" in html
         assert "public-browser-key" in html
         assert "assistant-123" in html
+        assert "live CRM copilot" in html
         assert "private-server-key" not in html
 
 
@@ -303,6 +306,8 @@ def test_live_voice_window_and_history_controls_render(
     assert 'class="topai-live-history-toggle"' in html
     assert '"mode": "window"' in html
     assert '"sessionId": "test-live-session"' in html
+    assert "live CRM copilot" in html
+    assert "Hi Ada. How can I help?" in html
     assert "private-server-key" not in html
 
 
