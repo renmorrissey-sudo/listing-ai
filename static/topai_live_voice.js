@@ -123,22 +123,62 @@ if (button && panel && endButton && status && transcript && configElement) {
 
   function redactedDiagnosticValue(value) {
     if (value === undefined || value === null) return null;
+    if (typeof value === "object") {
+      return JSON.stringify(value, (key, nestedValue) => {
+        if (/key|token|secret|authorization|bearer/i.test(key)) return "[redacted]";
+        if (typeof nestedValue === "string" && /key|token|secret|authorization|bearer/i.test(nestedValue)) return "[redacted]";
+        return nestedValue;
+      }).slice(0, 480);
+    }
     const text = String(value);
     if (!text) return "";
     if (/key|token|secret|authorization|bearer/i.test(text)) return "[redacted]";
     return text.slice(0, 240);
   }
 
+  function firstDiagnosticString(...values) {
+    for (const value of values) {
+      if (value === undefined || value === null || value === "") continue;
+      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+        return String(value);
+      }
+      if (typeof value === "object") {
+        const nested = firstDiagnosticString(
+          value.message,
+          value.msg,
+          value.reason,
+          value.detail,
+          value.details,
+          value.error,
+          value.errors?.[0],
+        );
+        if (nested) return nested;
+        return redactedDiagnosticValue(value);
+      }
+    }
+    return "";
+  }
+
   function errorDiagnostic(error, stage) {
     const source = error?.error || error || {};
+    const message = firstDiagnosticString(
+      source.message,
+      error?.message,
+      source.error,
+      source.details,
+      source.detail,
+      source.errors?.[0],
+      error,
+    ) || "Unknown voice startup error";
     return {
       at: new Date().toISOString(),
       stage,
       name: redactedDiagnosticValue(source.name || error?.name),
-      message: redactedDiagnosticValue(source.message || error?.message || "Unknown voice startup error"),
+      message: redactedDiagnosticValue(message),
       code: redactedDiagnosticValue(source.code || error?.code),
       status: redactedDiagnosticValue(source.status || error?.status),
       type: redactedDiagnosticValue(source.type || error?.type),
+      raw: redactedDiagnosticValue(error),
       configured: Boolean(config.configured),
       publicKeyPresent: Boolean(config.publicKey),
       assistantIdPresent: Boolean(config.assistantId),
