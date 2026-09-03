@@ -1,4 +1,5 @@
 import logging
+import json
 import secrets
 
 import stripe
@@ -78,6 +79,24 @@ app.config["SESSION_COOKIE_SECURE"] = config.IS_PRODUCTION
 app.config["PERMANENT_SESSION_LIFETIME"] = 86400 * 14
 
 db.init_db()
+
+
+def _active_live_voice_config_for_user(user):
+    if not user or not auth.user_has_active_subscription(user):
+        return {"enabled": bool(user), "configured": False}
+    account_token = create_live_voice_account_token(user["id"])
+    profile = db.get_business_profile(user["id"]) or {}
+    voice_configured = bool(
+        config.VAPI_PUBLIC_API_KEY
+        and config.REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID
+    )
+    return {
+        "enabled": True,
+        "configured": voice_configured,
+        "publicKey": config.VAPI_PUBLIC_API_KEY,
+        "assistantId": config.REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID,
+        "assistantOverrides": build_live_voice_assistant_overrides(profile, account_token),
+    }
 app.register_blueprint(crm_bp)
 app.register_blueprint(external_leads_bp)
 app.register_blueprint(email_marketing_bp)
@@ -101,23 +120,7 @@ def inject_business_context():
     path = request.path or "/"
     user = auth.get_current_user()
     can_signup = registration_gate.registration_allowed_for_user(user)
-    live_voice_config = {"enabled": bool(user), "configured": False}
-    if user and auth.user_has_active_subscription(user):
-        account_token = create_live_voice_account_token(user["id"])
-        profile = db.get_business_profile(user["id"]) or {}
-        voice_configured = bool(
-            config.VAPI_PUBLIC_API_KEY
-            and config.REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID
-        )
-        live_voice_config = {
-            "enabled": True,
-            "configured": voice_configured,
-            "publicKey": config.VAPI_PUBLIC_API_KEY,
-            "assistantId": config.REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID,
-            "assistantOverrides": build_live_voice_assistant_overrides(
-                profile, account_token
-            ),
-        }
+    live_voice_config = _active_live_voice_config_for_user(user)
     return {
         "business_name": config.BUSINESS_NAME,
         "product_name": config.PRODUCT_NAME,
@@ -147,6 +150,122 @@ def _user_rate_limit_key():
     if user:
         return f"user:{user['id']}"
     return get_remote_address()
+
+
+def _normalize_live_turns(raw_turns):
+    if not isinstance(raw_turns, list):
+        return []
+    turns = []
+    for raw in raw_turns[:400]:
+        if not isinstance(raw, dict):
+            continue
+        role = str(raw.get("role") or "").strip().lower()
+        if role not in {"assistant", "user"}:
+            continue
+        text = str(raw.get("text") or raw.get("transcript") or "").strip()
+        if not text:
+            continue
+        turns.append({"role": role, "text": text[:5000]})
+    return turns
+
+
+def _live_turns_to_text(turns):
+    labels = {"assistant": "TopAI", "user": "You"}
+    return "\n".join(f"{labels.get(t['role'], t['role'])}: {t['text']}" for t in turns)
+
+
+def _live_conversation_summary(turns):
+    for turn in turns:
+        if turn["role"] == "user":
+            return turn["text"][:140]
+    for turn in turns:
+        if turn["role"] == "assistant":
+            return turn["text"][:140]
+    return "Live conversation"
+
+
+def _json_loads(value, fallback):
+    try:
+        return json.loads(value or "")
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _serialize_live_conversation(row, include_transcript=False):
+    transcript_text = row.get("transcript_text") or ""
+    item = {
+        "id": row.get("id"),
+        "session_id": row.get("session_id"),
+        "status": row.get("status"),
+        "summary": row.get("summary") or _live_conversation_summary(
+            _normalize_live_turns(_json_loads(row.get("transcript_json"), []))
+        ),
+        "preview": transcript_text.replace("\n", " ")[:180],
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "ended_at": row.get("ended_at"),
+    }
+    if include_transcript:
+        item["transcript"] = _normalize_live_turns(
+            _json_loads(row.get("transcript_json"), [])
+        )
+        item["transcript_text"] = transcript_text
+    return item
+
+
+@app.route("/ask-topai-live")
+@auth.subscription_required
+def ask_topai_live_window():
+    user = auth.get_current_user()
+    live_voice_config = _active_live_voice_config_for_user(user)
+    live_voice_config["mode"] = "window"
+    live_voice_config["sessionId"] = request.args.get("session_id") or ""
+    return render_template(
+        "topai_live_window.html",
+        live_voice_config=live_voice_config,
+    )
+
+
+@app.route("/api/live-voice/conversations", methods=["GET", "POST"])
+@auth.subscription_required
+def api_live_voice_conversations():
+    user = auth.get_current_user()
+    if request.method == "GET":
+        rows = db.list_live_voice_conversations(user["id"], limit=30)
+        return jsonify(
+            {"conversations": [_serialize_live_conversation(row) for row in rows]}
+        )
+
+    payload = request.get_json(silent=True) or {}
+    session_id = str(payload.get("session_id") or "").strip()[:120]
+    if not session_id:
+        session_id = secrets.token_urlsafe(18)
+    turns = _normalize_live_turns(payload.get("transcript") or [])
+    transcript_text = _live_turns_to_text(turns)
+    summary = str(payload.get("summary") or _live_conversation_summary(turns)).strip()[:160]
+    status = str(payload.get("status") or "active").strip().lower()
+    if status not in {"active", "ended"}:
+        status = "active"
+    db.upsert_live_voice_conversation(
+        user["id"],
+        session_id,
+        transcript_json=json.dumps(turns),
+        transcript_text=transcript_text,
+        summary=summary,
+        status=status,
+        ended=status == "ended",
+    )
+    return jsonify({"ok": True, "session_id": session_id})
+
+
+@app.route("/api/live-voice/conversations/<session_id>")
+@auth.subscription_required
+def api_live_voice_conversation(session_id):
+    user = auth.get_current_user()
+    row = db.get_live_voice_conversation(user["id"], session_id)
+    if not row:
+        return jsonify({"error": "Conversation not found."}), 404
+    return jsonify({"conversation": _serialize_live_conversation(row, True)})
 
 
 @app.after_request

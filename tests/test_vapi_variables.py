@@ -277,6 +277,71 @@ def test_live_voice_widget_renders_on_subscriber_and_marketing_pages(
         assert "assistant-123" in html
         assert "private-server-key" not in html
 
+
+def test_live_voice_window_and_history_controls_render(
+    app_client, two_users, monkeypatch
+):
+    import config
+
+    u1, _ = two_users
+    db.update_business_profile(
+        u1, agent_name="Ada", brokerage_name="Ada Realty", company_name=""
+    )
+    monkeypatch.setattr(config, "VAPI_PUBLIC_API_KEY", "public-browser-key")
+    monkeypatch.setattr(config, "VOICE_PROVIDER_API_KEY", "private-server-key")
+    monkeypatch.setattr(config, "REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID", "assistant-123")
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+
+    response = app_client.get("/ask-topai-live?session_id=test-live-session")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "Ask TopAI Live" in html
+    assert 'class="topai-live-history-toggle"' in html
+    assert '"mode": "window"' in html
+    assert '"sessionId": "test-live-session"' in html
+    assert "private-server-key" not in html
+
+
+def test_live_voice_conversation_history_is_tenant_scoped(app_client, two_users):
+    u1, u2 = two_users
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+
+    save = app_client.post(
+        "/api/live-voice/conversations",
+        json={
+            "session_id": "live-history-1",
+            "status": "ended",
+            "transcript": [
+                {"role": "user", "text": "Which open leads need attention?"},
+                {"role": "assistant", "text": "Focus on the newest buyer leads first."},
+            ],
+        },
+    )
+    assert save.status_code == 200
+
+    listing = app_client.get("/api/live-voice/conversations")
+    body = listing.get_json()
+    assert listing.status_code == 200
+    assert body["conversations"][0]["session_id"] == "live-history-1"
+    assert "newest buyer leads" in body["conversations"][0]["preview"]
+
+    detail = app_client.get("/api/live-voice/conversations/live-history-1")
+    assert detail.status_code == 200
+    assert detail.get_json()["conversation"]["transcript"][0] == {
+        "role": "user",
+        "text": "Which open leads need attention?",
+    }
+
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u2
+
+    assert app_client.get("/api/live-voice/conversations").get_json()["conversations"] == []
+    assert app_client.get("/api/live-voice/conversations/live-history-1").status_code == 404
+
+
 def test_live_voice_button_remains_visible_when_voice_config_is_missing(
     app_client, two_users, monkeypatch
 ):

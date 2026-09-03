@@ -603,6 +603,149 @@ def list_voice_calls(user_id, limit=20):
         return [dict(row) for row in rows]
 
 
+def ensure_live_voice_conversations_table(conn):
+    if config.DB_ENGINE == "postgres":
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS live_voice_conversations (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                session_id TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL DEFAULT 'active',
+                transcript_json TEXT,
+                transcript_text TEXT,
+                summary TEXT,
+                created_at TIMESTAMPTZ NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL,
+                ended_at TIMESTAMPTZ
+            )
+            """
+        )
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS live_voice_conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                session_id TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL DEFAULT 'active',
+                transcript_json TEXT,
+                transcript_text TEXT,
+                summary TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                ended_at TEXT
+            )
+            """
+        )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_live_voice_conversations_user_updated
+        ON live_voice_conversations(user_id, updated_at)
+        """
+    )
+
+
+def upsert_live_voice_conversation(
+    user_id,
+    session_id,
+    *,
+    transcript_json=None,
+    transcript_text=None,
+    summary=None,
+    status="active",
+    ended=False,
+):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        ensure_live_voice_conversations_table(conn)
+        existing = conn.execute(
+            """
+            SELECT id FROM live_voice_conversations
+            WHERE user_id = ? AND session_id = ?
+            LIMIT 1
+            """,
+            (user_id, session_id),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE live_voice_conversations
+                SET status = ?,
+                    transcript_json = COALESCE(?, transcript_json),
+                    transcript_text = COALESCE(?, transcript_text),
+                    summary = COALESCE(?, summary),
+                    updated_at = ?,
+                    ended_at = CASE WHEN ? = 1 THEN COALESCE(ended_at, ?) ELSE ended_at END
+                WHERE user_id = ? AND session_id = ?
+                """,
+                (
+                    status,
+                    transcript_json,
+                    transcript_text,
+                    summary,
+                    now,
+                    1 if ended else 0,
+                    now,
+                    user_id,
+                    session_id,
+                ),
+            )
+            return existing["id"]
+        cur = conn.execute(
+            """
+            INSERT INTO live_voice_conversations
+                (user_id, session_id, status, transcript_json, transcript_text,
+                 summary, created_at, updated_at, ended_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                session_id,
+                status,
+                transcript_json,
+                transcript_text,
+                summary,
+                now,
+                now,
+                now if ended else None,
+            ),
+        )
+        return cur.lastrowid
+
+
+def list_live_voice_conversations(user_id, limit=20):
+    with get_db() as conn:
+        ensure_live_voice_conversations_table(conn)
+        rows = conn.execute(
+            """
+            SELECT id, session_id, status, transcript_text, summary,
+                   created_at, updated_at, ended_at
+            FROM live_voice_conversations
+            WHERE user_id = ?
+            ORDER BY updated_at DESC, id DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_live_voice_conversation(user_id, session_id):
+    with get_db() as conn:
+        ensure_live_voice_conversations_table(conn)
+        row = conn.execute(
+            """
+            SELECT *
+            FROM live_voice_conversations
+            WHERE user_id = ? AND session_id = ?
+            LIMIT 1
+            """,
+            (user_id, session_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def upsert_lead(user_id, phone_number, data=None, source="sms"):
     """Backward-compatible wrapper — prefer lead_service.upsert_crm_lead."""
     import lead_service
