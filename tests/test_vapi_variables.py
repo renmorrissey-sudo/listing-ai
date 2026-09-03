@@ -182,13 +182,13 @@ def test_outbound_payload_includes_assistant_overrides(monkeypatch):
         "model": "flux-general-en",
         "language": "en",
         "eotThreshold": 0.9,
-        "eotTimeoutMs": 7000,
+        "eotTimeoutMs": 8000,
     }
-    assert overrides["startSpeakingPlan"] == {"waitSeconds": 0.4}
+    assert overrides["startSpeakingPlan"] == {"waitSeconds": 0.55}
     assert overrides["stopSpeakingPlan"] == {
-        "numWords": 0,
-        "voiceSeconds": 0.2,
-        "backoffSeconds": 1.0,
+        "numWords": 2,
+        "voiceSeconds": 0.35,
+        "backoffSeconds": 1.2,
     }
     tools = payload["assistantOverrides"]["model"]["tools"]
     tool_names = {tool["function"]["name"] for tool in tools}
@@ -211,6 +211,8 @@ def test_live_voice_overrides_use_copilot_prompt_and_signed_static_tool_paramete
 
     assert overrides["firstMessage"] == "Hi Ada. How can I help?"
     assert overrides["firstMessageMode"] == "assistant-speaks-first"
+    assert overrides["firstMessageInterruptionsEnabled"] is False
+    assert "assistant.speechStarted" in overrides["clientMessages"]
     assert overrides["model"]["model"] == "chat-latest"
     prompt = overrides["model"]["messages"][0]["content"]
     assert "live CRM copilot" in prompt

@@ -19,13 +19,13 @@ def _conversation_quality_overrides():
             "model": "flux-general-en",
             "language": "en",
             "eotThreshold": 0.9,
-            "eotTimeoutMs": 7000,
+            "eotTimeoutMs": 8000,
         },
-        "startSpeakingPlan": {"waitSeconds": 0.4},
+        "startSpeakingPlan": {"waitSeconds": 0.55},
         "stopSpeakingPlan": {
-            "numWords": 0,
-            "voiceSeconds": 0.2,
-            "backoffSeconds": 1.0,
+            "numWords": 2,
+            "voiceSeconds": 0.35,
+            "backoffSeconds": 1.2,
         },
     }
 
@@ -41,6 +41,7 @@ def build_live_voice_assistant_overrides(profile, account_token):
         },
         "firstMessage": f"Hi {agent_name}. How can I help?",
         "firstMessageMode": "assistant-speaks-first",
+        "firstMessageInterruptionsEnabled": False,
         "maxDurationSeconds": 1800,
         "backgroundSound": "off",
         "clientMessages": [
@@ -48,6 +49,7 @@ def build_live_voice_assistant_overrides(profile, account_token):
             "speech-update",
             "user-interrupted",
             "status-update",
+            "assistant.speechStarted",
         ],
         **_conversation_quality_overrides(),
         "model": {
