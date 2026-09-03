@@ -277,6 +277,26 @@ def test_live_voice_widget_renders_on_subscriber_and_marketing_pages(
         assert "assistant-123" in html
         assert "private-server-key" not in html
 
+def test_live_voice_button_remains_visible_when_voice_config_is_missing(
+    app_client, two_users, monkeypatch
+):
+    import config
+
+    u1, _ = two_users
+    monkeypatch.setattr(config, "VAPI_PUBLIC_API_KEY", "")
+    monkeypatch.setattr(config, "REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID", "")
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+
+    response = app_client.get("/app")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert html.count('id="topai-live-button"') == 1
+    assert 'id="topai-live-config"' in html
+    assert '"configured": false' in html
+    assert "topai_live_voice.js" in html
+
 def test_start_voice_call_blocks_missing_business_profile(app_client, two_users):
     u1, _ = two_users
     persona_id = db.create_voice_persona(

@@ -101,17 +101,17 @@ def inject_business_context():
     path = request.path or "/"
     user = auth.get_current_user()
     can_signup = registration_gate.registration_allowed_for_user(user)
-    live_voice_config = {"enabled": False}
-    if (
-        user
-        and auth.user_has_active_subscription(user)
-        and config.VAPI_PUBLIC_API_KEY
-        and config.REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID
-    ):
+    live_voice_config = {"enabled": bool(user), "configured": False}
+    if user and auth.user_has_active_subscription(user):
         account_token = create_live_voice_account_token(user["id"])
         profile = db.get_business_profile(user["id"]) or {}
+        voice_configured = bool(
+            config.VAPI_PUBLIC_API_KEY
+            and config.REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID
+        )
         live_voice_config = {
             "enabled": True,
+            "configured": voice_configured,
             "publicKey": config.VAPI_PUBLIC_API_KEY,
             "assistantId": config.REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID,
             "assistantOverrides": build_live_voice_assistant_overrides(

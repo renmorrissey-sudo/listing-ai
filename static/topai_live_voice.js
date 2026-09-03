@@ -9,7 +9,8 @@ const configElement = document.getElementById("topai-live-config");
 
 if (button && panel && endButton && status && transcript && configElement) {
   const config = JSON.parse(configElement.textContent || "{}");
-  const vapi = new Vapi(config.publicKey);
+  const voiceConfigured = Boolean(config.configured && config.publicKey && config.assistantId);
+  const vapi = voiceConfigured ? new Vapi(config.publicKey) : null;
   let callState = "idle";
   const PLAYBACK_GUARD_MS = 650;
   const MIN_BARGE_IN_MS = 350;
@@ -207,7 +208,28 @@ if (button && panel && endButton && status && transcript && configElement) {
     setState("idle", "Disconnected");
   }
 
+  function showUnavailable() {
+    panel.hidden = false;
+    transcript.replaceChildren();
+    const line = document.createElement("p");
+    line.className = "topai-live-line topai-live-error";
+    line.textContent = config.configured === false
+      ? "Ask TopAI is visible, but live voice is not fully configured yet."
+      : "Ask TopAI could not load its voice configuration. Please refresh and try again.";
+    transcript.appendChild(line);
+    setState("idle", "Unavailable");
+  }
+
   async function startCall() {
+    if (!vapi) {
+      logEvent("voice_config_unavailable", {
+        configured: config.configured,
+        publicKeyPresent: Boolean(config.publicKey),
+        assistantIdPresent: Boolean(config.assistantId),
+      });
+      showUnavailable();
+      return;
+    }
     panel.hidden = false;
     transcript.innerHTML = '<p class="topai-live-line">Starting live conversation...</p>';
     setState("connecting", "Connecting...");
@@ -221,81 +243,83 @@ if (button && panel && endButton && status && transcript && configElement) {
   function endCall() {
     if (callState === "idle") return;
     logEvent("call_stop_requested");
-    vapi.stop();
+    if (vapi) vapi.stop();
     setState("idle", "Conversation ended");
   }
 
-  vapi.on("call-start", () => {
-    transcript.replaceChildren();
-    logEvent("call-start");
-    setState("listening", "Listening");
-  });
-  vapi.on("call-end", () => {
-    logEvent("call-end");
-    assistantIsSpeaking = false;
-    assistantPlaybackStartedAt = 0;
-    currentResponseId = null;
-    potentialInterruptionStartedAt = 0;
-    setState("idle", "Conversation ended");
-  });
-  vapi.on("speech-start", () => markAssistantPlaybackStarted(null, "speech-start"));
-  vapi.on("speech-end", () => markAssistantPlaybackDone("speech-end"));
-  vapi.on("message", (message) => {
-    const type = message?.type;
-    if (!type) return;
-    if (type !== "transcript") logEvent(`message.${type}`, {responseId: responseIdFromMessage(message)});
+  if (vapi) {
+    vapi.on("call-start", () => {
+      transcript.replaceChildren();
+      logEvent("call-start");
+      setState("listening", "Listening");
+    });
+    vapi.on("call-end", () => {
+      logEvent("call-end");
+      assistantIsSpeaking = false;
+      assistantPlaybackStartedAt = 0;
+      currentResponseId = null;
+      potentialInterruptionStartedAt = 0;
+      setState("idle", "Conversation ended");
+    });
+    vapi.on("speech-start", () => markAssistantPlaybackStarted(null, "speech-start"));
+    vapi.on("speech-end", () => markAssistantPlaybackDone("speech-end"));
+    vapi.on("message", (message) => {
+      const type = message?.type;
+      if (!type) return;
+      if (type !== "transcript") logEvent(`message.${type}`, {responseId: responseIdFromMessage(message)});
 
-    if (type === "transcript") {
-      const isPartial = message.transcriptType === "partial";
-      addTranscript(message.role, message.transcript, isPartial);
-      if (message.role === "assistant" && message.transcriptType === "final") {
-        lastAssistantText = message.transcript || lastAssistantText;
+      if (type === "transcript") {
+        const isPartial = message.transcriptType === "partial";
+        addTranscript(message.role, message.transcript, isPartial);
+        if (message.role === "assistant" && message.transcriptType === "final") {
+          lastAssistantText = message.transcript || lastAssistantText;
+        }
+        return;
       }
-      return;
-    }
 
-    if (type === "speech-update") {
-      if (message.role === "assistant" && message.status === "started") {
-        markAssistantPlaybackStarted(responseIdFromMessage(message), "response.created");
-      } else if (message.role === "assistant" && message.status === "stopped") {
-        markAssistantPlaybackDone("response.audio.done", {responseId: responseIdFromMessage(message)});
-      } else if (message.role === "user" && message.status === "started") {
-        handleUserSpeechStarted("input_audio_buffer.speech_started");
-      } else if (message.role === "user" && message.status === "stopped") {
-        handleUserSpeechStopped("input_audio_buffer.speech_stopped");
+      if (type === "speech-update") {
+        if (message.role === "assistant" && message.status === "started") {
+          markAssistantPlaybackStarted(responseIdFromMessage(message), "response.created");
+        } else if (message.role === "assistant" && message.status === "stopped") {
+          markAssistantPlaybackDone("response.audio.done", {responseId: responseIdFromMessage(message)});
+        } else if (message.role === "user" && message.status === "started") {
+          handleUserSpeechStarted("input_audio_buffer.speech_started");
+        } else if (message.role === "user" && message.status === "stopped") {
+          handleUserSpeechStopped("input_audio_buffer.speech_stopped");
+        }
+        return;
       }
-      return;
-    }
 
-    if (type === "assistant.speechStarted") {
-      if (message.text) lastAssistantText = message.text;
-      markAssistantPlaybackStarted(responseIdFromMessage(message), "assistant.speechStarted");
-      return;
-    }
-
-    if (type === "user-interrupted") {
-      const duration = potentialInterruptionStartedAt
-        ? Date.now() - potentialInterruptionStartedAt
-        : null;
-      if (
-        assistantIsSpeaking &&
-        (playbackAge() || 0) >= PLAYBACK_GUARD_MS &&
-        duration !== null &&
-        duration >= MIN_BARGE_IN_MS
-      ) {
-        confirmUserInterruption("response.cancel_observed_after_validated_interruption");
-      } else {
-        lastInterruptionClassification = "unvalidated_user_interruption";
+      if (type === "assistant.speechStarted") {
+        if (message.text) lastAssistantText = message.text;
+        markAssistantPlaybackStarted(responseIdFromMessage(message), "assistant.speechStarted");
+        return;
       }
-      handleResponseCancelled("response.cancelled", message);
-      return;
-    }
 
-    if (type === "status-update" && message.status === "ended") {
-      markAssistantPlaybackDone("response.done", {responseId: responseIdFromMessage(message)});
-    }
-  });
-  vapi.on("error", showError);
+      if (type === "user-interrupted") {
+        const duration = potentialInterruptionStartedAt
+          ? Date.now() - potentialInterruptionStartedAt
+          : null;
+        if (
+          assistantIsSpeaking &&
+          (playbackAge() || 0) >= PLAYBACK_GUARD_MS &&
+          duration !== null &&
+          duration >= MIN_BARGE_IN_MS
+        ) {
+          confirmUserInterruption("response.cancel_observed_after_validated_interruption");
+        } else {
+          lastInterruptionClassification = "unvalidated_user_interruption";
+        }
+        handleResponseCancelled("response.cancelled", message);
+        return;
+      }
+
+      if (type === "status-update" && message.status === "ended") {
+        markAssistantPlaybackDone("response.done", {responseId: responseIdFromMessage(message)});
+      }
+    });
+    vapi.on("error", showError);
+  }
 
   button.addEventListener("click", () => {
     if (callState === "idle") startCall();
@@ -303,7 +327,7 @@ if (button && panel && endButton && status && transcript && configElement) {
   });
   endButton.addEventListener("click", endCall);
   window.addEventListener("pagehide", () => {
-    if (callState !== "idle") vapi.stop();
+    if (callState !== "idle" && vapi) vapi.stop();
   });
 
   button.disabled = false;
