@@ -903,7 +903,7 @@ def merge_lead_call_outcome_notes(
             """
             UPDATE leads
             SET notes = CASE
-                    WHEN ? IS NULL THEN notes
+                    WHEN CAST(? AS TEXT) IS NULL THEN notes
                     WHEN notes IS NULL OR notes = '' THEN ?
                     ELSE notes || ' | ' || ?
                 END,

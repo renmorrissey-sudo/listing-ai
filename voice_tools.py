@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -25,6 +26,7 @@ from crm_constants import (
 )
 
 
+logger = logging.getLogger(__name__)
 OPEN_LEAD_EXCLUDED_STATUSES = {"closed_won", "closed_lost", "do_not_contact"}
 SMS_CONSENT_ALIASES = {
     "sms verified": "verified",
@@ -235,6 +237,10 @@ def voice_tool_definitions(server_url, account_token=None, template_account_toke
                         "location": {"type": "string"},
                         "notes": {"type": "string"},
                         "status": {"type": "string"},
+                        "lead_note": {"type": "string"},
+                        "next_action": {"type": "string"},
+                        "lead_status": {"type": "string"},
+                        "contacted": {"type": "boolean"},
                     },
                     "required": ["start_at"],
                 },
@@ -402,7 +408,8 @@ def _handle_tool_call(user_id, call):
         return {"toolCallId": tool_id, "result": f"Unknown TopAI voice tool: {name}."}
     try:
         result = handler(user_id, args)
-    except Exception:
+    except Exception as exc:
+        logger.exception("TopAI voice tool failed name=%s user_id=%s", name, user_id)
         result = "TopAI could not complete that CRM action."
     return {"toolCallId": tool_id, "result": result}
 
@@ -634,10 +641,24 @@ def _create_lead_appointment(user_id, args):
     if error:
         return error
     updated = db.get_lead(lead["id"], user_id)
+    lead_update = None
+    lead_note = str(args.get("lead_note") or "").strip()
+    next_action = str(args.get("next_action") or "").strip()
+    lead_status = str(args.get("lead_status") or "").strip()
+    if lead_note or next_action or lead_status or args.get("contacted"):
+        lead_update = _record_lead_update(user_id, {
+            "lead_id": lead["id"],
+            "note": lead_note or str(args.get("notes") or "").strip(),
+            "next_action": next_action,
+            "status": lead_status,
+            "contacted": bool(args.get("contacted")),
+        })
+        updated = db.get_lead(lead["id"], user_id)
     return {
         "ok": True,
         "appointment_id": appointment_id,
         "lead": _lead_summary(updated),
+        "lead_update": lead_update,
         "summary": f"Created appointment for {updated.get('name') or 'the lead'} at {start_at}.",
     }
 
@@ -650,8 +671,10 @@ def _record_lead_update(user_id, args):
     next_action = str(args.get("next_action") or "").strip()[:500] or None
     raw_status = str(args.get("status") or "").strip().lower().replace(" ", "_")
     candidate = LEGACY_STATUS_MAP.get(raw_status, raw_status) if raw_status else None
+    warnings = []
     if candidate and candidate not in LEAD_STATUS_SET:
-        return "That is not a supported lead status."
+        warnings.append(f"I ignored unsupported lead status '{raw_status}' and saved the other update fields.")
+        candidate = None
     if args.get("contacted"):
         db.touch_lead_outbound(lead["id"], user_id)
     if note or next_action:
@@ -672,7 +695,7 @@ def _record_lead_update(user_id, args):
             return error
     else:
         updated = db.get_lead(lead["id"], user_id)
-    if note and not next_action:
+    if note:
         crm_db.add_lead_activity(
             lead["id"],
             user_id,
@@ -684,6 +707,7 @@ def _record_lead_update(user_id, args):
     return {
         "ok": True,
         "lead": _lead_summary(updated),
+        "warnings": warnings,
         "summary": f"Updated {updated.get('name') or 'the lead'}.",
     }
 

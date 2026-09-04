@@ -333,6 +333,89 @@ def test_live_voice_token_can_record_updates_tasks_and_appointments(app_client, 
     assert appointments[0]["start_at"] == "2026-09-04T15:00:00-06:00"
 
 
+def test_create_lead_appointment_can_record_spoke_note_and_next_action(
+    app_client, two_users
+):
+    u1, _ = two_users
+    apply_pending_migrations()
+    lead_id = _lead(u1, "Mark Smith", status="contacted")
+    token = create_live_voice_account_token(u1)
+
+    res = app_client.post(
+        "/webhook/voice",
+        json={
+            "message": {
+                "type": "tool-calls",
+                "call": {"id": "web-call-live-copilot"},
+                "toolCallList": [
+                    {
+                        "id": "tool_1",
+                        "name": "create_lead_appointment",
+                        "arguments": {
+                            "topai_account_token": token,
+                            "lead_id": lead_id,
+                            "appointment_type": "phone_call",
+                            "start_at": "2026-09-07T14:00:00-06:00",
+                            "status": "confirmed",
+                            "lead_note": "The agent spoke with Mark yesterday.",
+                            "next_action": "Coffee meeting scheduled for Monday at 2 PM.",
+                            "contacted": True,
+                        },
+                    }
+                ],
+            }
+        },
+    )
+
+    assert res.status_code == 200
+    result = _tool_result(res)
+    assert result["ok"] is True
+    assert result["lead_update"]["ok"] is True
+
+    lead = db.get_lead(lead_id, u1)
+    assert "The agent spoke with Mark yesterday." in lead["notes"]
+    assert lead["next_action"] == "Coffee meeting scheduled for Monday at 2 PM."
+    assert lead["last_outbound_at"]
+    activities = crm_db.list_lead_activities(u1, lead_id)
+    assert any(activity["event_type"] == "voice_note" for activity in activities)
+    appointments = crm_db.list_appointments(u1, lead_id=lead_id)
+    assert appointments[0]["status"] == "confirmed"
+    assert appointments[0]["start_at"] == "2026-09-07T14:00:00-06:00"
+
+
+def test_record_lead_update_saves_next_action_without_note(app_client, two_users):
+    u1, _ = two_users
+    apply_pending_migrations()
+    lead_id = _lead(u1, "Sarah Johnson", status="qualified")
+    token = create_live_voice_account_token(u1)
+
+    res = app_client.post(
+        "/webhook/voice",
+        json={
+            "message": {
+                "type": "tool-calls",
+                "call": {"id": "web-call-live-copilot"},
+                "toolCallList": [
+                    {
+                        "id": "tool_1",
+                        "name": "record_lead_update",
+                        "arguments": {
+                            "topai_account_token": token,
+                            "lead_id": lead_id,
+                            "next_action": "Send Sarah the Meadows Ranch DMA package.",
+                        },
+                    }
+                ],
+            }
+        },
+    )
+
+    assert res.status_code == 200
+    result = _tool_result(res)
+    assert result["ok"] is True
+    assert db.get_lead(lead_id, u1)["next_action"] == "Send Sarah the Meadows Ranch DMA package."
+
+
 def test_voice_tool_saves_email_draft_to_lead_timeline(app_client, two_users):
     u1, _ = two_users
     apply_pending_migrations()
