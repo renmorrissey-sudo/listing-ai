@@ -239,3 +239,40 @@ def test_voice_tool_saves_email_draft_to_lead_timeline(app_client, two_users):
     activities = crm_db.list_lead_activities(u1, lead_id)
     assert activities[0]["event_type"] == "email_draft_created"
     assert "Checking in" in activities[0]["summary"]
+
+
+def test_live_open_lead_resolves_exact_name_and_scopes_account(app_client, two_users):
+    u1, u2 = two_users
+    selected = _lead(u1, "Mark Smith")
+    _lead(u1, "Mark Smithson", phone="+13035550222")
+    other = _lead(u2, "Mark Smith", phone="+13035550223")
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+    response = app_client.post("/api/live-voice/open-lead", json={"lead_name": " mark smith "})
+    assert response.status_code == 200
+    assert response.get_json()["url"] == f"/crm/leads/{selected}"
+    assert db.get_lead(selected, u1)["status"] == "new"
+    assert app_client.post("/api/live-voice/open-lead", json={"lead_id": other}).status_code == 404
+    assert app_client.post("/api/live-voice/open-lead", json={"lead_id": selected, "account_id": u2}).status_code == 403
+
+
+def test_live_open_lead_refuses_ambiguous_missing_and_invalid_names(app_client, two_users):
+    u1, _ = two_users
+    _lead(u1, "Mark Smith")
+    _lead(u1, "Mark Jones", phone="+13035550224")
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+    for payload, expected in [
+        ({"lead_name": "Mark"}, 409),
+        ({"lead_name": "Nobody"}, 404),
+        ({"lead_name": "%"}, 404),
+        ({"lead_name": ""}, 400),
+        ({"lead_id": True}, 400),
+        ({"lead_id": 1.5}, 400),
+        ([], 400),
+    ]:
+        assert app_client.post("/api/live-voice/open-lead", json=payload).status_code == expected
+
+
+def test_live_open_lead_requires_login(app_client):
+    assert app_client.post("/api/live-voice/open-lead", json={"lead_name": "Mark"}).status_code != 200

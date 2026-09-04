@@ -6,14 +6,27 @@ const endButton = document.getElementById("topai-live-end");
 const status = document.getElementById("topai-live-status");
 const transcript = document.getElementById("topai-live-transcript");
 const configElement = document.getElementById("topai-live-config");
+const historyToggle = document.getElementById("topai-live-history-toggle");
+const historyPanel = document.getElementById("topai-live-history");
+const historyList = document.getElementById("topai-live-history-list");
 
 if (button && panel && endButton && status && transcript && configElement) {
   const config = JSON.parse(configElement.textContent || "{}");
+  const isCallWindow = config.mode === "window" || document.body.classList.contains("topai-live-window");
   const voiceConfigured = Boolean(config.configured && config.publicKey && config.assistantId);
-  const vapi = voiceConfigured ? new Vapi(config.publicKey) : null;
-  let callState = "idle";
+  const vapi = isCallWindow && voiceConfigured ? new Vapi(config.publicKey) : null;
+  const channel = "BroadcastChannel" in window ? new BroadcastChannel(`topai-live-${config.userId}`) : null;
+  const ACTIVE_KEY = `topai-live-active-session-${config.userId}`;
+  const WINDOW_NAME = `topaiAskLive-${config.userId}`;
+  const handledToolCalls = new Set();
+  let navigationSequence = 0;
+  let pendingLeadPath = null;
   const PLAYBACK_GUARD_MS = 650;
   const MIN_BARGE_IN_MS = 350;
+  let callState = "idle";
+  let callWindowRef = null;
+  let sessionId = config.sessionId || "";
+  let turns = [];
   let assistantIsSpeaking = false;
   let assistantPlaybackStartedAt = 0;
   let currentResponseId = null;
@@ -27,8 +40,39 @@ if (button && panel && endButton && status && transcript && configElement) {
     panel.dataset.state = nextState;
     status.textContent = label;
     button.dataset.callState = nextState === "idle" ? "idle" : "active";
-    button.textContent = nextState === "idle" ? "Ask TopAI" : "End TopAI";
-    button.disabled = nextState === "connecting";
+    button.textContent = nextState === "idle" ? "Ask TopAI" : "TopAI Live";
+    button.disabled = nextState === "connecting" && !isCallWindow;
+  }
+
+  function activeSession() {
+    try {
+      const active = JSON.parse(localStorage.getItem(ACTIVE_KEY) || "null");
+      return active && Date.now() - active.updatedAt < 30000 ? active : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function setActiveSession(data) {
+    try {
+      if (data) localStorage.setItem(ACTIVE_KEY, JSON.stringify(data));
+      else localStorage.removeItem(ACTIVE_KEY);
+    } catch (error) {}
+  }
+
+  function ensureSessionId() {
+    if (!sessionId) {
+      sessionId = crypto?.randomUUID ? crypto.randomUUID() : `topai-${Date.now()}`;
+    }
+    return sessionId;
+  }
+
+  function broadcast(type, payload = {}) {
+    const message = {type, sessionId, state: callState, turns, ...payload};
+    if (channel) channel.postMessage(message);
+    try {
+      localStorage.setItem(`${ACTIVE_KEY}-ping`, JSON.stringify({...message, at: Date.now()}));
+    } catch (error) {}
   }
 
   function playbackAge(now = Date.now()) {
@@ -48,6 +92,8 @@ if (button && panel && endButton && status && transcript && configElement) {
         : null,
       uiState: callState,
       interruptionClassification: lastInterruptionClassification,
+      sessionId,
+      windowRole: isCallWindow ? "call-window" : "site-page",
       ...details,
     };
     console.debug("[TopAI Realtime]", entry);
@@ -63,6 +109,63 @@ if (button && panel && endButton && status && transcript && configElement) {
     );
   }
 
+  function rememberTurn(role, text) {
+    const cleaned = String(text || "").trim();
+    if (!cleaned || !["assistant", "user"].includes(role)) return;
+    const last = turns[turns.length - 1];
+    if (last && last.role === role) last.text = cleaned;
+    else turns.push({role, text: cleaned});
+    if (role === "assistant") lastAssistantText = cleaned;
+    saveConversation("active");
+    broadcast("transcript");
+  }
+
+  function addTranscript(role, text, replacePartial = false, remember = true) {
+    if (!text) return;
+    const partial = transcript.querySelector(`[data-partial="${role}"]`);
+    if (replacePartial && partial) {
+      partial.lastChild.textContent = text;
+      transcript.scrollTop = transcript.scrollHeight;
+      return;
+    }
+    if (!replacePartial && partial) partial.removeAttribute("data-partial");
+    const line = document.createElement("p");
+    line.className = "topai-live-line";
+    if (replacePartial) line.dataset.partial = role;
+    const name = document.createElement("strong");
+    name.textContent = role === "user" ? "You: " : "TopAI: ";
+    line.append(name, document.createTextNode(text));
+    transcript.appendChild(line);
+    transcript.scrollTop = transcript.scrollHeight;
+    if (!replacePartial && remember) rememberTurn(role, text);
+  }
+
+  function renderTurns(nextTurns, emptyText = "No transcript yet.") {
+    transcript.replaceChildren();
+    if (!nextTurns.length) {
+      const line = document.createElement("p");
+      line.className = "topai-live-line";
+      line.textContent = emptyText;
+      transcript.appendChild(line);
+      return;
+    }
+    nextTurns.forEach((turn) => addTranscript(turn.role, turn.text, false, false));
+  }
+
+  function saveConversation(nextStatus) {
+    if (!sessionId || !turns.length) return Promise.resolve();
+    return fetch("/api/live-voice/conversations", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        session_id: sessionId,
+        status: nextStatus,
+        transcript: turns,
+      }),
+    }).catch((error) => logEvent("conversation_save_failed", {message: error?.message}));
+  }
+
   function markAssistantPlaybackStarted(responseId, source) {
     const wasSpeaking = assistantIsSpeaking;
     assistantIsSpeaking = true;
@@ -74,6 +177,7 @@ if (button && panel && endButton && status && transcript && configElement) {
     }
     lastInterruptionClassification = "assistant_playback";
     setState("speaking", "TopAI is speaking");
+    broadcast("state");
     logEvent(source || "response.created", {responseId: currentResponseId});
   }
 
@@ -84,6 +188,7 @@ if (button && panel && endButton && status && transcript && configElement) {
     potentialInterruptionStartedAt = 0;
     currentResponseId = null;
     if (callState !== "idle") setState("listening", "Listening");
+    broadcast("state");
   }
 
   function clearPotentialInterruption(classification) {
@@ -107,26 +212,21 @@ if (button && panel && endButton && status && transcript && configElement) {
   }
 
   function requestAssistantContinuation(reason) {
-    if (callState === "idle") return;
+    if (!vapi || callState === "idle") return;
     const prompt = [
       "The previous assistant response appears to have been cancelled by echo or transient noise, not an intentional user interruption.",
       "Continue the incomplete TopAI response naturally from the conversation context.",
-      lastAssistantText ? `Most recent assistant text before cancellation: "${lastAssistantText}"` : "",
+      lastAssistantText ? `Most recent assistant text before cancellation: \"${lastAssistantText}\"` : "",
       "Do not apologize for a technical issue unless the user asks what happened.",
     ].filter(Boolean).join(" ");
     logEvent("assistant_continuation_requested", {reason});
     if (typeof vapi.send === "function") {
-      vapi.send({
-        type: "add-message",
-        message: {role: "system", content: prompt},
-      });
-      return;
-    }
-    if (typeof vapi.addMessage === "function") {
+      vapi.send({type: "add-message", message: {role: "system", content: prompt}});
+    } else if (typeof vapi.addMessage === "function") {
       vapi.addMessage({role: "system", content: prompt});
-      return;
+    } else {
+      logEvent("assistant_continuation_unavailable");
     }
-    logEvent("assistant_continuation_unavailable");
   }
 
   function handleUserSpeechStarted(source) {
@@ -134,6 +234,7 @@ if (button && panel && endButton && status && transcript && configElement) {
     if (!assistantIsSpeaking) {
       lastInterruptionClassification = "user_turn_started";
       setState("listening", "Listening");
+      broadcast("state");
       return;
     }
     if ((playbackAge() || 0) < PLAYBACK_GUARD_MS) {
@@ -174,25 +275,7 @@ if (button && panel && endButton && status && transcript && configElement) {
       requestAssistantContinuation(source || "response.cancelled");
     }
     interruptionWasIntentional = false;
-  }
-
-  function addTranscript(role, text, replacePartial = false) {
-    if (!text) return;
-    const partial = transcript.querySelector(`[data-partial="${role}"]`);
-    if (replacePartial && partial) {
-      partial.lastChild.textContent = text;
-      transcript.scrollTop = transcript.scrollHeight;
-      return;
-    }
-    if (!replacePartial && partial) partial.removeAttribute("data-partial");
-    const line = document.createElement("p");
-    line.className = "topai-live-line";
-    if (replacePartial) line.dataset.partial = role;
-    const name = document.createElement("strong");
-    name.textContent = role === "user" ? "You: " : "TopAI: ";
-    line.append(name, document.createTextNode(text));
-    transcript.appendChild(line);
-    transcript.scrollTop = transcript.scrollHeight;
+    broadcast("state");
   }
 
   function showError(error) {
@@ -206,6 +289,8 @@ if (button && panel && endButton && status && transcript && configElement) {
       : "TopAI could not connect. Please try again.";
     transcript.appendChild(line);
     setState("idle", "Disconnected");
+    setActiveSession(null);
+    broadcast("ended");
   }
 
   function showUnavailable() {
@@ -220,7 +305,31 @@ if (button && panel && endButton && status && transcript && configElement) {
     setState("idle", "Unavailable");
   }
 
+  function openLiveWindow() {
+    ensureSessionId();
+    const url = `/ask-topai-live?session_id=${encodeURIComponent(sessionId)}`;
+    // Reuse the named window without reloading an ongoing voice connection.
+    callWindowRef = window.open("", WINDOW_NAME, "popup,width=430,height=620");
+    if (callWindowRef && callWindowRef.location.href === "about:blank") {
+      callWindowRef.location.replace(url);
+    }
+    if (!callWindowRef) {
+      panel.hidden = false;
+      renderTurns([], "Your browser blocked the live conversation window. Allow popups for this site, then click Ask TopAI again.");
+      setState("idle", "Popup blocked");
+      return;
+    }
+    setActiveSession({sessionId, state: "connecting", updatedAt: Date.now()});
+    panel.hidden = false;
+    renderTurns(turns, "Ask TopAI is running in its live conversation window.");
+    setState("connecting", "Opening live conversation");
+  }
+
   async function startCall() {
+    if (!isCallWindow) {
+      openLiveWindow();
+      return;
+    }
     if (!vapi) {
       logEvent("voice_config_unavailable", {
         configured: config.configured,
@@ -231,8 +340,11 @@ if (button && panel && endButton && status && transcript && configElement) {
       return;
     }
     panel.hidden = false;
-    transcript.innerHTML = '<p class="topai-live-line">Starting live conversation...</p>';
+    renderTurns([], "Starting live conversation...");
     setState("connecting", "Connecting...");
+    ensureSessionId();
+    setActiveSession({sessionId, state: "connecting", updatedAt: Date.now()});
+    broadcast("state");
     try {
       await vapi.start(config.assistantId, config.assistantOverrides);
     } catch (error) {
@@ -240,26 +352,192 @@ if (button && panel && endButton && status && transcript && configElement) {
     }
   }
 
-  function endCall() {
+  async function endCall() {
+    if (!isCallWindow) {
+      const active = activeSession();
+      if (active?.sessionId) {
+        sessionId = active.sessionId;
+        broadcast("end-requested");
+        return;
+      }
+      setState("idle", "Conversation ended");
+      return;
+    }
     if (callState === "idle") return;
     logEvent("call_stop_requested");
-    if (vapi) vapi.stop();
     setState("idle", "Conversation ended");
+    pendingLeadPath = null;
+    setActiveSession(null);
+    if (vapi) vapi.stop();
+    broadcast("ended");
+    await saveConversation("ended");
+  }
+
+  async function loadHistory() {
+    if (!historyPanel || !historyList) return;
+    historyPanel.hidden = !historyPanel.hidden;
+    if (historyPanel.hidden) return;
+    historyList.replaceChildren();
+    const loading = document.createElement("p");
+    loading.className = "topai-live-line";
+    loading.textContent = "Loading prior chats...";
+    historyList.appendChild(loading);
+    try {
+      const res = await fetch("/api/live-voice/conversations", {credentials: "same-origin"});
+      const data = await res.json();
+      historyList.replaceChildren();
+      const conversations = data.conversations || [];
+      if (!conversations.length) {
+        const empty = document.createElement("p");
+        empty.className = "topai-live-line";
+        empty.textContent = "No prior live chats yet.";
+        historyList.appendChild(empty);
+        return;
+      }
+      conversations.forEach((item) => {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "topai-live-history-item";
+        const title = document.createElement("strong");
+        title.textContent = item.summary || "Live conversation";
+        const meta = document.createElement("span");
+        const when = item.ended_at || item.updated_at || item.created_at || "";
+        meta.textContent = `${when ? new Date(when).toLocaleString() : "Saved chat"}${item.preview ? ` - ${item.preview}` : ""}`;
+        row.append(title, meta);
+        row.addEventListener("click", () => loadConversation(item.session_id));
+        historyList.appendChild(row);
+      });
+    } catch (error) {
+      historyList.replaceChildren();
+      const line = document.createElement("p");
+      line.className = "topai-live-line topai-live-error";
+      line.textContent = "Could not load prior live chats.";
+      historyList.appendChild(line);
+    }
+  }
+
+  async function loadConversation(priorSessionId) {
+    try {
+      const res = await fetch(`/api/live-voice/conversations/${encodeURIComponent(priorSessionId)}`, {
+        credentials: "same-origin",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Not found");
+      panel.hidden = false;
+      renderTurns(data.conversation?.transcript || [], "This saved chat has no transcript.");
+      if (historyPanel) historyPanel.hidden = true;
+      if (callState === "idle") setState("idle", "Prior live chat");
+    } catch (error) {
+      logEvent("conversation_load_failed", {message: error?.message});
+    }
+  }
+
+  function applyRemoteState(message) {
+    if (!message || !message.sessionId || !["state", "transcript", "ended"].includes(message.type)) return;
+    if (sessionId && message.sessionId !== sessionId) return;
+    sessionId = message.sessionId;
+    if (Array.isArray(message.turns)) {
+      turns = message.turns;
+      renderTurns(turns, message.type === "ended" ? "Conversation ended." : "Live conversation is active.");
+    }
+    panel.hidden = false;
+    if (message.type === "ended") {
+      setState("idle", "Conversation ended");
+      setActiveSession(null);
+      return;
+    }
+    const label = message.state === "speaking" ? "TopAI is speaking" : "Live conversation active";
+    setState(message.state || "listening", label);
+    setActiveSession({sessionId, state: message.state || "listening", updatedAt: Date.now()});
+  }
+
+  function receiveMessage(message) {
+    if (!message) return;
+    if (isCallWindow) {
+      if (message.sessionId !== sessionId) return;
+      if (message.type === "end-requested") endCall();
+      if (message.type === "state-requested" && callState !== "idle") broadcast("state");
+      if (message.type === "page-ready" && pendingLeadPath && message.path === pendingLeadPath) {
+        pendingLeadPath = null;
+        navigationContext("The requested lead page has loaded in the website. Continue the conversation naturally.");
+      }
+    } else {
+      applyRemoteState(message);
+    }
+  }
+
+  channel?.addEventListener("message", (event) => receiveMessage(event.data));
+  window.addEventListener("storage", (event) => {
+    if (event.key !== `${ACTIVE_KEY}-ping` || !event.newValue) return;
+    try { receiveMessage(JSON.parse(event.newValue)); } catch (error) {}
+  });
+
+  function navigationContext(content) {
+    // Supply context without interrupting or forcing a new spoken response.
+    vapi.send({type: "add-message", message: {role: "system", content}, triggerResponse: false});
+  }
+
+  async function openLeadFromTool(toolCall) {
+    const fn = toolCall?.function || toolCall;
+    if (fn?.name !== "open_lead") return;
+    const id = toolCall.id || toolCall.toolCallId;
+    if (!id || handledToolCalls.has(id)) return;
+    handledToolCalls.add(id);
+    const sequence = ++navigationSequence;
+    try {
+      const raw = fn.arguments || fn.parameters || {};
+      const args = typeof raw === "string" ? JSON.parse(raw) : raw;
+      const response = await fetch("/api/live-voice/open-lead", {
+        method: "POST", credentials: "same-origin",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({...args, account_id: config.userId}),
+      });
+      const result = await response.json();
+      if (sequence !== navigationSequence || callState === "idle") return;
+      if (!response.ok) throw new Error(result.error || "Could not find that lead.");
+      const target = new URL(result.url, window.location.origin);
+      if (target.origin !== window.location.origin || !/^\/crm\/leads\/\d+$/.test(target.pathname)) {
+        throw new Error("Invalid lead page destination.");
+      }
+      // Only the website window navigates. Vapi and its microphone/audio remain here.
+      const siteWindow = window.opener;
+      if (!siteWindow || siteWindow.closed) {
+        throw new Error("The website window is closed. Open Ask TopAI from the website to link a new conversation.");
+      }
+      if (siteWindow.location.origin !== window.location.origin) {
+        throw new Error("Return the website window to TopAI before opening a lead.");
+      }
+      pendingLeadPath = target.pathname;
+      siteWindow.location.assign(target.href);
+      navigationContext(`Browser navigation started for lead ${result.name} (id ${result.lead_id}). Continue the current conversation while the website loads.`);
+      logEvent("lead_navigation_started", {leadId: result.lead_id});
+    } catch (error) {
+      if (sequence !== navigationSequence || callState === "idle") return;
+      const detail = error?.message || "The lead page could not be opened.";
+      addTranscript("assistant", `Could not open the lead: ${detail}`, false, false);
+      navigationContext(`The open_lead browser action failed: ${detail} Explain this when responding; do not claim the lead opened.`);
+    }
   }
 
   if (vapi) {
     vapi.on("call-start", () => {
-      transcript.replaceChildren();
+      turns = [];
+      renderTurns([], "Listening...");
       logEvent("call-start");
       setState("listening", "Listening");
+      setActiveSession({sessionId, state: "listening", updatedAt: Date.now()});
+      broadcast("state");
     });
-    vapi.on("call-end", () => {
+    vapi.on("call-end", async () => {
       logEvent("call-end");
       assistantIsSpeaking = false;
       assistantPlaybackStartedAt = 0;
       currentResponseId = null;
       potentialInterruptionStartedAt = 0;
+      await saveConversation("ended");
+      setActiveSession(null);
       setState("idle", "Conversation ended");
+      broadcast("ended");
     });
     vapi.on("speech-start", () => markAssistantPlaybackStarted(null, "speech-start"));
     vapi.on("speech-end", () => markAssistantPlaybackDone("speech-end"));
@@ -268,12 +546,15 @@ if (button && panel && endButton && status && transcript && configElement) {
       if (!type) return;
       if (type !== "transcript") logEvent(`message.${type}`, {responseId: responseIdFromMessage(message)});
 
+      if (type === "tool-calls") {
+        const calls = message.toolCallList || (message.toolWithToolCallList || []).map((item) => item.toolCall);
+        calls.forEach((call) => { void openLeadFromTool(call); });
+        return;
+      }
+
       if (type === "transcript") {
         const isPartial = message.transcriptType === "partial";
-        addTranscript(message.role, message.transcript, isPartial);
-        if (message.role === "assistant" && message.transcriptType === "final") {
-          lastAssistantText = message.transcript || lastAssistantText;
-        }
+        addTranscript(message.role, message.transcript, isPartial, !isPartial);
         return;
       }
 
@@ -322,13 +603,54 @@ if (button && panel && endButton && status && transcript && configElement) {
   }
 
   button.addEventListener("click", () => {
-    if (callState === "idle") startCall();
-    else endCall();
+    const active = activeSession();
+    if (!isCallWindow && !active) startCall();
+    else if (isCallWindow && callState === "idle") startCall();
+    else if (!isCallWindow) {
+      panel.hidden = false;
+      if (active?.sessionId) {
+        sessionId = active.sessionId;
+        const win = window.open("", WINDOW_NAME);
+        if (win?.location.href === "about:blank") {
+          win.location.replace(`/ask-topai-live?session_id=${encodeURIComponent(sessionId)}`);
+        }
+        if (win) win.focus();
+      }
+    } else {
+      endCall();
+    }
   });
   endButton.addEventListener("click", endCall);
-  window.addEventListener("pagehide", () => {
-    if (callState !== "idle" && vapi) vapi.stop();
-  });
+  historyToggle?.addEventListener("click", loadHistory);
 
-  button.disabled = false;
+  if (isCallWindow) {
+    panel.hidden = false;
+    button.disabled = true;
+    if (!sessionId) ensureSessionId();
+    window.addEventListener("pagehide", () => {
+      if (callState !== "idle") {
+        saveConversation("ended");
+        if (vapi) vapi.stop();
+        setActiveSession(null);
+        broadcast("ended");
+      }
+    });
+    startCall();
+    window.setInterval(() => {
+      if (callState !== "idle") {
+        setActiveSession({sessionId, state: callState, updatedAt: Date.now()});
+      }
+    }, 5000);
+  } else {
+    const active = activeSession();
+    if (active?.sessionId) {
+      sessionId = active.sessionId;
+      setState(active.state || "listening", "Live conversation active");
+      broadcast("state-requested");
+      broadcast("page-ready", {path: window.location.pathname});
+    } else {
+      setState("idle", "Ready");
+    }
+    button.disabled = false;
+  }
 }

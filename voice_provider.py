@@ -45,6 +45,7 @@ def build_live_voice_assistant_overrides(profile, account_token):
         "maxDurationSeconds": 1800,
         "backgroundSound": "off",
         "clientMessages": [
+            "tool-calls",
             "transcript",
             "speech-update",
             "user-interrupted",
@@ -59,7 +60,21 @@ def build_live_voice_assistant_overrides(profile, account_token):
             "messages": [
                 {"role": "system", "content": build_live_voice_prompt(profile)}
             ],
-            "tools": voice_tool_definitions(tool_url, account_token=account_token),
+            "tools": voice_tool_definitions(tool_url, account_token=account_token) + [{
+                "type": "function",
+                "async": True,
+                "function": {
+                    "name": "open_lead",
+                    "description": "Open a CRM lead in the subscriber's website window while continuing the conversation. This does not change pipeline status.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "lead_name": {"type": "string"},
+                            "lead_id": {"type": "integer"},
+                        },
+                    },
+                },
+            }],
         },
     }
 
