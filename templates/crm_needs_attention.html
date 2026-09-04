@@ -62,7 +62,7 @@
     <div class="card">
       {% if items %}
       <table>
-        <thead><tr><th>Priority</th><th>Item</th><th>Reason</th><th>Created</th><th>Resolve</th></tr></thead>
+        <thead><tr><th>Priority</th><th>Item</th><th>Activity</th><th>Resolve</th></tr></thead>
         <tbody>
           {% for item in items %}
           <tr>
@@ -80,7 +80,6 @@
               {% endif %}
             </td>
             <td>{{ item.reason_text or reason_labels.get(item.reason_code, item.reason_code) }}</td>
-            <td class="muted">{{ (item.created_at or '')[:16] }}</td>
             <td>
               <div class="row">
                 <input id="reason-{{ item.id }}" placeholder="Resolution reason" style="min-width:160px;" />

@@ -331,6 +331,9 @@ def test_needs_attention_count_matches_destination(app_client, two_users):
     html = res.get_data(as_text=True)
     assert f"{metrics['needs_attention']} result" in html
     assert metrics["needs_attention"] >= 3
+    assert "<th>Activity</th>" in html
+    assert "<th>Reason</th>" not in html
+    assert "<th>Created</th>" not in html
 
 
 def test_zero_count_cards_open_empty_state(app_client, two_users):
