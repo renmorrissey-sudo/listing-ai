@@ -164,7 +164,15 @@ def _normalize_live_turns(raw_turns):
         text = str(raw.get("text") or raw.get("transcript") or "").strip()
         if not text:
             continue
-        turns.append({"role": role, "text": text[:5000]})
+        text = text[:5000]
+        if turns and turns[-1]["role"] == role:
+            previous = turns[-1]["text"]
+            if text == previous:
+                continue
+            if text.startswith(previous) or previous.startswith(text):
+                turns[-1]["text"] = text if len(text) >= len(previous) else previous
+                continue
+        turns.append({"role": role, "text": text})
     return turns
 
 

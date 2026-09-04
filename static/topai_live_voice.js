@@ -219,31 +219,60 @@ if (button && panel && endButton && status && transcript && configElement) {
     const cleaned = String(text || "").trim();
     if (!cleaned || !["assistant", "user"].includes(role)) return;
     const last = turns[turns.length - 1];
-    if (last && last.role === role) last.text = cleaned;
-    else turns.push({role, text: cleaned});
+    if (last && last.role === role && last.text === cleaned) return;
+    if (last && last.role === role && (cleaned.startsWith(last.text) || last.text.startsWith(cleaned))) {
+      last.text = cleaned.length >= last.text.length ? cleaned : last.text;
+    } else {
+      turns.push({role, text: cleaned});
+    }
     if (role === "assistant") lastAssistantText = cleaned;
     saveConversation("active");
     broadcast("transcript");
   }
 
+  function transcriptLineText(line) {
+    if (!line) return "";
+    const nodes = Array.from(line.childNodes).filter((node) => node.nodeType === Node.TEXT_NODE);
+    return nodes.map((node) => node.textContent || "").join("").trim();
+  }
+
+  function lastTranscriptLineFor(role) {
+    const last = transcript.lastElementChild;
+    if (!last || last.dataset?.role !== role || last.dataset?.partial) return null;
+    return last;
+  }
+
   function addTranscript(role, text, replacePartial = false, remember = true) {
-    if (!text) return;
+    const cleaned = String(text || "").trim();
+    if (!cleaned || !["assistant", "user"].includes(role)) return;
     const partial = transcript.querySelector(`[data-partial="${role}"]`);
     if (replacePartial && partial) {
-      partial.lastChild.textContent = text;
+      partial.lastChild.textContent = cleaned;
       transcript.scrollTop = transcript.scrollHeight;
       return;
     }
-    if (!replacePartial && partial) partial.removeAttribute("data-partial");
+    if (!replacePartial && partial) {
+      partial.lastChild.textContent = cleaned;
+      partial.removeAttribute("data-partial");
+      transcript.scrollTop = transcript.scrollHeight;
+      if (remember) rememberTurn(role, cleaned);
+      return;
+    }
+    const lastLine = lastTranscriptLineFor(role);
+    if (!replacePartial && lastLine && transcriptLineText(lastLine) === cleaned) {
+      logEvent("transcript_duplicate_suppressed", {role});
+      return;
+    }
     const line = document.createElement("p");
     line.className = "topai-live-line";
+    line.dataset.role = role;
     if (replacePartial) line.dataset.partial = role;
     const name = document.createElement("strong");
     name.textContent = role === "user" ? "You: " : "TopAI: ";
-    line.append(name, document.createTextNode(text));
+    line.append(name, document.createTextNode(cleaned));
     transcript.appendChild(line);
     transcript.scrollTop = transcript.scrollHeight;
-    if (!replacePartial && remember) rememberTurn(role, text);
+    if (!replacePartial && remember) rememberTurn(role, cleaned);
   }
 
   function renderTurns(nextTurns, emptyText = "No transcript yet.") {

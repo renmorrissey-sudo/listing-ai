@@ -366,6 +366,51 @@ def test_live_voice_conversation_history_is_tenant_scoped(app_client, two_users)
     assert app_client.get("/api/live-voice/conversations/live-history-1").status_code == 404
 
 
+def test_live_voice_conversation_history_dedupes_adjacent_transcript_events(
+    app_client, two_users
+):
+    u1, _ = two_users
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+
+    save = app_client.post(
+        "/api/live-voice/conversations",
+        json={
+            "session_id": "live-history-deduped",
+            "status": "ended",
+            "transcript": [
+                {"role": "assistant", "text": "Just a"},
+                {"role": "assistant", "text": "Just a sec."},
+                {"role": "assistant", "text": "Just a sec."},
+                {"role": "user", "text": "The next action for"},
+                {"role": "user", "text": "The next action for Sarah."},
+                {"role": "user", "text": "The next action for Sarah."},
+                {
+                    "role": "assistant",
+                    "text": "Got it. I don't have a tool for that.",
+                },
+                {
+                    "role": "assistant",
+                    "text": "Got it. I don't have a tool for that.",
+                },
+            ],
+        },
+    )
+    assert save.status_code == 200
+
+    detail = app_client.get("/api/live-voice/conversations/live-history-deduped")
+    assert detail.status_code == 200
+    conversation = detail.get_json()["conversation"]
+
+    assert conversation["transcript"] == [
+        {"role": "assistant", "text": "Just a sec."},
+        {"role": "user", "text": "The next action for Sarah."},
+        {"role": "assistant", "text": "Got it. I don't have a tool for that."},
+    ]
+    assert conversation["transcript_text"].count("Just a sec.") == 1
+    assert conversation["transcript_text"].count("The next action for Sarah.") == 1
+
+
 def test_live_voice_button_remains_visible_when_voice_config_is_missing(
     app_client, two_users, monkeypatch
 ):
