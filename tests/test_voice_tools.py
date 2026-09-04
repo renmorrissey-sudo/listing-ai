@@ -213,6 +213,126 @@ def test_voice_tool_can_mark_lead_sms_verified(app_client, two_users):
     assert not bool(lead["sms_sending_blocked"])
 
 
+def test_voice_tool_can_schedule_and_complete_follow_up(app_client, two_users):
+    u1, _ = two_users
+    apply_pending_migrations()
+    call_id = _voice_call(u1)
+    lead_id = _lead(u1, "Sarah Johnson", status="appointment_scheduled")
+
+    res = app_client.post(
+        "/webhook/voice",
+        json=_tool_payload(
+            call_id,
+            "vapi_tools",
+            "schedule_lead_follow_up",
+            {
+                "lead_id": lead_id,
+                "due_at": "2026-09-04T12:00:00-06:00",
+                "reason": "Follow up about offer deadline",
+                "priority": "high",
+                "local_due_label": "today at noon",
+            },
+        ),
+    )
+
+    assert res.status_code == 200
+    result = _tool_result(res)
+    assert result["ok"] is True
+    assert result["follow_up"]["due_at"] == "2026-09-04T12:00:00-06:00"
+    assert db.get_lead(lead_id, u1)["next_follow_up_at"] == "2026-09-04T12:00:00-06:00"
+
+    res = app_client.post(
+        "/webhook/voice",
+        json=_tool_payload(
+            call_id,
+            "vapi_tools",
+            "complete_lead_follow_up",
+            {"lead_id": lead_id},
+        ),
+    )
+
+    assert res.status_code == 200
+    assert _tool_result(res)["ok"] is True
+    assert crm_db.list_lead_follow_ups(u1, lead_id, include_completed=False) == []
+
+
+def test_live_voice_token_can_record_updates_tasks_and_appointments(app_client, two_users):
+    u1, _ = two_users
+    apply_pending_migrations()
+    lead_id = _lead(u1, "Mark Flanagan", status="new")
+    token = create_live_voice_account_token(u1)
+
+    def signed_payload(tool_name, arguments):
+        arguments = {**arguments, "topai_account_token": token}
+        return {
+            "message": {
+                "type": "tool-calls",
+                "call": {"id": "web-call-live-copilot"},
+                "toolCallList": [
+                    {"id": "tool_1", "name": tool_name, "arguments": arguments}
+                ],
+            }
+        }
+
+    res = app_client.post(
+        "/webhook/voice",
+        json=signed_payload(
+            "record_lead_update",
+            {
+                "lead_id": lead_id,
+                "note": "Mark confirmed today's 3 PM call.",
+                "next_action": "Call Mark at 3 PM.",
+                "status": "contacted",
+                "contacted": True,
+            },
+        ),
+    )
+    assert res.status_code == 200
+    result = _tool_result(res)
+    assert result["ok"] is True
+    lead = db.get_lead(lead_id, u1)
+    assert lead["status"] == "contacted"
+    assert lead["last_outbound_at"]
+    assert lead["next_action"] == "Call Mark at 3 PM."
+
+    res = app_client.post(
+        "/webhook/voice",
+        json=signed_payload(
+            "create_lead_task",
+            {
+                "lead_id": lead_id,
+                "title": "Confirm call with Mark",
+                "description": "Mark confirmed the 3 PM call.",
+                "due_at": "2026-09-04T15:00:00-06:00",
+                "task_type": "call",
+            },
+        ),
+    )
+    assert res.status_code == 200
+    assert _tool_result(res)["ok"] is True
+    tasks = crm_db.list_tasks(u1, bucket="all")
+    assert tasks[0]["title"] == "Confirm call with Mark"
+
+    res = app_client.post(
+        "/webhook/voice",
+        json=signed_payload(
+            "create_lead_appointment",
+            {
+                "lead_id": lead_id,
+                "appointment_type": "phone_call",
+                "start_at": "2026-09-04T15:00:00-06:00",
+                "notes": "Confirmed by Mark.",
+                "status": "confirmed",
+            },
+        ),
+    )
+    assert res.status_code == 200
+    assert _tool_result(res)["ok"] is True
+    appointments = crm_db.list_appointments(u1, lead_id=lead_id)
+    assert appointments[0]["status"] == "confirmed"
+    assert appointments[0]["start_at"] == "2026-09-04T15:00:00-06:00"
+
+
 def test_voice_tool_saves_email_draft_to_lead_timeline(app_client, two_users):
     u1, _ = two_users
     apply_pending_migrations()

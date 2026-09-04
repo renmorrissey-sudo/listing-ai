@@ -12,9 +12,13 @@ import crm_db
 import db
 import external_leads_db
 from crm_constants import (
+    APPOINTMENT_STATUSES,
+    APPOINTMENT_TYPES,
     LEAD_STATUS_SET,
     LEGACY_STATUS_MAP,
+    PRIORITIES,
     SMS_CONSENT_STATUS_LABELS,
+    TASK_TYPES,
     normalize_lead_status,
     sms_consent_label,
     status_label,
@@ -129,6 +133,133 @@ def voice_tool_definitions(server_url, account_token=None, template_account_toke
                         },
                     },
                     "required": ["sms_consent_status"],
+                },
+            },
+            "server": server,
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "schedule_lead_follow_up",
+                "description": (
+                    "Create or reschedule a lead follow-up on the CRM calendar. "
+                    "Use this when the agent asks to set, move, schedule, or "
+                    "reschedule a follow-up date/time for a lead."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "lead_id": {"type": "integer"},
+                        "lead_name": {"type": "string"},
+                        "due_at": {
+                            "type": "string",
+                            "description": "ISO-8601 timestamp for the follow-up, including timezone when known.",
+                        },
+                        "reason": {"type": "string"},
+                        "priority": {
+                            "type": "string",
+                            "description": "One of low, normal, high, or urgent.",
+                        },
+                        "local_due_label": {
+                            "type": "string",
+                            "description": "Human label the user said, such as Saturday at noon.",
+                        },
+                    },
+                    "required": ["due_at"],
+                },
+            },
+            "server": server,
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "complete_lead_follow_up",
+                "description": (
+                    "Mark an open follow-up complete for a lead. Use when the "
+                    "agent says a follow-up was handled, completed, done, or no "
+                    "longer needs to remain open because contact happened."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "lead_id": {"type": "integer"},
+                        "lead_name": {"type": "string"},
+                        "follow_up_id": {"type": "integer"},
+                    },
+                },
+            },
+            "server": server,
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "create_lead_task",
+                "description": (
+                    "Create a CRM task tied to a lead. Use this for reminders "
+                    "or non-follow-up work like prepare materials, send a note, "
+                    "confirm details, or make a phone call."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "lead_id": {"type": "integer"},
+                        "lead_name": {"type": "string"},
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                        "due_at": {"type": "string"},
+                        "priority": {"type": "string"},
+                        "task_type": {"type": "string"},
+                    },
+                    "required": ["title"],
+                },
+            },
+            "server": server,
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "create_lead_appointment",
+                "description": (
+                    "Create a scheduled or confirmed appointment for a lead. "
+                    "Use when the agent asks to put a meeting, showing, call, "
+                    "consultation, or confirmed appointment on the calendar."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "lead_id": {"type": "integer"},
+                        "lead_name": {"type": "string"},
+                        "appointment_type": {"type": "string"},
+                        "start_at": {"type": "string"},
+                        "end_at": {"type": "string"},
+                        "location": {"type": "string"},
+                        "notes": {"type": "string"},
+                        "status": {"type": "string"},
+                    },
+                    "required": ["start_at"],
+                },
+            },
+            "server": server,
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "record_lead_update",
+                "description": (
+                    "Record a CRM note, contact attempt, voicemail, confirmation, "
+                    "or next-action update for a lead. Use this for updates that "
+                    "are factual notes rather than pipeline-stage changes."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "lead_id": {"type": "integer"},
+                        "lead_name": {"type": "string"},
+                        "note": {"type": "string"},
+                        "next_action": {"type": "string"},
+                        "status": {"type": "string"},
+                        "contacted": {"type": "boolean"},
+                    },
                 },
             },
             "server": server,
@@ -259,6 +390,11 @@ def _handle_tool_call(user_id, call):
         "list_open_leads": _list_open_leads,
         "update_lead_status": _update_lead_status,
         "update_lead_sms_consent_status": _update_lead_sms_consent_status,
+        "schedule_lead_follow_up": _schedule_lead_follow_up,
+        "complete_lead_follow_up": _complete_lead_follow_up,
+        "create_lead_task": _create_lead_task,
+        "create_lead_appointment": _create_lead_appointment,
+        "record_lead_update": _record_lead_update,
         "draft_lead_email": _draft_lead_email,
     }
     handler = handlers.get(name)
@@ -395,6 +531,160 @@ def _update_lead_sms_consent_status(user_id, args):
         "ok": True,
         "lead": _lead_summary(updated),
         "summary": f"{updated.get('name') or 'Lead'} is now SMS {sms_consent_label(new_status)}.",
+    }
+
+
+def _normalize_priority(value):
+    priority = str(value or "normal").strip().lower().replace(" ", "_")
+    return priority if priority in PRIORITIES else "normal"
+
+
+def _schedule_lead_follow_up(user_id, args):
+    lead, error = _find_lead(user_id, args)
+    if error:
+        return error
+    due_at = str(args.get("due_at") or "").strip()
+    if not due_at:
+        return "I need a due date and time for the follow-up."
+    result, error = crm_db.set_lead_follow_up(
+        user_id,
+        lead["id"],
+        due_at,
+        str(args.get("reason") or "Follow up").strip()[:500],
+        priority=_normalize_priority(args.get("priority")),
+        created_by=user_id,
+        replace_existing=True,
+        local_due_label=str(args.get("local_due_label") or "").strip(),
+    )
+    if error:
+        return error
+    updated = db.get_lead(lead["id"], user_id)
+    return {
+        "ok": True,
+        "follow_up": result,
+        "lead": _lead_summary(updated),
+        "summary": result.get("confirmation") or f"Follow-up scheduled for {lead.get('name') or 'the lead'}.",
+    }
+
+
+def _complete_lead_follow_up(user_id, args):
+    lead, error = _find_lead(user_id, args)
+    if error:
+        return error
+    follow_up_id = args.get("follow_up_id")
+    try:
+        follow_up_id = int(follow_up_id) if follow_up_id not in (None, "") else None
+    except (TypeError, ValueError):
+        return "That follow-up id is not valid."
+    ok, error = crm_db.complete_lead_follow_up(user_id, lead["id"], follow_up_id=follow_up_id)
+    if error:
+        return error
+    updated = db.get_lead(lead["id"], user_id)
+    return {
+        "ok": bool(ok),
+        "lead": _lead_summary(updated),
+        "summary": f"Completed the open follow-up for {updated.get('name') or 'the lead'}.",
+    }
+
+
+def _create_lead_task(user_id, args):
+    lead, error = _find_lead(user_id, args)
+    if error:
+        return error
+    title = str(args.get("title") or "").strip()[:200]
+    if not title:
+        return "I need a task title."
+    task_type = str(args.get("task_type") or "general_follow_up").strip().lower()
+    task_id, error = crm_db.create_task(user_id, {
+        "lead_id": lead["id"],
+        "title": title,
+        "description": str(args.get("description") or "").strip()[:2000],
+        "due_at": str(args.get("due_at") or "").strip() or None,
+        "priority": _normalize_priority(args.get("priority")),
+        "task_type": task_type if task_type in TASK_TYPES else "general_follow_up",
+    })
+    if error:
+        return error
+    return {
+        "ok": True,
+        "task_id": task_id,
+        "lead": _lead_summary(lead),
+        "summary": f"Created task for {lead.get('name') or 'the lead'}: {title}.",
+    }
+
+
+def _create_lead_appointment(user_id, args):
+    lead, error = _find_lead(user_id, args)
+    if error:
+        return error
+    start_at = str(args.get("start_at") or "").strip()
+    if not start_at:
+        return "I need an appointment start date and time."
+    appointment_type = str(args.get("appointment_type") or "phone_call").strip().lower()
+    appointment_status = str(args.get("status") or "scheduled").strip().lower()
+    appointment_id, error = crm_db.create_appointment(user_id, {
+        "lead_id": lead["id"],
+        "appointment_type": appointment_type if appointment_type in APPOINTMENT_TYPES else "phone_call",
+        "start_at": start_at,
+        "end_at": str(args.get("end_at") or "").strip() or None,
+        "location": str(args.get("location") or "").strip()[:500],
+        "notes": str(args.get("notes") or "").strip()[:2000],
+        "status": appointment_status if appointment_status in APPOINTMENT_STATUSES else "scheduled",
+    })
+    if error:
+        return error
+    updated = db.get_lead(lead["id"], user_id)
+    return {
+        "ok": True,
+        "appointment_id": appointment_id,
+        "lead": _lead_summary(updated),
+        "summary": f"Created appointment for {updated.get('name') or 'the lead'} at {start_at}.",
+    }
+
+
+def _record_lead_update(user_id, args):
+    lead, error = _find_lead(user_id, args)
+    if error:
+        return error
+    note = str(args.get("note") or "").strip()[:1500]
+    next_action = str(args.get("next_action") or "").strip()[:500] or None
+    raw_status = str(args.get("status") or "").strip().lower().replace(" ", "_")
+    candidate = LEGACY_STATUS_MAP.get(raw_status, raw_status) if raw_status else None
+    if candidate and candidate not in LEAD_STATUS_SET:
+        return "That is not a supported lead status."
+    if args.get("contacted"):
+        db.touch_lead_outbound(lead["id"], user_id)
+    if note or next_action:
+        db.merge_lead_call_outcome_notes(
+            lead["id"],
+            user_id,
+            summary=note or None,
+            next_action=next_action,
+        )
+    if candidate:
+        updated, error = crm_db.set_lead_status(
+            user_id,
+            lead["id"],
+            normalize_lead_status(candidate),
+            actor_user_id=user_id,
+        )
+        if error:
+            return error
+    else:
+        updated = db.get_lead(lead["id"], user_id)
+    if note and not next_action:
+        crm_db.add_lead_activity(
+            lead["id"],
+            user_id,
+            "voice_note",
+            f"Voice assistant note: {note[:240]}",
+            {"note": note},
+            actor_user_id=user_id,
+        )
+    return {
+        "ok": True,
+        "lead": _lead_summary(updated),
+        "summary": f"Updated {updated.get('name') or 'the lead'}.",
     }
 
 
