@@ -51,6 +51,7 @@ import registration_gate
 import seo
 from voice_provider import (
     VoiceProviderError,
+    build_browser_live_voice_assistant_config,
     build_live_voice_assistant_overrides,
     build_vapi_variable_values,
     get_voice_provider,
@@ -86,17 +87,14 @@ def _active_live_voice_config_for_user(user):
         return {"enabled": bool(user), "configured": False}
     account_token = create_live_voice_account_token(user["id"])
     profile = db.get_business_profile(user["id"]) or {}
-    assistant_overrides = build_live_voice_assistant_overrides(profile, account_token)
+    assistant_config = build_browser_live_voice_assistant_config(profile, account_token)
     voice_configured = bool(config.VAPI_PUBLIC_API_KEY)
     return {
         "enabled": True,
         "configured": voice_configured,
         "publicKey": config.VAPI_PUBLIC_API_KEY,
         "assistantId": config.REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID,
-        "assistantConfig": assistant_overrides,
-        "assistantOverrides": {
-            "variableValues": assistant_overrides["variableValues"],
-        },
+        "assistantConfig": assistant_config,
     }
 app.register_blueprint(crm_bp)
 app.register_blueprint(external_leads_bp)

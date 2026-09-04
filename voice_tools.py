@@ -61,7 +61,7 @@ def resolve_live_voice_account_token(token):
         return None
 
 
-def voice_tool_definitions(server_url, account_token=None):
+def voice_tool_definitions(server_url, account_token=None, template_account_token=True):
     """Return Vapi function tools the assistant can use for CRM work."""
     server = {"url": server_url}
     tools = [
@@ -156,9 +156,10 @@ def voice_tool_definitions(server_url, account_token=None):
         },
     ]
     if account_token:
+        value = "{{topai_account_token}}" if template_account_token else account_token
         for tool in tools:
             tool["parameters"] = [
-                {"key": "topai_account_token", "value": "{{topai_account_token}}"}
+                {"key": "topai_account_token", "value": value}
             ]
     return tools
 

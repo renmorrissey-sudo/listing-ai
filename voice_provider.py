@@ -63,6 +63,24 @@ def build_live_voice_assistant_overrides(profile, account_token):
         },
     }
 
+
+def build_browser_live_voice_assistant_config(profile, account_token):
+    """Build a Vapi transient assistant config for Ask TopAI browser calls.
+
+    Vapi rejects `variableValues` inside the inline `assistant` object. The
+    prompt and first message are already rendered server-side, and the signed
+    account token is passed as an LLM-invisible static tool parameter.
+    """
+    assistant = build_live_voice_assistant_overrides(profile, account_token)
+    assistant.pop("variableValues", None)
+    tool_url = urljoin(config.APP_URL.rstrip("/") + "/", "webhook/voice")
+    assistant["model"]["tools"] = voice_tool_definitions(
+        tool_url,
+        account_token=account_token,
+        template_account_token=False,
+    )
+    return assistant
+
 VAPI_VARIABLE_KEYS = (
     "agent_name",
     "brokerage_name",

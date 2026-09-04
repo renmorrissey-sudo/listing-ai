@@ -4,6 +4,7 @@ import db
 from voice_provider import (
     VAPI_VARIABLE_KEYS,
     VapiVoiceProvider,
+    build_browser_live_voice_assistant_config,
     build_live_voice_assistant_overrides,
     build_vapi_variable_values,
     log_variable_values_presence,
@@ -224,6 +225,21 @@ def test_live_voice_overrides_use_copilot_prompt_and_signed_static_tool_paramete
         ]
 
 
+def test_browser_live_voice_assistant_config_has_no_variable_values():
+    assistant = build_browser_live_voice_assistant_config(
+        {"agent_name": "Ada", "brokerage_name": "Ada Realty"},
+        "signed-account-token",
+    )
+
+    assert "variableValues" not in assistant
+    assert assistant["firstMessage"] == "Hi Ada. How can I help?"
+    assert "live CRM copilot" in assistant["model"]["messages"][0]["content"]
+    for tool in assistant["model"]["tools"]:
+        assert tool["parameters"] == [
+            {"key": "topai_account_token", "value": "signed-account-token"}
+        ]
+
+
 def test_subscriber_app_renders_one_click_live_voice_without_private_key(
     app_client, two_users, monkeypatch
 ):
@@ -251,6 +267,7 @@ def test_subscriber_app_renders_one_click_live_voice_without_private_key(
     assert "live CRM copilot" in html
     assert '"assistantConfig"' in html
     assert '"model"' in html
+    assert '"variableValues"' not in html
     assert "Hi Ada. How can I help?" in html
 
 

@@ -189,17 +189,10 @@ if (button && panel && endButton && status && transcript && configElement) {
     };
   }
 
-  function browserAssistantOverrides() {
-    const values = config.assistantOverrides?.variableValues;
-    if (!values || typeof values !== "object") return undefined;
-    return {variableValues: values};
-  }
-
   function browserAssistantConfig() {
     const assistantConfig = config.assistantConfig;
     if (!assistantConfig || typeof assistantConfig !== "object") return null;
-    const values = browserAssistantOverrides()?.variableValues;
-    return values ? {...assistantConfig, variableValues: values} : assistantConfig;
+    return assistantConfig;
   }
 
   function resolveVapiConstructor(module) {
@@ -505,7 +498,7 @@ if (button && panel && endButton && status && transcript && configElement) {
       logEvent("vapi_start_requested", {
         assistantIdPresent: Boolean(config.assistantId),
         assistantConfigKeys: Object.keys(assistantConfig),
-        variableValueKeys: assistantConfig.variableValues ? Object.keys(assistantConfig.variableValues) : [],
+        hasVariableValues: Boolean(assistantConfig.variableValues),
       });
       await Promise.race([
         activeVapi.start(assistantConfig),
