@@ -48,26 +48,30 @@
           {% endif %}
         </div>
       </div>
-      <p>{% if lead.next_action %}<strong>Next action:</strong> {{ lead.next_action }}{% endif %}</p>
       <div style="margin-top:10px;padding:12px 14px;background:#f8fafc;border-radius:10px;border:1px solid #eef2f7;">
         <div class="row" style="justify-content:space-between;">
-          <strong>Schedule snapshot</strong>
+          <strong>Next Actions to do</strong>
           <a href="/crm/calendar">View in Leads Calendar</a>
         </div>
         <div style="margin-top:10px;">
-          <div><strong>Next follow-up:</strong>
+          <div><strong>Recorded next action:</strong>
+            {% if lead.next_action %}
+            {{ lead.next_action }}
+            {% else %}<span class="muted">None recorded yet.</span>{% endif %}
+          </div>
+          <div style="margin-top:6px;"><strong>Follow-up to do:</strong>
             {% if next_follow_up %}
             <span class="local-dt" data-utc="{{ next_follow_up.due_at }}">{{ (next_follow_up.due_at or '')[:16] }}</span>
             <span class="muted"> — {{ next_follow_up.reason or 'Follow up' }}</span>
             {% else %}<span class="muted">None</span>{% endif %}
           </div>
-          <div style="margin-top:6px;"><strong>Next open task:</strong>
+          <div style="margin-top:6px;"><strong>Open task to do:</strong>
             {% if next_task %}
             {{ next_task.title }}
             {% if next_task.due_at %} · <span class="local-dt" data-utc="{{ next_task.due_at }}">{{ next_task.due_at[:16] }}</span>{% endif %}
             {% else %}<span class="muted">None</span>{% endif %}
           </div>
-          <div style="margin-top:6px;"><strong>Next appointment:</strong>
+          <div style="margin-top:6px;"><strong>Upcoming meeting:</strong>
             {% if next_appointment %}
             {{ next_appointment.appointment_type.replace('_',' ') }}
             · <span class="local-dt" data-utc="{{ next_appointment.start_at }}">{{ (next_appointment.start_at or '')[:16] }}</span>

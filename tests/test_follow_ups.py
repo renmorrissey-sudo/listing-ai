@@ -126,7 +126,9 @@ def test_follow_ups_appear_on_lead_detail_and_calendar(app_client, two_users):
     assert detail.status_code == 200
     html = detail.get_data(as_text=True)
     assert "Schedule buyer consultation" in html
-    assert "Next follow-up" in html
+    assert "Next Actions to do" in html
+    assert "Follow-up to do" in html
+    assert "Schedule snapshot" not in html
     assert "Follow-ups" in html
 
     calendar = app_client.get("/crm/follow-ups")
