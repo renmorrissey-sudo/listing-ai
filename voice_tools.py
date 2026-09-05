@@ -11,6 +11,8 @@ import config
 import crm_db
 import db
 import external_leads_db
+import lead_contact_service
+from lead_email_service import send_lead_email
 from crm_constants import (
     LEAD_STATUS_SET,
     LEGACY_STATUS_MAP,
@@ -136,6 +138,31 @@ def voice_tool_definitions(server_url, account_token=None):
         {
             "type": "function",
             "function": {
+                "name": "update_lead_contact_info",
+                "description": (
+                    "Update a CRM lead's contact details, including phone number, "
+                    "email address, name, lead type, property interest, notes, or next action."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "lead_id": {"type": "integer"},
+                        "lead_name": {"type": "string"},
+                        "name": {"type": "string"},
+                        "phone_number": {"type": "string"},
+                        "email": {"type": "string"},
+                        "lead_type": {"type": "string"},
+                        "property_interest": {"type": "string"},
+                        "notes": {"type": "string"},
+                        "next_action": {"type": "string"},
+                    },
+                },
+            },
+            "server": server,
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "draft_lead_email",
                 "description": (
                     "Save an email draft on a CRM lead's timeline. The user can review "
@@ -148,6 +175,34 @@ def voice_tool_definitions(server_url, account_token=None):
                         "lead_name": {"type": "string"},
                         "subject": {"type": "string"},
                         "body": {"type": "string"},
+                    },
+                    "required": ["subject", "body"],
+                },
+            },
+            "server": server,
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_lead_email",
+                "description": (
+                    "Compose and send a one-to-one email to a CRM lead using the "
+                    "account's connected Gmail, Microsoft 365, or SendGrid integration. "
+                    "Use the user's plain-language request to write the subject and body."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "lead_id": {"type": "integer"},
+                        "lead_name": {"type": "string"},
+                        "subject": {
+                            "type": "string",
+                            "description": "The subject line you wrote for the requested email.",
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": "The complete email body you wrote from the user's request.",
+                        },
                     },
                     "required": ["subject", "body"],
                 },
@@ -258,7 +313,9 @@ def _handle_tool_call(user_id, call):
         "list_open_leads": _list_open_leads,
         "update_lead_status": _update_lead_status,
         "update_lead_sms_consent_status": _update_lead_sms_consent_status,
+        "update_lead_contact_info": _update_lead_contact_info,
         "draft_lead_email": _draft_lead_email,
+        "send_lead_email": _send_lead_email,
     }
     handler = handlers.get(name)
     if not handler:
@@ -397,6 +454,46 @@ def _update_lead_sms_consent_status(user_id, args):
     }
 
 
+def _update_lead_contact_info(user_id, args):
+    lead, error = _find_lead(user_id, args)
+    if error:
+        return error
+    contact_args = {
+        key: args[key]
+        for key in (
+            "name",
+            "phone_number",
+            "phone",
+            "email",
+            "lead_type",
+            "property_interest",
+            "notes",
+            "next_action",
+        )
+        if key in args
+    }
+    updated, error, _status_code = lead_contact_service.update_lead_contact_info(
+        user_id,
+        lead["id"],
+        contact_args,
+        actor_user_id=user_id,
+        source="voice_tool",
+    )
+    if error:
+        return error
+    return {
+        "ok": True,
+        "lead": _lead_summary(updated),
+        "updated_fields": [
+            ("phone_number" if key == "phone" else key)
+            for key in contact_args
+            if (lead.get("phone_number" if key == "phone" else key) or "")
+            != (updated.get("phone_number" if key == "phone" else key) or "")
+        ],
+        "summary": f"Contact info updated for {updated.get('name') or 'the lead'}.",
+    }
+
+
 def _draft_lead_email(user_id, args):
     lead, error = _find_lead(user_id, args)
     if error:
@@ -419,4 +516,30 @@ def _draft_lead_email(user_id, args):
         "lead": _lead_summary(lead),
         "draft": {"subject": subject, "body": body},
         "summary": f"Email draft saved for {lead.get('name') or 'the lead'}: {subject}.",
+    }
+
+
+def _send_lead_email(user_id, args):
+    lead, error = _find_lead(user_id, args)
+    if error:
+        return error
+    subject = str(args.get("subject") or "").strip()[:200]
+    body = str(args.get("body") or "").strip()[:5000]
+    result, error = send_lead_email(
+        user_id,
+        lead["id"],
+        subject=subject,
+        body=body,
+        actor_user_id=user_id,
+    )
+    if error:
+        return error
+    return {
+        "ok": True,
+        "lead": _lead_summary(lead),
+        "email": result,
+        "summary": (
+            f"Email sent to {result.get('to_email')} for "
+            f"{lead.get('name') or 'the lead'}: {subject}."
+        ),
     }

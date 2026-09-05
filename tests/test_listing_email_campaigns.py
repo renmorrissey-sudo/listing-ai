@@ -355,7 +355,7 @@ def test_sendgrid_provider_calls_only_single_send_create_not_schedule(monkeypatc
     provider = SendGridEmailCampaignProvider("SG.test")
     requests = []
 
-    def fake_request(method, path, *, body=None):
+    def fake_request(method, path, *, body=None, action="draft"):
         requests.append((method, path, body))
         return {"id": "draft-id", "status": "draft"}
 
@@ -380,7 +380,7 @@ def test_sendgrid_payload_without_list_omits_send_to_and_all(monkeypatch):
     provider = SendGridEmailCampaignProvider("SG.test")
     captured = {}
 
-    def fake_request(method, path, *, body=None):
+    def fake_request(method, path, *, body=None, action="draft"):
         captured.update(body)
         return {"id": "draft-id", "status": "draft"}
 
@@ -402,7 +402,7 @@ def test_connection_test_is_read_only(monkeypatch):
     provider = SendGridEmailCampaignProvider("SG.test")
     calls = []
 
-    def fake_request(method, path, *, body=None):
+    def fake_request(method, path, *, body=None, action="draft"):
         calls.append((method, path))
         if path == "/verified_senders":
             return {"results": []}

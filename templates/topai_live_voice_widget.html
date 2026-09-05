@@ -34,20 +34,26 @@
   .topai-live-history-item { display: block; width: 100%; text-align: left; border: 1px solid #dbe4f0; border-radius: 7px; background: white; padding: 9px 10px; margin: 0 0 8px; color: #111827; cursor: pointer; }
   .topai-live-history-item strong { display: block; font-size: 13px; margin-bottom: 3px; }
   .topai-live-history-item span { display: block; color: #526077; font-size: 12px; line-height: 1.35; }
-  .topai-live-window .topai-live-button { display: none; }
+  .topai-live-window .topai-live-button { right: 16px; bottom: 16px; }
   .topai-live-window .topai-live-panel { position: static; width: auto; height: 100vh; border: 0; border-radius: 0; box-shadow: none; }
-  .topai-live-window .topai-live-transcript { max-height: calc(100vh - 154px); min-height: calc(100vh - 154px); }
+  .topai-live-window .topai-live-transcript { max-height: calc(100vh - 170px); min-height: calc(100vh - 170px); padding-bottom: 62px; }
   @media (max-width: 640px) {
-    .topai-live-panel { right: 14px; bottom: 66px; }
+    .topai-live-panel { right: 8px; bottom: 62px; width: calc(100vw - 16px); max-height: calc(100dvh - 72px); }
     .topai-live-button { right: 14px; bottom: 14px; min-width: 96px; }
+    .topai-live-panel[data-history-open="true"] .topai-live-transcript { display: none; }
+    .topai-live-panel[data-history-open="true"] .topai-live-history { max-height: calc(100dvh - 132px); min-height: min(520px, calc(100dvh - 132px)); }
+    .topai-live-window .topai-live-panel[data-history-open="true"] .topai-live-history { max-height: calc(100dvh - 62px); min-height: calc(100dvh - 62px); }
+    .topai-live-history-item { padding: 12px; margin-bottom: 10px; }
+    .topai-live-history-item strong { font-size: 14px; }
+    .topai-live-history-item span { font-size: 13px; }
   }
 </style>
 <button type="button" class="topai-live-button" id="topai-live-button" disabled>Ask TopAI</button>
-<section class="topai-live-panel" id="topai-live-panel" data-state="connecting" aria-live="polite" hidden>
+<section class="topai-live-panel" id="topai-live-panel" data-state="connecting" aria-live="polite"{% if live_voice_config.mode != 'window' %} hidden{% endif %}>
   <div class="topai-live-panel-head">
     <div class="topai-live-state"><span class="topai-live-dot" aria-hidden="true"></span><span id="topai-live-status">Connecting...</span></div>
     <div class="topai-live-actions">
-      <button type="button" class="topai-live-history-toggle" id="topai-live-history-toggle" aria-label="Prior Ask TopAI live chats">History</button>
+      <button type="button" class="topai-live-history-toggle" id="topai-live-history-toggle" aria-label="Prior Ask TopAI live chats" aria-expanded="false" aria-controls="topai-live-history">History</button>
       <button type="button" class="topai-live-end" id="topai-live-end">End</button>
     </div>
   </div>
@@ -58,5 +64,16 @@
   </div>
 </section>
 <script type="application/json" id="topai-live-config">{{ live_voice_config | tojson }}</script>
+{% if live_voice_config.mode == 'window' %}
+<script>
+  window.setTimeout(function () {
+    var panel = document.getElementById("topai-live-panel");
+    if (!panel || panel.dataset.booted === "true") return;
+    document.getElementById("topai-live-status").textContent = "Could not start";
+    document.getElementById("topai-live-transcript").textContent =
+      "TopAI Live could not load. Close this window and try again.";
+  }, 8000);
+</script>
+{% endif %}
 <script type="module" src="{{ url_for('static', filename='topai_live_voice.js') }}"></script>
 {% endif %}

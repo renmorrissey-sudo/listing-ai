@@ -76,9 +76,11 @@
       if (!providers.length) badges.push('<span class="pill muted">Not posted</span>');
       const campaign = item.email_campaign;
       if (campaign && campaign.status === 'draft_created') {
-        badges.push('<span class="pill success">Email Draft &#10003;</span>');
+        const provider = String(campaign.provider || 'email').replaceAll('_', ' ');
+        const draftType = campaign.draft_type === 'mailbox' ? 'mailbox draft' : 'campaign draft';
+        badges.push(`<span class="pill success">${escapeHtml(provider)} ${draftType} &#10003;</span>`);
       } else if (campaign && (campaign.status === 'failed' || campaign.status === 'unknown')) {
-        badges.push('<span class="pill warn">Email Draft needs attention</span>');
+        badges.push('<span class="pill warn">Email draft needs attention</span>');
       }
       return badges.join('');
     }

@@ -78,6 +78,18 @@ def build_live_voice_assistant_overrides(profile, account_token):
         },
     }
 
+
+def build_browser_live_voice_assistant_config(profile, account_token):
+    """Build the transient assistant accepted by Vapi's browser call API."""
+    assistant = build_live_voice_assistant_overrides(profile, account_token)
+    assistant.pop("variableValues", None)
+    for tool in assistant["model"]["tools"]:
+        for parameter in tool.get("parameters") or []:
+            if parameter.get("key") == "topai_account_token":
+                parameter["value"] = account_token
+    return assistant
+
+
 VAPI_VARIABLE_KEYS = (
     "agent_name",
     "brokerage_name",

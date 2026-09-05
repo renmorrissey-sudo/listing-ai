@@ -4,6 +4,7 @@ import db
 from voice_provider import (
     VAPI_VARIABLE_KEYS,
     VapiVoiceProvider,
+    build_browser_live_voice_assistant_config,
     build_live_voice_assistant_overrides,
     build_vapi_variable_values,
     log_variable_values_presence,
@@ -196,8 +197,13 @@ def test_outbound_payload_includes_assistant_overrides(monkeypatch):
         "list_open_leads",
         "update_lead_status",
         "update_lead_sms_consent_status",
+        "update_lead_contact_info",
         "draft_lead_email",
+        "send_lead_email",
     }.issubset(tool_names)
+    send_tool = next(tool for tool in tools if tool["function"]["name"] == "send_lead_email")
+    assert "plain-language request" in send_tool["function"]["description"]
+    assert "complete email body" in send_tool["function"]["parameters"]["properties"]["body"]["description"]
     assert all(tool["server"]["url"].endswith("/webhook/voice") for tool in tools)
     messages = payload["assistantOverrides"]["model"]["messages"]
     assert messages == [{"role": "system", "content": "prompt unused"}]
@@ -217,6 +223,9 @@ def test_live_voice_overrides_use_copilot_prompt_and_signed_static_tool_paramete
     prompt = overrides["model"]["messages"][0]["content"]
     assert "live CRM copilot" in prompt
     assert "Listen to the user's complete thought" in prompt
+    assert "Say each fact, recommendation, list item, and confirmation only once" in prompt
+    assert "Do not repeat the tool result" in prompt
+    assert "never restart the response" in prompt
     assert "not calling a lead" in prompt
     assert "tool-calls" in overrides["clientMessages"]
     for tool in overrides["model"]["tools"]:
@@ -226,6 +235,24 @@ def test_live_voice_overrides_use_copilot_prompt_and_signed_static_tool_paramete
             continue
         assert tool["parameters"] == [
             {"key": "topai_account_token", "value": "{{topai_account_token}}"}
+        ]
+
+
+def test_browser_live_voice_assistant_config_has_no_variable_values():
+    assistant = build_browser_live_voice_assistant_config(
+        {"agent_name": "Ada", "brokerage_name": "Ada Realty"},
+        "signed-account-token",
+    )
+
+    assert "variableValues" not in assistant
+    assert assistant["firstMessage"] == "Hi Ada. How can I help?"
+    assert "live CRM copilot" in assistant["model"]["messages"][0]["content"]
+    for tool in assistant["model"]["tools"]:
+        if tool["function"]["name"] == "open_lead":
+            assert "server" not in tool
+            continue
+        assert tool["parameters"] == [
+            {"key": "topai_account_token", "value": "signed-account-token"}
         ]
 
 
@@ -252,6 +279,8 @@ def test_subscriber_app_renders_one_click_live_voice_without_private_key(
     assert "Ask TopAI" in html
     assert "public-browser-key" in html
     assert "assistant-123" in html
+    assert '"assistantConfig"' in html
+    assert '"variableValues"' not in html
     assert "private-server-key" not in html
 
 
@@ -282,6 +311,7 @@ def test_live_voice_widget_renders_on_subscriber_and_marketing_pages(
         assert "assistant-123" in html
         assert "private-server-key" not in html
 
+
 def test_live_voice_window_and_history_controls_render(
     app_client, two_users, monkeypatch
 ):
@@ -303,6 +333,8 @@ def test_live_voice_window_and_history_controls_render(
     assert response.status_code == 200
     assert "Ask TopAI Live" in html
     assert 'class="topai-live-history-toggle"' in html
+    assert 'id="topai-live-panel" data-state="connecting" aria-live="polite">' in html
+    assert "TopAI Live could not load" in html
     assert '"mode": "window"' in html
     assert '"sessionId": "test-live-session"' in html
     assert "private-server-key" not in html
@@ -366,6 +398,7 @@ def test_live_voice_button_remains_visible_when_voice_config_is_missing(
     assert '"configured": false' in html
     assert "topai_live_voice.js" in html
 
+
 def test_start_voice_call_blocks_missing_business_profile(app_client, two_users):
     u1, _ = two_users
     persona_id = db.create_voice_persona(
@@ -422,18 +455,23 @@ def test_business_profile_round_trip(app_client, two_users):
         "/account/business-profile",
         json={
             "agent_name": "Ada Agent",
+            "phone_number": "(303) 555-0199",
             "brokerage_name": "Ada Realty",
             "company_name": "Ada Homes",
+            "timezone": "America/Denver",
         },
     )
     assert res.status_code == 200
     assert res.get_json()["profile"]["agent_name"] == "Ada Agent"
+    assert res.get_json()["profile"]["phone_number"] == "(303) 555-0199"
 
     res = app_client.get("/account/business-profile")
     assert res.status_code == 200
     profile = res.get_json()["profile"]
     assert profile == {
         "agent_name": "Ada Agent",
+        "phone_number": "(303) 555-0199",
         "brokerage_name": "Ada Realty",
         "company_name": "Ada Homes",
+        "timezone": "America/Denver",
     }

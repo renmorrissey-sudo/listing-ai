@@ -92,6 +92,29 @@
   .grid-2 { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
   .status-hero { font-size: 22px; font-weight: 800; margin: 4px 0 10px; }
   .quick-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  .next-actions-panel {
+    margin: 16px 0; padding: 18px; border: 2px solid #4f8ef7; border-radius: 12px;
+    background: linear-gradient(135deg, #eef5ff 0%, #f8fbff 100%);
+    box-shadow: 0 8px 22px rgba(37, 99, 235, 0.12);
+  }
+  .next-actions-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+  .next-actions-header h2 { margin: 0; color: #173f8a; font-size: 20px; }
+  .next-actions-header p { margin: 3px 0 0; color: #52637a; font-size: 13px; }
+  .next-actions-list { list-style: none; padding: 0; margin: 14px 0 0; counter-reset: next-action; }
+  .next-action-item {
+    counter-increment: next-action; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto;
+    gap: 10px; align-items: center; padding: 11px 0; border-top: 1px solid #cfe0fb;
+  }
+  .next-action-item::before {
+    content: counter(next-action); display: grid; place-items: center; width: 26px; height: 26px;
+    border-radius: 999px; background: #2563eb; color: white; font-size: 12px; font-weight: 800;
+  }
+  .next-action-item.warning::before { background: #d97706; }
+  .next-action-item.danger::before { background: #dc2626; }
+  .next-action-title { color: #172554; font-weight: 800; }
+  .next-action-detail { margin-top: 2px; color: #52637a; font-size: 12px; }
+  .next-action-due { margin-top: 3px; color: #334155; font-size: 12px; font-weight: 700; }
+  .next-action-link { white-space: nowrap; }
   .flash { display: none; background: #ecfdf5; color: #065f46; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 13px; }
   .flash.err { background: #fef2f2; color: #991b1b; }
   .subscriber-footer {
@@ -223,5 +246,7 @@
     .lead-row { flex-direction: column; align-items: flex-start; gap: 8px; }
     .lead-row-open { align-self: flex-end; }
     .form-row-2 { grid-template-columns: 1fr; }
+    .next-action-item { grid-template-columns: 30px minmax(0, 1fr); }
+    .next-action-link { grid-column: 2; justify-self: start; }
   }
 </style>

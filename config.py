@@ -219,6 +219,18 @@ INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = (
 )
 APP_BASE_URL = (_env_strip("APP_BASE_URL") or _env_strip("APP_URL") or "http://localhost:8080").rstrip("/")
 
+# Customer-owned email integrations. These OAuth application credentials never
+# replace SENDGRID_API_KEY, which remains reserved for TopAI system email.
+GOOGLE_EMAIL_CLIENT_ID = _env_strip("GOOGLE_EMAIL_CLIENT_ID") or ""
+GOOGLE_EMAIL_CLIENT_SECRET = _env_strip("GOOGLE_EMAIL_CLIENT_SECRET") or ""
+MICROSOFT_EMAIL_CLIENT_ID = _env_strip("MICROSOFT_EMAIL_CLIENT_ID") or ""
+MICROSOFT_EMAIL_CLIENT_SECRET = _env_strip("MICROSOFT_EMAIL_CLIENT_SECRET") or ""
+MICROSOFT_EMAIL_TENANT = _env_strip("MICROSOFT_EMAIL_TENANT") or "common"
+MAILCHIMP_CLIENT_ID = _env_strip("MAILCHIMP_CLIENT_ID") or ""
+MAILCHIMP_CLIENT_SECRET = _env_strip("MAILCHIMP_CLIENT_SECRET") or ""
+CONSTANT_CONTACT_CLIENT_ID = _env_strip("CONSTANT_CONTACT_CLIENT_ID") or ""
+CONSTANT_CONTACT_CLIENT_SECRET = _env_strip("CONSTANT_CONTACT_CLIENT_SECRET") or ""
+
 LINKEDIN_CLIENT_ID = _env_strip("LINKEDIN_CLIENT_ID") or ""
 LINKEDIN_CLIENT_SECRET = _env_strip("LINKEDIN_CLIENT_SECRET") or ""
 

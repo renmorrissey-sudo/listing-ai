@@ -11,10 +11,29 @@ const historyPanel = document.getElementById("topai-live-history");
 const historyList = document.getElementById("topai-live-history-list");
 
 if (button && panel && endButton && status && transcript && configElement) {
+  panel.dataset.booted = "true";
   const config = JSON.parse(configElement.textContent || "{}");
   const isCallWindow = config.mode === "window" || document.body.classList.contains("topai-live-window");
-  const voiceConfigured = Boolean(config.configured && config.publicKey && config.assistantId);
-  const vapi = isCallWindow && voiceConfigured ? new Vapi(config.publicKey) : null;
+  const voiceConfigured = Boolean(config.configured && config.publicKey && config.assistantConfig);
+  let vapi = null;
+  let vapiInitializationError = null;
+  if (isCallWindow && voiceConfigured) {
+    try {
+      const VapiConstructor = [
+        Vapi,
+        Vapi?.default,
+        Vapi?.default?.default,
+        Vapi?.Vapi,
+        Vapi?.default?.Vapi,
+      ].find((candidate) => typeof candidate === "function");
+      if (!VapiConstructor) {
+        throw new Error("The TopAI voice library loaded with an unsupported export shape.");
+      }
+      vapi = new VapiConstructor(config.publicKey);
+    } catch (error) {
+      vapiInitializationError = error;
+    }
+  }
   const channel = "BroadcastChannel" in window ? new BroadcastChannel(`topai-live-${config.userId}`) : null;
   const ACTIVE_KEY = `topai-live-active-session-${config.userId}`;
   const WINDOW_NAME = `topaiAskLive-${config.userId}`;
@@ -23,6 +42,7 @@ if (button && panel && endButton && status && transcript && configElement) {
   let pendingLeadPath = null;
   const PLAYBACK_GUARD_MS = 650;
   const MIN_BARGE_IN_MS = 350;
+  const FINAL_TRANSCRIPT_DEDUP_MS = 2500;
   let callState = "idle";
   let callWindowRef = null;
   let sessionId = config.sessionId || "";
@@ -33,7 +53,7 @@ if (button && panel && endButton && status && transcript && configElement) {
   let potentialInterruptionStartedAt = 0;
   let interruptionWasIntentional = false;
   let lastInterruptionClassification = "none";
-  let lastAssistantText = "";
+  let lastFinalTranscript = null;
 
   function setState(nextState, label) {
     callState = nextState;
@@ -96,7 +116,26 @@ if (button && panel && endButton && status && transcript && configElement) {
       windowRole: isCallWindow ? "call-window" : "site-page",
       ...details,
     };
-    console.debug("[TopAI Realtime]", entry);
+    console.debug("[TopAI Realtime]", JSON.stringify(entry));
+  }
+
+  function firstErrorDetail(...values) {
+    for (const value of values) {
+      if (value === undefined || value === null || value === "") continue;
+      if (["string", "number", "boolean"].includes(typeof value)) return String(value);
+      if (typeof value === "object") {
+        const nested = firstErrorDetail(
+          value.message,
+          value.reason,
+          value.detail,
+          value.details,
+          value.error,
+          value.errors?.[0],
+        );
+        if (nested) return nested;
+      }
+    }
+    return "The live conversation could not start.";
   }
 
   function responseIdFromMessage(message) {
@@ -115,29 +154,49 @@ if (button && panel && endButton && status && transcript && configElement) {
     const last = turns[turns.length - 1];
     if (last && last.role === role) last.text = cleaned;
     else turns.push({role, text: cleaned});
-    if (role === "assistant") lastAssistantText = cleaned;
     saveConversation("active");
     broadcast("transcript");
   }
 
   function addTranscript(role, text, replacePartial = false, remember = true) {
-    if (!text) return;
+    const cleaned = String(text || "").trim();
+    if (!cleaned) return;
+    transcript.querySelector("[data-empty]")?.remove();
     const partial = transcript.querySelector(`[data-partial="${role}"]`);
     if (replacePartial && partial) {
-      partial.lastChild.textContent = text;
+      partial.lastChild.textContent = cleaned;
       transcript.scrollTop = transcript.scrollHeight;
       return;
     }
-    if (!replacePartial && partial) partial.removeAttribute("data-partial");
+    if (!replacePartial && remember) {
+      const now = Date.now();
+      const isDuplicateFinal = lastFinalTranscript
+        && lastFinalTranscript.role === role
+        && lastFinalTranscript.text === cleaned
+        && now - lastFinalTranscript.at < FINAL_TRANSCRIPT_DEDUP_MS;
+      if (isDuplicateFinal) {
+        if (partial) partial.remove();
+        logEvent("duplicate_final_transcript_ignored", {role});
+        return;
+      }
+      lastFinalTranscript = {role, text: cleaned, at: now};
+    }
+    if (!replacePartial && partial) {
+      partial.lastChild.textContent = cleaned;
+      partial.removeAttribute("data-partial");
+      transcript.scrollTop = transcript.scrollHeight;
+      if (remember) rememberTurn(role, cleaned);
+      return;
+    }
     const line = document.createElement("p");
     line.className = "topai-live-line";
     if (replacePartial) line.dataset.partial = role;
     const name = document.createElement("strong");
     name.textContent = role === "user" ? "You: " : "TopAI: ";
-    line.append(name, document.createTextNode(text));
+    line.append(name, document.createTextNode(cleaned));
     transcript.appendChild(line);
     transcript.scrollTop = transcript.scrollHeight;
-    if (!replacePartial && remember) rememberTurn(role, text);
+    if (!replacePartial && remember) rememberTurn(role, cleaned);
   }
 
   function renderTurns(nextTurns, emptyText = "No transcript yet.") {
@@ -145,6 +204,7 @@ if (button && panel && endButton && status && transcript && configElement) {
     if (!nextTurns.length) {
       const line = document.createElement("p");
       line.className = "topai-live-line";
+      line.dataset.empty = "true";
       line.textContent = emptyText;
       transcript.appendChild(line);
       return;
@@ -211,24 +271,6 @@ if (button && panel && endButton && status && transcript && configElement) {
     logEvent(source || "user_interruption_validated");
   }
 
-  function requestAssistantContinuation(reason) {
-    if (!vapi || callState === "idle") return;
-    const prompt = [
-      "The previous assistant response appears to have been cancelled by echo or transient noise, not an intentional user interruption.",
-      "Continue the incomplete TopAI response naturally from the conversation context.",
-      lastAssistantText ? `Most recent assistant text before cancellation: \"${lastAssistantText}\"` : "",
-      "Do not apologize for a technical issue unless the user asks what happened.",
-    ].filter(Boolean).join(" ");
-    logEvent("assistant_continuation_requested", {reason});
-    if (typeof vapi.send === "function") {
-      vapi.send({type: "add-message", message: {role: "system", content: prompt}});
-    } else if (typeof vapi.addMessage === "function") {
-      vapi.addMessage({role: "system", content: prompt});
-    } else {
-      logEvent("assistant_continuation_unavailable");
-    }
-  }
-
   function handleUserSpeechStarted(source) {
     logEvent(source || "input_audio_buffer.speech_started");
     if (!assistantIsSpeaking) {
@@ -268,18 +310,23 @@ if (button && panel && endButton && status && transcript && configElement) {
     assistantPlaybackStartedAt = 0;
     potentialInterruptionStartedAt = 0;
     currentResponseId = null;
-    if (intentional) {
-      if (callState !== "idle") setState("listening", "Listening");
-    } else {
-      lastInterruptionClassification = "accidental_cancellation";
-      requestAssistantContinuation(source || "response.cancelled");
-    }
+    if (!intentional) lastInterruptionClassification = "accidental_cancellation";
+    if (callState !== "idle") setState("listening", "Listening");
     interruptionWasIntentional = false;
     broadcast("state");
   }
 
   function showError(error) {
-    const raw = error?.error?.message || error?.message || "The live conversation could not start.";
+    const source = error?.error || error || {};
+    const raw = firstErrorDetail(source.message, error?.message, source.error, source.details, source);
+    const diagnostic = {
+      message: raw.slice(0, 240),
+      code: String(source.code || error?.code || "").slice(0, 80),
+      status: String(source.status || error?.status || "").slice(0, 40),
+      type: String(source.type || error?.type || "").slice(0, 80),
+    };
+    window.__topaiLastError = diagnostic;
+    console.error("[TopAI Realtime Error]", JSON.stringify(diagnostic));
     panel.hidden = false;
     transcript.replaceChildren();
     const line = document.createElement("p");
@@ -308,11 +355,9 @@ if (button && panel && endButton && status && transcript && configElement) {
   function openLiveWindow() {
     ensureSessionId();
     const url = `/ask-topai-live?session_id=${encodeURIComponent(sessionId)}`;
-    // Reuse the named window without reloading an ongoing voice connection.
-    callWindowRef = window.open("", WINDOW_NAME, "popup,width=430,height=620");
-    if (callWindowRef && callWindowRef.location.href === "about:blank") {
-      callWindowRef.location.replace(url);
-    }
+    // This path is only used for a new session, so navigate the popup in the
+    // user gesture instead of relying on a second about:blank navigation.
+    callWindowRef = window.open(url, WINDOW_NAME, "popup,width=430,height=620");
     if (!callWindowRef) {
       panel.hidden = false;
       renderTurns([], "Your browser blocked the live conversation window. Allow popups for this site, then click Ask TopAI again.");
@@ -335,8 +380,10 @@ if (button && panel && endButton && status && transcript && configElement) {
         configured: config.configured,
         publicKeyPresent: Boolean(config.publicKey),
         assistantIdPresent: Boolean(config.assistantId),
+        sdkInitializationFailed: Boolean(vapiInitializationError),
       });
-      showUnavailable();
+      if (vapiInitializationError) showError(vapiInitializationError);
+      else showUnavailable();
       return;
     }
     panel.hidden = false;
@@ -346,7 +393,7 @@ if (button && panel && endButton && status && transcript && configElement) {
     setActiveSession({sessionId, state: "connecting", updatedAt: Date.now()});
     broadcast("state");
     try {
-      await vapi.start(config.assistantId, config.assistantOverrides);
+      await vapi.start(config.assistantConfig);
     } catch (error) {
       showError(error);
     }
@@ -376,6 +423,8 @@ if (button && panel && endButton && status && transcript && configElement) {
   async function loadHistory() {
     if (!historyPanel || !historyList) return;
     historyPanel.hidden = !historyPanel.hidden;
+    panel.dataset.historyOpen = historyPanel.hidden ? "false" : "true";
+    historyToggle?.setAttribute("aria-expanded", historyPanel.hidden ? "false" : "true");
     if (historyPanel.hidden) return;
     historyList.replaceChildren();
     const loading = document.createElement("p");
@@ -425,7 +474,11 @@ if (button && panel && endButton && status && transcript && configElement) {
       if (!res.ok) throw new Error(data.error || "Not found");
       panel.hidden = false;
       renderTurns(data.conversation?.transcript || [], "This saved chat has no transcript.");
-      if (historyPanel) historyPanel.hidden = true;
+      if (historyPanel) {
+        historyPanel.hidden = true;
+        panel.dataset.historyOpen = "false";
+        historyToggle?.setAttribute("aria-expanded", "false");
+      }
       if (callState === "idle") setState("idle", "Prior live chat");
     } catch (error) {
       logEvent("conversation_load_failed", {message: error?.message});
@@ -433,7 +486,7 @@ if (button && panel && endButton && status && transcript && configElement) {
   }
 
   function applyRemoteState(message) {
-    if (!message || !message.sessionId || !["state", "transcript", "ended"].includes(message.type)) return;
+    if (!message || !message.sessionId || !["window-ready", "state", "transcript", "ended"].includes(message.type)) return;
     if (sessionId && message.sessionId !== sessionId) return;
     sessionId = message.sessionId;
     if (Array.isArray(message.turns)) {
@@ -446,7 +499,11 @@ if (button && panel && endButton && status && transcript && configElement) {
       setActiveSession(null);
       return;
     }
-    const label = message.state === "speaking" ? "TopAI is speaking" : "Live conversation active";
+    const label = message.state === "speaking"
+      ? "TopAI is speaking"
+      : message.type === "window-ready"
+        ? "Live window ready"
+        : "Live conversation active";
     setState(message.state || "listening", label);
     setActiveSession({sessionId, state: message.state || "listening", updatedAt: Date.now()});
   }
@@ -572,7 +629,6 @@ if (button && panel && endButton && status && transcript && configElement) {
       }
 
       if (type === "assistant.speechStarted") {
-        if (message.text) lastAssistantText = message.text;
         markAssistantPlaybackStarted(responseIdFromMessage(message), "assistant.speechStarted");
         return;
       }
@@ -625,17 +681,20 @@ if (button && panel && endButton && status && transcript && configElement) {
 
   if (isCallWindow) {
     panel.hidden = false;
-    button.disabled = true;
+    button.disabled = false;
     if (!sessionId) ensureSessionId();
     window.addEventListener("pagehide", () => {
       if (callState !== "idle") {
         saveConversation("ended");
         if (vapi) vapi.stop();
-        setActiveSession(null);
-        broadcast("ended");
       }
+      setActiveSession(null);
+      broadcast("ended");
     });
-    startCall();
+    renderTurns([], "Click Ask TopAI to start the live conversation.");
+    setState("idle", "Ready");
+    setActiveSession({sessionId, state: "ready", updatedAt: Date.now()});
+    broadcast("window-ready", {state: "ready"});
     window.setInterval(() => {
       if (callState !== "idle") {
         setActiveSession({sessionId, state: callState, updatedAt: Date.now()});

@@ -75,9 +75,93 @@ def test_api_create_lead_creates_via_shared_ingest(app_client, two_users):
     assert lead is not None
     assert lead["name"] == "Casey Buyer"
     assert lead["phone_number"] == "+15551239003"
+    assert lead["email"] == "casey@example.com"
     # Same safe defaults as every other ingestion path (CSV/webhook/manual form).
     assert lead["sms_consent_status"] == "not_certified"
     assert int(lead["sms_sending_blocked"]) == 1
+
+
+def test_api_update_lead_contact_email(app_client, two_users):
+    u1, _ = two_users
+    _login(app_client, u1)
+    db.update_business_profile(
+        u1,
+        agent_name="Ada Agent",
+        phone_number="(303) 555-0199",
+        brokerage_name="Ada Realty",
+    )
+    created = app_client.post(
+        "/api/crm/leads",
+        json={"first_name": "Email", "last_name": "Capture", "phone": "+15551239013"},
+    ).get_json()
+    lead_id = created["lead_id"]
+
+    bad = app_client.post(
+        f"/api/crm/leads/{lead_id}/contact",
+        json={"email": "not-an-email"},
+    )
+    assert bad.status_code == 400
+
+    res = app_client.post(
+        f"/api/crm/leads/{lead_id}/contact",
+        json={
+            "name": "Email Capture Updated",
+            "phone_number": "(555) 123-9014",
+            "email": "capture@example.com",
+            "lead_type": "buyer",
+            "property_interest": "Condo near downtown",
+            "notes": "Prefers afternoon calls",
+            "next_action": "Send listings",
+        },
+    )
+    assert res.status_code == 200
+    updated = res.get_json()["lead"]
+    assert updated["name"] == "Email Capture Updated"
+    assert updated["phone_number"] == "+15551239014"
+    assert updated["email"] == "capture@example.com"
+    assert updated["lead_type"] == "buyer"
+    assert updated["property_interest"] == "Condo near downtown"
+    assert updated["notes"] == "Prefers afternoon calls"
+    assert updated["next_action"] == "Send listings"
+
+    detail = app_client.get(f"/api/crm/leads/{lead_id}").get_json()
+    assert detail["lead"]["email"] == "capture@example.com"
+    listed = app_client.get("/api/crm/leads").get_json()["leads"]
+    assert any(
+        item["id"] == lead_id and item["email"] == "capture@example.com"
+        for item in listed
+    )
+    html = app_client.get(f"/crm/leads/{lead_id}").get_data(as_text=True)
+    assert "capture@example.com" in html
+    assert 'href="mailto:capture%40example.com"' in html
+    assert "Competitive%20market%20analysis%20for%20Condo%20near%20downtown" in html
+    assert "Warm%20regards%2C%0AAda%20Agent%0A%28303%29%20555-0199%0AAda%20Realty" in html
+
+    leads_html = app_client.get("/crm/leads?active=1").get_data(as_text=True)
+    assert 'href="mailto:capture%40example.com?subject=Following%20up%20from%20TopAI%20Real%20Estate%20Tools' in leads_html
+    assert "Warm%20regards%2C%0AAda%20Agent%0A%28303%29%20555-0199%0AAda%20Realty" in leads_html
+
+
+def test_api_update_lead_contact_rejects_duplicate_phone(app_client, two_users):
+    u1, _ = two_users
+    _login(app_client, u1)
+    first = app_client.post(
+        "/api/crm/leads",
+        json={"first_name": "First", "last_name": "Lead", "phone": "+15551239015"},
+    ).get_json()
+    second = app_client.post(
+        "/api/crm/leads",
+        json={"first_name": "Second", "last_name": "Lead", "phone": "+15551239016"},
+    ).get_json()
+
+    res = app_client.post(
+        f"/api/crm/leads/{second['lead_id']}/contact",
+        json={"phone_number": "(555) 123-9015"},
+    )
+
+    assert res.status_code == 409
+    assert db.get_lead(second["lead_id"], u1)["phone_number"] == "+15551239016"
+    assert "First Lead" in res.get_json()["error"]
 
 
 def test_api_create_lead_missing_phone_returns_400(app_client, two_users):

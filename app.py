@@ -51,6 +51,7 @@ import registration_gate
 import seo
 from voice_provider import (
     VoiceProviderError,
+    build_browser_live_voice_assistant_config,
     build_live_voice_assistant_overrides,
     build_vapi_variable_values,
     get_voice_provider,
@@ -86,17 +87,15 @@ def _active_live_voice_config_for_user(user):
         return {"enabled": bool(user), "configured": False}
     account_token = create_live_voice_account_token(user["id"])
     profile = db.get_business_profile(user["id"]) or {}
-    voice_configured = bool(
-        config.VAPI_PUBLIC_API_KEY
-        and config.REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID
-    )
+    assistant_config = build_browser_live_voice_assistant_config(profile, account_token)
+    voice_configured = bool(config.VAPI_PUBLIC_API_KEY)
     return {
         "enabled": True,
         "configured": voice_configured,
         "userId": user["id"],
         "publicKey": config.VAPI_PUBLIC_API_KEY,
         "assistantId": config.REAL_ESTATE_LEAD_QUALIFIER_ASSISTANT_ID,
-        "assistantOverrides": build_live_voice_assistant_overrides(profile, account_token),
+        "assistantConfig": assistant_config,
     }
 app.register_blueprint(crm_bp)
 app.register_blueprint(external_leads_bp)
@@ -1281,6 +1280,7 @@ def business_profile():
     if request.method == "GET":
         profile = db.get_business_profile(user["id"]) or {
             "agent_name": "",
+            "phone_number": "",
             "brokerage_name": "",
             "company_name": "",
             "timezone": "America/Denver",
@@ -1291,6 +1291,7 @@ def business_profile():
     profile = db.update_business_profile(
         user["id"],
         agent_name=str(data.get("agent_name") or ""),
+        phone_number=str(data.get("phone_number") or ""),
         brokerage_name=str(data.get("brokerage_name") or ""),
         company_name=str(data.get("company_name") or ""),
         timezone=str(data.get("timezone") or "") or None,
@@ -2454,7 +2455,9 @@ def generate():
 def listings_recent():
     user = auth.get_current_user()
     items = listing_db.list_recent(user["id"], limit=20)
-    items = email_marketing_db.annotate_campaign_status(user["id"], items)
+    items = email_marketing_db.annotate_integration_campaign_status(
+        user["id"], items
+    )
     return jsonify({"items": items})
 
 
@@ -2492,7 +2495,7 @@ def listings_archive_search():
     except Exception:
         logger.exception("Failed to annotate publish status for listing archive")
     try:
-        result["items"] = email_marketing_db.annotate_campaign_status(
+        result["items"] = email_marketing_db.annotate_integration_campaign_status(
             user["id"], result["items"]
         )
     except Exception:
@@ -2515,7 +2518,7 @@ def listings_get_one(generation_id):
     except Exception:
         logger.exception("Failed to annotate publish status for listing %s", generation_id)
     try:
-        generation = email_marketing_db.annotate_campaign_status(
+        generation = email_marketing_db.annotate_integration_campaign_status(
             user["id"], [generation]
         )[0]
     except Exception:

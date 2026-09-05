@@ -9,6 +9,7 @@ from flask import Blueprint, flash, get_flashed_messages, jsonify, redirect, ren
 import auth
 import crm_db
 import db
+import lead_contact_service
 from crm_constants import (
     APPOINTMENT_OUTCOMES,
     APPOINTMENT_TYPES,
@@ -73,6 +74,184 @@ def _parse_dashboard_range_arg(*values):
         if key in ALLOWED_FOLLOW_UP_RANGES:
             return ALLOWED_FOLLOW_UP_RANGES[key]
     return None
+
+
+def _email_signature_text(user_id):
+    profile = db.get_business_profile(user_id) or {}
+    lines = ["Warm regards,"]
+    for value in (
+        profile.get("agent_name"),
+        profile.get("phone_number"),
+        profile.get("brokerage_name") or profile.get("company_name"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            lines.append(text)
+    return "\n".join(lines)
+
+
+def _build_lead_next_actions(
+    lead, *, next_follow_up=None, next_task=None, next_appointment=None, needs=None
+):
+    """Build a concise, always-present action plan for a lead detail page."""
+    actions = []
+
+    def add(title, detail="", target=None, due_at=None, tone=""):
+        title = str(title or "").strip()
+        if not title or any(item["title"].lower() == title.lower() for item in actions):
+            return
+        actions.append(
+            {
+                "title": title,
+                "detail": str(detail or "").strip(),
+                "target": target,
+                "due_at": due_at,
+                "tone": tone,
+            }
+        )
+
+    status = normalize_lead_status(lead.get("status"))
+    opted_out = (
+        lead.get("opt_out_status") == "opted_out"
+        or str(lead.get("sms_consent_status") or "").lower() in {"opted_out", "revoked"}
+        or status == "do_not_contact"
+    )
+    terminal = status in {"closed_won", "closed_lost", "do_not_contact"}
+
+    if opted_out:
+        add(
+            "Do not contact this lead",
+            "Honor the recorded opt-out. Review or update consent only if the lead directly requests contact again.",
+            "consent",
+            tone="danger",
+        )
+    else:
+        if lead.get("pond_status") in {"unassigned", "claimable"}:
+            add(
+                "Claim this lead",
+                "Assign the lead to yourself before beginning outreach.",
+                "claim",
+                tone="priority",
+            )
+
+        for item in (needs or [])[:2]:
+            add(
+                item.get("reason_text") or "Resolve the open Needs Attention item",
+                "Review the issue and record how it was resolved.",
+                "needs",
+                tone="warning",
+            )
+
+        saved_action = str(lead.get("next_action") or "").strip()
+        if saved_action:
+            add(saved_action, "Saved next action for this lead.", tone="priority")
+        else:
+            defaults = {
+                "new": (
+                    "Make first contact",
+                    "Call the lead, then record the result and schedule the next touchpoint.",
+                    "call",
+                ),
+                "attempting_contact": (
+                    "Continue the contact plan",
+                    "Try the next appropriate channel and schedule another attempt if needed.",
+                    "call",
+                ),
+                "contacted": (
+                    "Qualify the lead's needs and timing",
+                    "Confirm motivation, timeframe, location, and financing or selling goals.",
+                    "follow_up",
+                ),
+                "qualified": (
+                    "Move the lead toward an appointment",
+                    "Schedule a consultation, showing, or listing conversation.",
+                    "appointment",
+                ),
+                "appointment_scheduled": (
+                    "Confirm and prepare for the appointment",
+                    "Verify the time and prepare the information the lead needs.",
+                    "appointment",
+                ),
+                "appointment_completed": (
+                    "Record the outcome and choose the next step",
+                    "Update the lead status and schedule any promised follow-up.",
+                    "appointment",
+                ),
+                "nurture": (
+                    "Schedule the next nurture touchpoint",
+                    "Keep the relationship active with a relevant, timely follow-up.",
+                    "follow_up",
+                ),
+                "under_contract": (
+                    "Complete the next active-client milestone",
+                    "Create the next task and keep all deadlines current.",
+                    "task",
+                ),
+                "closed_won": (
+                    "Confirm the file is complete",
+                    "Record final notes and any post-close relationship task.",
+                    "task",
+                ),
+                "closed_lost": (
+                    "Document the close reason",
+                    "Confirm no further outreach is needed and save any final notes.",
+                    "status",
+                ),
+            }
+            title, detail, target = defaults.get(
+                status,
+                (
+                    "Review this lead and choose the next step",
+                    "Update the lead record and schedule the next touchpoint.",
+                    "follow_up",
+                ),
+            )
+            add(title, detail, target, tone="priority")
+
+        if next_follow_up:
+            add(
+                f"Follow up: {next_follow_up.get('reason') or 'Contact the lead'}",
+                "Complete, reschedule, or update this follow-up.",
+                "follow_up",
+                next_follow_up.get("due_at"),
+            )
+        if next_task:
+            add(
+                f"Complete task: {next_task.get('title') or 'Open task'}",
+                "Keep the task current when the work is complete.",
+                "task",
+                next_task.get("due_at"),
+            )
+        if next_appointment:
+            appointment_name = str(
+                next_appointment.get("appointment_type") or "appointment"
+            ).replace("_", " ")
+            add(
+                f"Prepare for {appointment_name}",
+                "Confirm the details and prepare before the appointment.",
+                "appointment",
+                next_appointment.get("start_at"),
+            )
+
+        if not terminal and (
+            bool(lead.get("sms_sending_blocked"))
+            or not sms_consent_is_certified(lead.get("sms_consent_status"))
+        ):
+            add(
+                "Verify consent before sending SMS",
+                "Calling or emailing may still be available; texting remains blocked until consent is verified.",
+                "consent",
+                tone="warning",
+            )
+
+        if not terminal and not any((next_follow_up, next_task, next_appointment)):
+            add(
+                "Schedule the next touchpoint",
+                "Add a dated follow-up so this lead does not fall through the cracks.",
+                "follow_up",
+            )
+
+    return actions
 
 
 def _parse_leads_list_filters(args):
@@ -353,6 +532,13 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
         "next_follow_up": next_follow_up,
         "next_task": next_task,
         "next_appointment": next_appointment,
+        "next_actions": _build_lead_next_actions(
+            lead,
+            next_follow_up=next_follow_up,
+            next_task=next_task,
+            next_appointment=next_appointment,
+            needs=needs,
+        ),
         "statuses": LEAD_STATUSES,
         "task_types": TASK_TYPES,
         "appointment_types": APPOINTMENT_TYPES,
@@ -371,6 +557,7 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
         "consent_evidence": evidence,
         "consent_audit": audit,
         "external_source": external_source,
+        "email_signature": _email_signature_text(user["id"]),
         **_nav_context(user, "leads"),
     }
 
@@ -477,6 +664,7 @@ def crm_leads_page():
         status_label=status_label,
         sms_consent_label=sms_consent_label,
         has_active_filters=bool(active_filter),
+        email_signature=_email_signature_text(user["id"]),
         **_nav_context(user, "leads"),
     )
 
@@ -588,6 +776,7 @@ def api_list_leads():
                 "id": lead["id"],
                 "name": lead.get("name"),
                 "phone_number": lead.get("phone_number"),
+                "email": lead.get("email"),
                 "lead_type": lead.get("lead_type"),
                 "property_interest": lead.get("property_interest"),
                 "status": normalize_lead_status(lead.get("status")),
@@ -643,6 +832,23 @@ def api_set_lead_status(lead_id):
     if not lead:
         return jsonify({"error": error or "Unable to update status."}), 400
     return jsonify({"ok": True, "lead": lead, "status_label": status_label(lead.get("status"))})
+
+
+@crm_bp.route("/api/crm/leads/<int:lead_id>/contact", methods=["POST"])
+@auth.subscription_required
+def api_update_lead_contact(lead_id):
+    user = auth.get_current_user()
+    data = request.get_json(silent=True) or {}
+    updated, error, status_code = lead_contact_service.update_lead_contact_info(
+        user["id"],
+        lead_id,
+        data,
+        actor_user_id=user["id"],
+        source="crm_api",
+    )
+    if error:
+        return jsonify({"error": error}), status_code
+    return jsonify({"ok": True, "lead": updated})
 
 
 @crm_bp.route("/api/crm/leads/<int:lead_id>/activities")

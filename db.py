@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 import config
 from db_backend import bind_bool, connect as backend_connect, sql_is_true
 
+_UNSET = object()
+
 
 def _connect():
     return backend_connect()
@@ -294,7 +296,7 @@ def get_business_profile(user_id):
         try:
             row = conn.execute(
                 """
-                SELECT agent_name, brokerage_name, company_name, timezone
+                SELECT agent_name, phone_number, brokerage_name, company_name, timezone
                 FROM users WHERE id = ?
                 """,
                 (user_id,),
@@ -312,6 +314,7 @@ def get_business_profile(user_id):
         data = dict(row)
         return {
             "agent_name": (data.get("agent_name") or "").strip(),
+            "phone_number": (data.get("phone_number") or "").strip(),
             "brokerage_name": (data.get("brokerage_name") or "").strip(),
             "company_name": (data.get("company_name") or "").strip(),
             "timezone": (data.get("timezone") or "").strip() or "America/Denver",
@@ -319,7 +322,12 @@ def get_business_profile(user_id):
 
 
 def update_business_profile(
-    user_id, agent_name=None, brokerage_name=None, company_name=None, timezone=None
+    user_id,
+    agent_name=None,
+    phone_number=None,
+    brokerage_name=None,
+    company_name=None,
+    timezone=None,
 ):
     tz = (timezone or "").strip()[:80] or None
     with get_db() as conn:
@@ -329,6 +337,7 @@ def update_business_profile(
                 """
                 UPDATE users
                 SET agent_name = ?,
+                    phone_number = ?,
                     brokerage_name = ?,
                     company_name = ?,
                     timezone = COALESCE(?, timezone)
@@ -336,6 +345,7 @@ def update_business_profile(
                 """,
                 (
                     (agent_name or "").strip()[:120] or None,
+                    (phone_number or "").strip()[:40] or None,
                     (brokerage_name or "").strip()[:200] or None,
                     (company_name or "").strip()[:200] or None,
                     tz,
@@ -765,6 +775,7 @@ def create_lead_record(
     phone_number,
     *,
     name,
+    email=None,
     lead_type=None,
     property_interest=None,
     status="new",
@@ -779,15 +790,16 @@ def create_lead_record(
         cur = conn.execute(
             """
             INSERT INTO leads
-                (user_id, name, phone_number, lead_type, property_interest, status, source,
+                (user_id, name, phone_number, email, lead_type, property_interest, status, source,
                  notes, assigned_user_id, created_at, updated_at,
                  last_contacted_at, latest_call_at, last_outbound_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
                 name or "Lead",
                 phone_number,
+                (email or "").strip()[:200] or None,
                 lead_type,
                 property_interest,
                 status or "new",
@@ -809,6 +821,7 @@ def update_lead_contact_fields(
     user_id,
     *,
     name=None,
+    email=_UNSET,
     lead_type=None,
     property_interest=None,
     notes=None,
@@ -839,6 +852,7 @@ def update_lead_contact_fields(
             UPDATE leads
             SET name = COALESCE(?, name),
                 lead_type = COALESCE(?, lead_type),
+                email = CASE WHEN ? THEN ? ELSE email END,
                 property_interest = COALESCE(?, property_interest),
                 notes = CASE
                     WHEN CAST(? AS TEXT) IS NOT NULL
@@ -855,6 +869,8 @@ def update_lead_contact_fields(
             (
                 name,
                 lead_type,
+                bind_bool(email is not _UNSET),
+                (email or "").strip()[:200] or None if email is not _UNSET else None,
                 property_interest,
                 notes,
                 notes,
@@ -865,6 +881,59 @@ def update_lead_contact_fields(
                 now,
                 touch_contact,
                 now,
+                now,
+                lead_id,
+                user_id,
+            ),
+        )
+
+
+def update_lead_contact_info(
+    lead_id,
+    user_id,
+    *,
+    name=_UNSET,
+    phone_number=_UNSET,
+    email=_UNSET,
+    lead_type=_UNSET,
+    property_interest=_UNSET,
+    notes=_UNSET,
+    next_action=_UNSET,
+):
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE leads
+            SET name = CASE WHEN ? THEN ? ELSE name END,
+                phone_number = CASE WHEN ? THEN ? ELSE phone_number END,
+                email = CASE WHEN ? THEN ? ELSE email END,
+                lead_type = CASE WHEN ? THEN ? ELSE lead_type END,
+                property_interest = CASE WHEN ? THEN ? ELSE property_interest END,
+                notes = CASE WHEN ? THEN ? ELSE notes END,
+                next_action = CASE WHEN ? THEN ? ELSE next_action END,
+                updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                bind_bool(name is not _UNSET),
+                (name or "").strip()[:200] or "Lead" if name is not _UNSET else None,
+                bind_bool(phone_number is not _UNSET),
+                (phone_number or "").strip()[:40] if phone_number is not _UNSET else None,
+                bind_bool(email is not _UNSET),
+                (email or "").strip()[:200] or None if email is not _UNSET else None,
+                bind_bool(lead_type is not _UNSET),
+                (lead_type or "").strip()[:80] or None if lead_type is not _UNSET else None,
+                bind_bool(property_interest is not _UNSET),
+                (
+                    (property_interest or "").strip()[:500] or None
+                    if property_interest is not _UNSET
+                    else None
+                ),
+                bind_bool(notes is not _UNSET),
+                (notes or "").strip()[:1500] or None if notes is not _UNSET else None,
+                bind_bool(next_action is not _UNSET),
+                (next_action or "").strip()[:500] or None if next_action is not _UNSET else None,
                 now,
                 lead_id,
                 user_id,

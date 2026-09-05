@@ -55,6 +55,7 @@ def upsert_crm_lead(
 
     now = _now()
     name = (data.get("lead_name") or data.get("name") or "").strip() or "Lead"
+    email = (data.get("email") or "").strip()[:200] or None
     lead_type = (data.get("lead_type") or "").strip() or None
     property_interest = (data.get("property_interest") or "").strip() or None
     notes_parts = [
@@ -76,6 +77,7 @@ def upsert_crm_lead(
             lead_id,
             user_id,
             name=name if name != "Lead" else None,
+            email=email if email else db._UNSET,
             lead_type=lead_type,
             property_interest=property_interest,
             notes=notes,
@@ -92,6 +94,7 @@ def upsert_crm_lead(
         user_id=user_id,
         phone_number=phone,
         name=name,
+        email=email,
         lead_type=lead_type,
         property_interest=property_interest,
         status=create_status,

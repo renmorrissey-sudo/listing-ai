@@ -11,6 +11,7 @@ import urllib.request
 from email_campaign_providers.base import (
     BaseEmailCampaignProvider,
     EmailCampaignProviderError,
+    EmailProviderCapabilities,
 )
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,16 @@ API_BASE = "https://api.sendgrid.com/v3"
 class SendGridEmailCampaignProvider(BaseEmailCampaignProvider):
     name = "sendgrid"
     display_name = "SendGrid"
+    capabilities = EmailProviderCapabilities(
+        provider=name,
+        label=display_name,
+        integration_kind="marketing",
+        auth_type="api_key",
+        requires_sender=True,
+        supports_lists=True,
+        supports_unsubscribe_groups=True,
+        supports_direct_send=True,
+    )
 
     def __init__(self, api_key: str):
         self.api_key = (api_key or "").strip()
@@ -30,7 +41,7 @@ class SendGridEmailCampaignProvider(BaseEmailCampaignProvider):
                 error_code="not_connected",
             )
 
-    def _request(self, method: str, path: str, *, body=None):
+    def _request(self, method: str, path: str, *, body=None, action="draft"):
         data = None
         if body is not None:
             data = json.dumps(body).encode("utf-8")
@@ -62,17 +73,17 @@ class SendGridEmailCampaignProvider(BaseEmailCampaignProvider):
             if exc.code in (401, 403):
                 raise EmailCampaignProviderError(
                     "SendGrid needs to be connected with an API key that has "
-                    "Marketing Campaigns access.",
+                    "the required email access.",
                     error_code="authentication_failed",
                 ) from None
             if exc.code == 400:
                 raise EmailCampaignProviderError(
-                    "SendGrid couldn't create this draft. Check the selected "
-                    "sender, list, and unsubscribe group.",
+                    f"SendGrid couldn't {action} this email. Check the selected "
+                    "sender and recipient.",
                     error_code="invalid_configuration",
                 ) from None
             raise EmailCampaignProviderError(
-                "TopAI couldn't create the SendGrid draft. Try again.",
+                f"TopAI couldn't {action} the SendGrid email. Try again.",
                 error_code=f"http_{exc.code}",
                 uncertain=exc.code >= 500,
             ) from None
@@ -83,7 +94,7 @@ class SendGridEmailCampaignProvider(BaseEmailCampaignProvider):
                 path,
             )
             raise EmailCampaignProviderError(
-                "TopAI couldn't confirm whether SendGrid created the draft. "
+                f"TopAI couldn't confirm whether SendGrid {action}ed the email. "
                 "Check SendGrid before trying again.",
                 error_code="network_error",
                 uncertain=True,
@@ -116,6 +127,17 @@ class SendGridEmailCampaignProvider(BaseEmailCampaignProvider):
                 }
             )
         return result
+
+    def get_identity(self):
+        profile = self._request("GET", "/user/profile")
+        return {
+            "id": profile.get("username") or profile.get("email"),
+            "email": profile.get("email"),
+            "name": profile.get("first_name")
+            or profile.get("last_name")
+            or profile.get("username")
+            or "SendGrid",
+        }
 
     def get_lists(self):
         payload = self._request("GET", "/marketing/lists?page_size=1000")
@@ -196,7 +218,9 @@ class SendGridEmailCampaignProvider(BaseEmailCampaignProvider):
             payload["send_to"] = {"list_ids": selected_lists}
         # No list: omit send_to. Never set all=true.
 
-        result = self._request("POST", "/marketing/singlesends", body=payload)
+        result = self._request(
+            "POST", "/marketing/singlesends", body=payload, action="create"
+        )
         campaign_id = result.get("id")
         if not campaign_id:
             raise EmailCampaignProviderError(
@@ -210,4 +234,39 @@ class SendGridEmailCampaignProvider(BaseEmailCampaignProvider):
             "provider_status": result.get("status") or "draft",
             "warnings": result.get("warnings") or [],
             "has_recipients": bool(selected_lists),
+        }
+
+    def send_email(
+        self,
+        *,
+        to_email,
+        subject,
+        html_content,
+        plain_content,
+        sender_name=None,
+        sender_email=None,
+        **_,
+    ):
+        if not sender_email:
+            raise EmailCampaignProviderError(
+                "Choose a verified SendGrid sender before sending lead email.",
+                error_code="missing_sender",
+            )
+        payload = {
+            "personalizations": [{"to": [{"email": to_email}]}],
+            "from": {
+                "email": sender_email,
+                **({"name": sender_name} if sender_name else {}),
+            },
+            "subject": subject,
+            "content": [
+                {"type": "text/plain", "value": plain_content},
+                {"type": "text/html", "value": html_content},
+            ],
+            "categories": ["TopAI", "CRM Lead Email"],
+        }
+        result = self._request("POST", "/mail/send", body=payload, action="send")
+        return {
+            "provider_message_id": result.get("id"),
+            "provider_status": "sent",
         }
