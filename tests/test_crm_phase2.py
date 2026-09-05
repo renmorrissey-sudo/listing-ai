@@ -192,6 +192,62 @@ def test_needs_attention_resolve_requires_reason_for_opt_out(two_users):
     assert ok is True
 
 
+def test_resolved_overdue_task_is_not_recreated_by_queue_refresh(two_users):
+    u1, _ = two_users
+    lead_id = _lead(u1)
+    past = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    task_id, err = crm_db.create_task(
+        u1,
+        {
+            "lead_id": lead_id,
+            "title": "Call the lead",
+            "due_at": past,
+            "status": "open",
+        },
+    )
+    assert err is None
+    items = crm_db.list_needs_attention(u1)
+    alert = next(
+        item
+        for item in items
+        if item["reason_code"] == "task_overdue"
+        and item["source_ref_id"] == task_id
+    )
+
+    ok, err = crm_db.resolve_needs_attention(u1, alert["id"], "Handled")
+
+    assert ok is True and err is None
+    refreshed = crm_db.list_needs_attention(u1)
+    assert not any(
+        item["reason_code"] == "task_overdue"
+        and item["source_ref_id"] == task_id
+        for item in refreshed
+    )
+
+
+def test_resolved_overdue_follow_up_is_not_recreated_until_due_date_changes(two_users):
+    u1, _ = two_users
+    lead_id = _lead(u1)
+    past = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    result, err = crm_db.set_lead_follow_up(u1, lead_id, past, "Check in")
+    assert err is None and result
+    alert = next(
+        item
+        for item in crm_db.list_needs_attention(u1)
+        if item["reason_code"] == "follow_up_overdue"
+        and item["lead_id"] == lead_id
+    )
+
+    ok, err = crm_db.resolve_needs_attention(u1, alert["id"], "Called")
+
+    assert ok is True and err is None
+    assert not any(
+        item["reason_code"] == "follow_up_overdue"
+        and item["lead_id"] == lead_id
+        for item in crm_db.list_needs_attention(u1)
+    )
+
+
 def test_opt_out_cancels_suggested_drafts(two_users):
     u1, _ = two_users
     lead_id = _lead(u1)

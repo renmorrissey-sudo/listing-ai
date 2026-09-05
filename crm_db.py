@@ -2218,7 +2218,7 @@ def refresh_needs_attention(user_id, local_date=None):
     with get_db() as conn:
         overdue_followups = [dict(r) for r in conn.execute(
             """
-            SELECT id FROM leads
+            SELECT id, next_follow_up_at FROM leads
             WHERE user_id = ? AND next_follow_up_at IS NOT NULL AND next_follow_up_at < ?
               AND status != 'do_not_contact'
             """,
@@ -2235,7 +2235,7 @@ def refresh_needs_attention(user_id, local_date=None):
         ).fetchall()]
         missing_outcomes = [dict(r) for r in conn.execute(
             """
-            SELECT id, lead_id FROM appointments
+            SELECT id, lead_id, end_at FROM appointments
             WHERE user_id = ? AND status IN ('scheduled', 'confirmed')
               AND outcome IS NULL AND end_at IS NOT NULL AND end_at < ?
             """,
@@ -2243,16 +2243,52 @@ def refresh_needs_attention(user_id, local_date=None):
         ).fetchall()]
         stale = [dict(r) for r in conn.execute(
             """
-            SELECT id FROM leads
+            SELECT id, created_at FROM leads
             WHERE user_id = ? AND status = 'new'
               AND last_outbound_at IS NULL AND created_at < ?
             """,
             (user_id, cutoff),
         ).fetchall()]
+        resolved_rows = [dict(r) for r in conn.execute(
+            """
+            SELECT lead_id, reason_code, source_ref_type, source_ref_id,
+                   MAX(resolved_at) AS resolved_at
+            FROM needs_attention
+            WHERE user_id = ? AND status = 'resolved'
+            GROUP BY lead_id, reason_code, source_ref_type, source_ref_id
+            """,
+            (user_id,),
+        ).fetchall()]
+
+    resolved_at = {
+        (row["lead_id"], row["reason_code"]): row.get("resolved_at") or ""
+        for row in resolved_rows
+    }
+    resolved_source_at = {
+        (row["reason_code"], row.get("source_ref_type"), row.get("source_ref_id")):
+            row.get("resolved_at")
+        for row in resolved_rows
+        if row.get("source_ref_type") and row.get("source_ref_id") is not None
+    }
+
+    def resolved_after(resolved_value, condition_value):
+        resolved_dt = parse_iso_dt(resolved_value)
+        condition_dt = parse_iso_dt(condition_value)
+        return bool(resolved_dt and condition_dt and resolved_dt >= condition_dt)
 
     for lead in overdue_followups:
+        if resolved_after(
+            resolved_at.get((lead["id"], "follow_up_overdue")),
+            lead.get("next_follow_up_at"),
+        ):
+            continue
         upsert_needs_attention(user_id, lead["id"], "follow_up_overdue", priority="high")
     for task in overdue_tasks:
+        if resolved_after(
+            resolved_source_at.get(("task_overdue", "task", task["id"])),
+            task.get("due_at"),
+        ):
+            continue
         due_label = (task.get("due_at") or "")[:10]
         title = (task.get("title") or "Task").strip()
         upsert_needs_attention(
@@ -2265,11 +2301,23 @@ def refresh_needs_attention(user_id, local_date=None):
             reason_text=f"Task overdue: {title}" + (f" (due {due_label})" if due_label else ""),
         )
     for appt in missing_outcomes:
+        if resolved_after(
+            resolved_source_at.get(
+                ("appointment_outcome_missing", "appointment", appt["id"])
+            ),
+            appt.get("end_at"),
+        ):
+            continue
         upsert_needs_attention(
             user_id, appt["lead_id"], "appointment_outcome_missing", priority="high",
             source_ref_type="appointment", source_ref_id=appt["id"],
         )
     for lead in stale:
+        if resolved_after(
+            resolved_at.get((lead["id"], "no_first_contact")),
+            lead.get("created_at"),
+        ):
+            continue
         upsert_needs_attention(user_id, lead["id"], "no_first_contact", priority="normal")
 
 

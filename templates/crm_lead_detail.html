@@ -326,9 +326,9 @@
         {% if needs %}
         <div class="card" id="needs-panel">
           <h2>Open Needs Attention</h2>
-          <ul class="timeline">
+          <ul class="timeline" id="needs-list">
             {% for item in needs %}
-            <li>
+            <li id="need-item-{{ item.id }}">
               <span class="pill warn">{{ item.priority }}</span> {{ item.reason_text }}
               <div class="row" style="margin-top:6px;">
                 <input id="na-{{ item.id }}" placeholder="Resolution reason" />
@@ -470,7 +470,11 @@
       });
       const data = await res.json();
       if (!res.ok) return showFlash(data.error || 'Failed', true);
-      location.reload();
+      document.getElementById(`need-item-${id}`)?.remove();
+      if (!document.querySelector('#needs-list li')) {
+        document.getElementById('needs-panel')?.remove();
+      }
+      showFlash('Needs Attention item resolved.');
     }
     async function saveLeadEmail() {
       const email = document.getElementById('lead-email').value.trim();
