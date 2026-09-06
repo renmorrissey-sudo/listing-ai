@@ -163,7 +163,7 @@ def test_external_next_rejected_on_login(app_client, two_users):
         assert res.status_code in (301, 302), bad
         loc = res.headers["Location"]
         assert "evil.example" not in loc, loc
-        assert loc.endswith("/app") or loc.rstrip("/").endswith("/app")
+        assert loc.endswith("/dashboard") or loc.rstrip("/").endswith("/dashboard")
 
 
 def test_safe_next_url_helper():
@@ -194,13 +194,25 @@ def test_marketing_sign_in_not_stripe_checkout(app_client):
             assert 'href="/login"' in tag or "href='/login'" in tag
 
 
-def test_login_success_uses_validated_next(app_client, two_users):
+def test_login_success_always_redirects_to_dashboard(app_client, two_users):
     u1, _ = two_users
     email = db.get_user_by_id(u1)["email"]
     res = app_client.post(
-        "/login?next=/dashboard",
-        data={"email": email, "password": "password123"},
+        "/login?next=/app",
+        data={"email": email, "password": "password123", "next": "/billing"},
         follow_redirects=False,
     )
     assert res.status_code in (301, 302)
-    assert "/dashboard" in res.headers["Location"]
+    assert res.headers["Location"].endswith("/dashboard")
+
+
+def test_logged_in_login_route_always_redirects_to_dashboard(app_client, two_users):
+    u1, _ = two_users
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+        sess["session_version"] = 1
+
+    res = app_client.get("/login?next=/app", follow_redirects=False)
+
+    assert res.status_code in (301, 302)
+    assert res.headers["Location"].endswith("/dashboard")

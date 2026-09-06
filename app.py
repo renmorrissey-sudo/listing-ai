@@ -584,7 +584,7 @@ def verify():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if auth.get_current_user():
-        return redirect(auth.safe_next_url(request.args.get("next") or "/app"))
+        return redirect(url_for("dashboard"))
     error = None
     password_updated = request.args.get("password_updated") == "1" or request.args.get("reset") == "1"
     if request.method == "POST":
@@ -593,11 +593,7 @@ def login():
         user = db.get_user_by_email(email)
         if user and auth.verify_password(user["password_hash"], password):
             auth.login_user(user["id"])
-            return redirect(
-                auth.safe_next_url(
-                    request.args.get("next") or request.form.get("next") or "/app"
-                )
-            )
+            return redirect(url_for("dashboard"))
         error = "Invalid email or password."
     if registration_gate.registration_is_open():
         footer_text = 'No account? <a href="/subscribe">Create account</a>'

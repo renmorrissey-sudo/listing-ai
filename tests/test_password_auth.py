@@ -187,7 +187,7 @@ def test_malformed_token_rejected(app_client):
     assert b"invalid or has expired" in res.data
 
 
-def test_login_success_redirects_to_app(app_client, two_users):
+def test_login_success_redirects_to_dashboard_even_with_app_next(app_client, two_users):
     u1, _ = two_users
     email = db.get_user_by_id(u1)["email"]
     res = app_client.post(
@@ -196,7 +196,7 @@ def test_login_success_redirects_to_app(app_client, two_users):
         follow_redirects=False,
     )
     assert res.status_code in (301, 302)
-    assert "/app" in res.headers["Location"]
+    assert res.headers["Location"].endswith("/dashboard")
 
 
 def test_unauthenticated_app_redirects_to_login(app_client):
