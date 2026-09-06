@@ -16,6 +16,7 @@ import db
 from datetime import datetime, timedelta, timezone
 
 import listing_generations_db as listing_db
+import call_scripts_db
 import email_marketing_db as email_marketing_db
 import sms_coach
 from crm import crm_bp
@@ -436,7 +437,13 @@ DETAILS:
 - Agent name: {data.get("agent_name", "your agent")}
 - Key benefit to mention: {data.get("key_benefit", "top market prices and fast closings")}
 
-Generate exactly three sections, clearly labeled:
+Generate exactly four sections, clearly labeled:
+
+---AREA OVERVIEW---
+Provide a concise real estate overview of the target area. Cover typical housing stock, buyer appeal,
+seller considerations, notable location or lifestyle factors, and 3 useful local talking points.
+Use qualitative language only. Do not invent current prices, inventory, sales counts, school ratings,
+demographics, or other live statistics. End with: "Verify current market data with your MLS and local sources."
 
 ---OPENING SCRIPT---
 Write a natural, confident cold call opening (about 100 words). Include a strong hook, quick value proposition, and a soft question to engage the seller. Sound human, not robotic.
@@ -450,6 +457,24 @@ Each response should be 2-4 sentences, confident but not pushy.
 
 ---VOICEMAIL SCRIPT---
 Write a 20-second voicemail script that sounds natural and gets a callback. Include agent name and a specific reason to call back."""
+
+
+def build_area_overview_prompt(area):
+    return f"""You are a careful real estate market research assistant.
+
+TARGET AREA: {area}
+
+Provide a concise, practical overview for a real estate agent. Include:
+- Area orientation and character
+- Typical housing stock
+- Buyer appeal
+- Seller considerations
+- Notable location or lifestyle factors
+- Three useful conversation starters
+
+Use qualitative language only. Do not invent current prices, inventory, sales counts, school ratings,
+demographics, commute times, or other live statistics. If the area is ambiguous, say what location
+detail is needed. End with: "Verify current market data with your MLS and local sources."""
 
 
 def _extract_section(text, start_marker, end_marker):
@@ -2619,20 +2644,76 @@ def generate_script():
     try:
         message = client.messages.create(
             model=config.CLAUDE_MODEL,
-            max_tokens=1200,
+            max_tokens=1800,
             messages=[{"role": "user", "content": build_script_prompt(cleaned)}],
         )
         raw = message.content[0].text
+        overview = _extract_section(raw, "AREA OVERVIEW", "OPENING SCRIPT")
         opening = _extract_section(raw, "OPENING SCRIPT", "OBJECTION HANDLERS")
         objections = _extract_section(raw, "OBJECTION HANDLERS", "VOICEMAIL SCRIPT")
         voicemail = _extract_section(raw, "VOICEMAIL SCRIPT", None)
         user = auth.get_current_user()
+        response_body = {
+            "overview": overview.strip(),
+            "opening": opening.strip(),
+            "objections": objections.strip(),
+            "voicemail": voicemail.strip(),
+        }
         if user:
             db.record_tool_usage(user["id"], "cold_call_scripts", "generated")
-        return jsonify({"opening": opening.strip(), "objections": objections.strip(), "voicemail": voicemail.strip()})
+            try:
+                generation = call_scripts_db.create_generation(
+                    user["id"], inputs=cleaned, outputs=response_body
+                )
+                response_body["generation_id"] = generation["id"]
+                response_body["created_at"] = generation["created_at"]
+            except Exception:
+                logger.exception("Failed to save Call Script generation for user %s", user["id"])
+                response_body["save_warning"] = "The scripts were generated but could not be saved to History."
+        return jsonify(response_body)
     except Exception:
         logger.exception("Script generation failed")
         return jsonify({"error": "Generation failed. Please try again."}), 500
+
+
+@app.route("/target-area-overview", methods=["POST"])
+@auth.subscription_required
+@limiter.limit("10 per minute", key_func=_user_rate_limit_key)
+@limiter.limit("100 per day", key_func=_user_rate_limit_key)
+def target_area_overview():
+    data = request.get_json(silent=True) or {}
+    area = str(data.get("area") or "").strip()[:300]
+    if not area:
+        return jsonify({"error": "Target area is required"}), 400
+    try:
+        message = client.messages.create(
+            model=config.CLAUDE_MODEL,
+            max_tokens=900,
+            messages=[{"role": "user", "content": build_area_overview_prompt(area)}],
+        )
+        return jsonify({"area": area, "overview": message.content[0].text.strip()})
+    except Exception:
+        logger.exception("Target Area overview lookup failed")
+        return jsonify({"error": "Area lookup failed. Please try again."}), 500
+
+
+@app.route("/call-scripts", methods=["GET"])
+@auth.subscription_required
+def call_script_history():
+    user = auth.get_current_user()
+    area = str(request.args.get("area") or "").strip()[:300]
+    items = call_scripts_db.search_history(user["id"], area=area, limit=50)
+    return jsonify({"items": items, "area": area})
+
+
+@app.route("/call-scripts/<int:generation_id>", methods=["GET"])
+@auth.subscription_required
+def call_script_history_item(generation_id):
+    user = auth.get_current_user()
+    item = call_scripts_db.get_by_id(user["id"], generation_id)
+    if not item:
+        return jsonify({"error": "Call Script run not found"}), 404
+    return jsonify({"generation": item})
 
 
 if __name__ == "__main__":

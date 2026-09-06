@@ -62,8 +62,8 @@
     .spinner { width: 18px; height: 18px; border: 2.5px solid rgba(255,255,255,0.4); border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite; display: none; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .results-panel { display: flex; flex-direction: column; }
-    .tabs { display: flex; border-bottom: 2px solid #e0e4ed; }
-    .tab { padding: 10px 18px; font-size: 13px; font-weight: 600; color: #778; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: color 0.15s; }
+    .tabs { display: flex; border-bottom: 2px solid #e0e4ed; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .tab { flex: 0 0 auto; padding: 10px 18px; font-size: 13px; font-weight: 600; color: #778; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: color 0.15s; white-space: nowrap; }
     .tab.active { color: #4f8ef7; border-bottom-color: #4f8ef7; }
     .tab:hover:not(.active) { color: #445; }
     .tab-content { display: none; padding-top: 20px; }
@@ -98,6 +98,26 @@
     .recent-listing-row:last-child { border-bottom: none; }
     .recent-listing-address { font-weight: 600; font-size: 13.5px; }
     .recent-listing-meta { color: #889; font-size: 12px; margin-top: 2px; }
+    .card-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+    .card-title-row h2 { margin-bottom: 0; }
+    .area-actions { display: flex; align-items: center; gap: 10px; margin: -5px 0 14px; flex-wrap: wrap; }
+    .area-overview-preview { display: none; margin: 0 0 14px; padding: 14px; border: 1.5px solid #bfdbfe; border-radius: 8px; background: #eff6ff; color: #27364d; font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+    .area-overview-preview strong { display: block; color: #1d4ed8; margin-bottom: 6px; }
+    .script-save-note { margin-bottom: 10px; color: #15803d; font-size: 12px; font-weight: 600; }
+    .history-dialog { width: min(720px, calc(100% - 24px)); max-height: min(760px, calc(100vh - 32px)); margin: auto; padding: 0; border: 0; border-radius: 14px; box-shadow: 0 24px 64px rgba(15,23,42,.35); }
+    .history-dialog::backdrop { background: rgba(15,23,42,.62); }
+    .history-dialog-inner { padding: 22px; }
+    .history-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
+    .history-dialog-header h2 { margin: 0 0 4px; font-size: 18px; }
+    .history-dialog-header p { color: #667; font-size: 12px; }
+    .history-close { border: 0; background: #eef2f7; border-radius: 999px; width: 34px; height: 34px; cursor: pointer; font-size: 20px; line-height: 1; }
+    .history-search { display: flex; gap: 8px; margin-bottom: 14px; }
+    .history-search input { flex: 1; min-width: 0; padding: 9px 12px; border: 1.5px solid #e0e4ed; border-radius: 7px; font-size: 14px; }
+    .script-history-list { max-height: 520px; overflow-y: auto; }
+    .script-history-item { width: 100%; display: block; padding: 13px; margin-bottom: 9px; border: 1.5px solid #e0e4ed; border-radius: 9px; background: #fff; color: #2a2a3e; text-align: left; cursor: pointer; }
+    .script-history-item:hover, .script-history-item:focus-visible { border-color: #4f8ef7; background: #f8fbff; outline: none; }
+    .script-history-area { font-weight: 700; font-size: 14px; }
+    .script-history-meta { margin-top: 4px; color: #667; font-size: 12px; }
     .social-post-area { margin-top: 16px; padding-top: 16px; border-top: 1px solid #eef2f7; }
     .email-campaign-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
     .email-campaign-actions .copy-btn { margin-top: 0; }
@@ -195,6 +215,7 @@
       main { margin: 20px auto; padding: 0 12px; }
       .card { padding: 20px; border-radius: 10px; }
       .form-row { grid-template-columns: 1fr; gap: 0; }
+      .history-search { align-items: stretch; }
     }
   </style>
 </head>
@@ -308,9 +329,17 @@
 <div id="tool-coldcall" class="tool-page">
   <main>
     <div class="card">
-      <h2>Call Details</h2>
+      <div class="card-title-row">
+        <h2>Call Details</h2>
+        <button type="button" class="btn secondary" id="script-history-btn">History</button>
+      </div>
       <form id="script-form">
         <div class="form-group"><label>Target Area / Neighborhood *</label><input type="text" name="area" placeholder="e.g. Westlake Hills, Austin TX" required /></div>
+        <div class="area-actions">
+          <button type="button" class="btn secondary" id="area-lookup-btn">Look Up Target Area</button>
+          <span class="muted" id="area-lookup-status" style="font-size:12px;"></span>
+        </div>
+        <div class="area-overview-preview" id="area-overview-preview"><strong>Target Area Overview</strong><span id="area-overview-text"></span></div>
         <div class="form-row">
           <div class="form-group"><label>Property Type</label><select name="property_type"><option>Single Family</option><option>Condo / Townhome</option><option>Multi-Family</option><option>Luxury Home</option><option>Land / Lot</option></select></div>
           <div class="form-group"><label>Seller Situation</label><select name="situation"><option>General Farming</option><option>Expired Listing</option><option>FSBO (For Sale By Owner)</option><option>Absentee Owner</option><option>Just Sold Nearby</option></select></div>
@@ -321,8 +350,21 @@
         <button type="submit" class="btn-generate" id="script-btn"><div class="spinner" id="script-spinner"></div><span id="script-btn-label">Generate Scripts</span></button>
       </form>
     </div>
-    <div class="card results-panel"><div class="placeholder" id="script-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.82 19.79 19.79 0 011 1.18 2 2 0 013 1h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L7.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg><p>Fill in the call details<br/>and click Generate Scripts</p></div><div id="script-output" style="display:none;"><div class="tabs"><div class="tab active" data-group="script" data-tab="sopening">Opening</div><div class="tab" data-group="script" data-tab="sobjections">Objections</div><div class="tab" data-group="script" data-tab="svoicemail">Voicemail</div></div><div class="tab-content active" id="tab-sopening"><div class="output-box" id="out-opening"></div><button class="copy-btn" data-target="out-opening">Copy</button></div><div class="tab-content" id="tab-sobjections"><div class="output-box" id="out-objections"></div><button class="copy-btn" data-target="out-objections">Copy</button></div><div class="tab-content" id="tab-svoicemail"><div class="output-box" id="out-voicemail"></div><button class="copy-btn" data-target="out-voicemail">Copy</button></div></div></div>
+    <div class="card results-panel"><div class="placeholder" id="script-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.82 19.79 19.79 0 011 1.18 2 2 0 013 1h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L7.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg><p>Fill in the call details<br/>and click Generate Scripts</p></div><div id="script-output" style="display:none;"><div class="script-save-note" id="script-save-note"></div><div class="tabs"><div class="tab active" data-group="script" data-tab="soverview">Area Overview</div><div class="tab" data-group="script" data-tab="sopening">Opening</div><div class="tab" data-group="script" data-tab="sobjections">Objections</div><div class="tab" data-group="script" data-tab="svoicemail">Voicemail</div></div><div class="tab-content active" id="tab-soverview"><div class="output-box" id="out-overview"></div><button class="copy-btn" data-target="out-overview">Copy</button></div><div class="tab-content" id="tab-sopening"><div class="output-box" id="out-opening"></div><button class="copy-btn" data-target="out-opening">Copy</button></div><div class="tab-content" id="tab-sobjections"><div class="output-box" id="out-objections"></div><button class="copy-btn" data-target="out-objections">Copy</button></div><div class="tab-content" id="tab-svoicemail"><div class="output-box" id="out-voicemail"></div><button class="copy-btn" data-target="out-voicemail">Copy</button></div></div></div>
   </main>
+  <dialog class="history-dialog" id="script-history-dialog">
+    <div class="history-dialog-inner">
+      <div class="history-dialog-header">
+        <div><h2>Call Script History</h2><p>Search prior runs by Target Area, then select one to reopen it.</p></div>
+        <button type="button" class="history-close" id="script-history-close" aria-label="Close history">&times;</button>
+      </div>
+      <form class="history-search" id="script-history-search-form">
+        <input type="search" id="script-history-search" placeholder="Search Target Area" aria-label="Search Call Script history by Target Area" />
+        <button type="submit" class="btn primary">Search</button>
+      </form>
+      <div class="script-history-list" id="script-history-list"><p class="muted">Loading...</p></div>
+    </div>
+  </dialog>
 </div>
 
 <div id="tool-voice" class="tool-page">
@@ -1193,7 +1235,7 @@
     tab.addEventListener('click', () => {
       const group = tab.dataset.group;
       const target = tab.dataset.tab;
-      const allTabs = group === 'listing' ? ['ldesc','lsocial','lemail'] : ['sopening','sobjections','svoicemail'];
+      const allTabs = group === 'listing' ? ['ldesc','lsocial','lemail'] : ['soverview','sopening','sobjections','svoicemail'];
       document.querySelectorAll(`.tab[data-group="${group}"]`).forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
       allTabs.forEach(id => { const el = document.getElementById('tab-' + id); if (el) el.classList.toggle('active', id === target); });
@@ -1570,6 +1612,118 @@
     if (listingId) openListing(listingId);
   }
 
+  function renderScriptOutput(item, options = {}) {
+    document.getElementById('out-overview').textContent = item.overview || item.area_overview || 'No area overview was saved for this run.';
+    document.getElementById('out-opening').textContent = item.opening || item.opening_script || '';
+    document.getElementById('out-objections').textContent = item.objections || item.objection_handlers || '';
+    document.getElementById('out-voicemail').textContent = item.voicemail || item.voicemail_script || '';
+    document.getElementById('script-placeholder').style.display = 'none';
+    document.getElementById('script-output').style.display = 'block';
+    const note = document.getElementById('script-save-note');
+    if (item.save_warning) {
+      note.textContent = item.save_warning;
+      note.style.color = '#c2410c';
+    } else if (options.fromHistory) {
+      note.textContent = `History · ${item.target_area || ''}${item.created_at ? ' · ' + new Date(item.created_at).toLocaleString() : ''}`;
+      note.style.color = '#15803d';
+    } else if (item.generation_id) {
+      note.textContent = 'Saved to Call Script History.';
+      note.style.color = '#15803d';
+    } else {
+      note.textContent = '';
+    }
+    document.querySelector('.tab[data-group="script"][data-tab="soverview"]')?.click();
+  }
+
+  async function lookUpTargetArea() {
+    const form = document.getElementById('script-form');
+    const area = (form.elements.area.value || '').trim();
+    const button = document.getElementById('area-lookup-btn');
+    const status = document.getElementById('area-lookup-status');
+    const preview = document.getElementById('area-overview-preview');
+    if (!area) {
+      status.textContent = 'Enter a Target Area first.';
+      form.elements.area.focus();
+      return;
+    }
+    button.disabled = true;
+    status.textContent = 'Researching area...';
+    try {
+      const result = await fetchJson('/target-area-overview', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({area})
+      });
+      if (!result) return;
+      document.getElementById('area-overview-text').textContent = result.overview;
+      preview.style.display = 'block';
+      status.textContent = 'Overview ready.';
+    } catch (err) {
+      status.textContent = err.message;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function loadScriptHistory(area = '') {
+    const list = document.getElementById('script-history-list');
+    list.innerHTML = '<p class="muted">Loading...</p>';
+    try {
+      const data = await fetchJson(`/call-scripts?area=${encodeURIComponent(area)}`, {cache:'no-store'});
+      if (!data) return;
+      if (!data.items.length) {
+        list.innerHTML = `<p class="muted">${area ? 'No prior runs match that Target Area.' : 'No Call Script runs have been saved yet.'}</p>`;
+        return;
+      }
+      list.innerHTML = data.items.map(item => `
+        <button type="button" class="script-history-item" data-script-id="${item.id}">
+          <div class="script-history-area">${escapeHtmlText(item.target_area)}</div>
+          <div class="script-history-meta">${escapeHtmlText(item.property_type || 'Property type not specified')} · ${escapeHtmlText(item.situation || 'Situation not specified')} · ${escapeHtmlText(new Date(item.created_at).toLocaleString())}</div>
+        </button>`).join('');
+    } catch (err) {
+      list.innerHTML = `<p class="muted" style="color:#b91c1c;">${escapeHtmlText(err.message)}</p>`;
+    }
+  }
+
+  async function openScriptHistoryItem(id) {
+    try {
+      const data = await fetchJson(`/call-scripts/${id}`, {cache:'no-store'});
+      if (!data) return;
+      const item = data.generation;
+      const form = document.getElementById('script-form');
+      form.elements.area.value = item.target_area || '';
+      form.elements.property_type.value = item.property_type || 'Single Family';
+      form.elements.situation.value = item.situation || 'General Farming';
+      form.elements.agent_name.value = item.agent_name || '';
+      form.elements.key_benefit.value = item.key_benefit || '';
+      renderScriptOutput(item, {fromHistory:true});
+      document.getElementById('script-history-dialog').close();
+      document.getElementById('script-output').scrollIntoView({behavior:'smooth', block:'start'});
+    } catch (err) {
+      document.getElementById('script-history-list').innerHTML = `<p class="muted" style="color:#b91c1c;">${escapeHtmlText(err.message)}</p>`;
+    }
+  }
+
+  document.getElementById('area-lookup-btn').addEventListener('click', lookUpTargetArea);
+  document.getElementById('script-form').elements.area.addEventListener('input', () => {
+    document.getElementById('area-overview-preview').style.display = 'none';
+    document.getElementById('area-lookup-status').textContent = '';
+  });
+  document.getElementById('script-history-btn').addEventListener('click', () => {
+    const dialog = document.getElementById('script-history-dialog');
+    dialog.showModal();
+    const area = (document.getElementById('script-form').elements.area.value || '').trim();
+    document.getElementById('script-history-search').value = area;
+    loadScriptHistory(area);
+  });
+  document.getElementById('script-history-close').addEventListener('click', () => document.getElementById('script-history-dialog').close());
+  document.getElementById('script-history-search-form').addEventListener('submit', e => {
+    e.preventDefault();
+    loadScriptHistory(document.getElementById('script-history-search').value.trim());
+  });
+  document.getElementById('script-history-list').addEventListener('click', e => {
+    const button = e.target.closest('[data-script-id]');
+    if (button) openScriptHistoryItem(button.dataset.scriptId);
+  });
+
   document.getElementById('script-form').addEventListener('submit', async e => {
     e.preventDefault();
     const btn = document.getElementById('script-btn');
@@ -1585,11 +1739,7 @@
       const result = await res.json();
       if (!res.ok) { errEl.textContent = result.error; errEl.style.display = 'block'; }
       else {
-        document.getElementById('out-opening').textContent = result.opening;
-        document.getElementById('out-objections').textContent = result.objections;
-        document.getElementById('out-voicemail').textContent = result.voicemail;
-        document.getElementById('script-placeholder').style.display = 'none';
-        document.getElementById('script-output').style.display = 'block';
+        renderScriptOutput(result);
       }
     } catch { errEl.textContent = 'Network error.'; errEl.style.display = 'block'; }
     btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Generate Scripts';
