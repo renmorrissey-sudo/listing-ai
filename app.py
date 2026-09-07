@@ -26,6 +26,7 @@ from source_roi_routes import source_roi_bp
 from email_marketing_routes import email_marketing_bp
 from sms_campaigns import sms_campaigns_bp
 from social_routes import social_bp
+from cma_routes import cma_bp
 from sms_prompts import build_sms_prompt
 from social_content import build_social_content_snapshot
 from sms_provider import (
@@ -105,6 +106,7 @@ app.register_blueprint(source_roi_bp)
 app.register_blueprint(email_marketing_bp)
 app.register_blueprint(sms_campaigns_bp)
 app.register_blueprint(social_bp)
+app.register_blueprint(cma_bp)
 client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 if config.STRIPE_SECRET_KEY:

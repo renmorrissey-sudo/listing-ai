@@ -21,6 +21,7 @@ APP_NAV_LINKS = [
     ("Listing Archive", "/listings/archive"),
     ("Cold Call Scripts", "/app#coldcall"),
     ("Research", "/research"),
+    ("CMA Generator", "/cma"),
     ("AI Calling Assistant", "/app#voice"),
     ("AI SMS Assistant", "/app#sms"),
     ("Bulk SMS", "/crm/sms-campaigns"),
@@ -136,6 +137,9 @@ def test_active_nav_state(app_client, two_users):
 
     research_html = app_client.get("/research").get_data(as_text=True)
     assert re.search(r'href="/research"\s+class="active"', research_html)
+
+    cma_html = app_client.get("/cma").get_data(as_text=True)
+    assert re.search(r'href="/cma"\s+class="active"', cma_html)
 
 
 def test_logo_links_to_dashboard(app_client, two_users):

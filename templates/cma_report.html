@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>CMA - {{ report.subject_address }} - {{ product_name }}</title>
+  {% include 'crm_base_styles.html' %}
+  <style>
+    .report-actions { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+    .report-cover { padding: 30px; background: linear-gradient(135deg, #172554, #1d4ed8); color: white; }
+    .report-cover h1 { margin-bottom: 3px; color: white; }
+    .report-cover .location { color: #dbeafe; font-size: 17px; }
+    .report-cover-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 17px; }
+    .report-cover-meta span { padding: 5px 10px; border: 1px solid rgba(255,255,255,.3); border-radius: 999px; color: #eff6ff; font-size: 11px; font-weight: 700; }
+    .value-grid { display: grid; grid-template-columns: 1.2fr repeat(3, 1fr); gap: 10px; }
+    .value-card { padding: 15px; border: 1px solid #dfe7f3; border-radius: 10px; background: #fbfdff; }
+    .value-card.primary { border-color: #93c5fd; background: #eff6ff; }
+    .value-label { color: #667; font-size: 10px; font-weight: 800; letter-spacing: .35px; text-transform: uppercase; }
+    .value-number { margin-top: 4px; color: #172554; font-size: 22px; font-weight: 850; }
+    .value-detail { margin-top: 2px; color: #667; font-size: 11px; }
+    .subject-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+    .subject-item { padding: 10px; border-radius: 8px; background: #f8fafc; }
+    .subject-item span { display: block; color: #778; font-size: 10px; text-transform: uppercase; }
+    .subject-item strong { color: #27364d; font-size: 13px; }
+    .comp-table-wrap { overflow-x: auto; }
+    .comp-address { min-width: 180px; font-weight: 750; color: #172554; }
+    .score { display: inline-block; min-width: 42px; padding: 3px 7px; border-radius: 999px; background: #ecfdf5; color: #047857; text-align: center; font-size: 11px; font-weight: 800; }
+    .match-reasons { margin-top: 4px; color: #667; font-size: 10px; }
+    .methodology { border-left: 4px solid #3b82f6; background: #eff6ff; }
+    .methodology p, .disclosure p { margin: 6px 0 0; color: #52637a; font-size: 12px; }
+    .disclosure { border-left: 4px solid #f59e0b; background: #fffbeb; }
+    .disclosure h2 { color: #713f12; }
+    @media (max-width: 760px) {
+      .value-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .subject-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media print {
+      body { background: white; color: black; }
+      header, .tool-nav-bar, .subscriber-footer, .report-actions, #topai-live-launcher, #topai-live-drawer { display: none !important; }
+      main { max-width: none; margin: 0; padding: 0; }
+      .card { break-inside: avoid; box-shadow: none; border: 1px solid #d1d5db; margin-bottom: 12px; }
+      .report-cover { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      .comp-table-wrap { overflow: visible; }
+      table { font-size: 10px; }
+      th, td { padding: 6px 4px; }
+    }
+  </style>
+</head>
+<body>
+  {% set page_tagline = 'Competitive Market Analysis' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <div class="report-actions">
+      <a class="btn secondary" href="/cma">&larr; Create another CMA</a>
+      <button class="btn" type="button" onclick="window.print()">Print / Save PDF</button>
+    </div>
+
+    <section class="card report-cover">
+      <div class="pill">Competitive Market Analysis</div>
+      <h1>{{ report.subject_address }}</h1>
+      <div class="location">{{ report.city }}, {{ report.state }}</div>
+      {% if report.prospect_name %}<p>Prepared for {{ report.prospect_name }}</p>{% endif %}
+      <div class="report-cover-meta">
+        <span>{{ report.criteria.prospect_type_label }} prospect</span>
+        <span>{{ report.criteria.date_range_months }}-month sale window</span>
+        <span>{{ report.analysis.selected_count }} selected comparables</span>
+        <span>Prepared {{ report.criteria.report_date }}</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Pricing overview</h2>
+      <div class="value-grid">
+        <div class="value-card primary"><div class="value-label">Size-adjusted indication</div><div class="value-number">{{ money(report.analysis.indicated_value) }}</div><div class="value-detail">Weighted by comparable similarity</div></div>
+        <div class="value-card"><div class="value-label">Indicated range</div><div class="value-number" style="font-size:17px">{{ money(report.analysis.indicated_range_low) }}–{{ money(report.analysis.indicated_range_high) }}</div><div class="value-detail">Comparable $/sq. ft. applied to target size</div></div>
+        <div class="value-card"><div class="value-label">Median sale price</div><div class="value-number">{{ money(report.analysis.median_sale_price) }}</div><div class="value-detail">Selected closed sales</div></div>
+        <div class="value-card"><div class="value-label">Average $/sq. ft.</div><div class="value-number">{{ money(report.analysis.average_price_per_sqft) }}</div><div class="value-detail">Confidence: {{ report.analysis.confidence }}</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Target property criteria</h2>
+      <div class="subject-grid">
+        <div class="subject-item"><span>Property type</span><strong>{{ report.criteria.property_type_label }}</strong></div>
+        <div class="subject-item"><span>Bedrooms</span><strong>{{ report.criteria.beds }}</strong></div>
+        <div class="subject-item"><span>Bathrooms</span><strong>{{ report.criteria.baths }}</strong></div>
+        <div class="subject-item"><span>Square feet</span><strong>{{ number(report.criteria.sqft) }}</strong></div>
+        <div class="subject-item"><span>Sale cutoff</span><strong>{{ report.criteria.date_cutoff }}</strong></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Selected comparable sales</h2>
+      <p class="muted" style="font-size:12px">Ranked by property type, living-area similarity, bed/bath count, distance when supplied, and recency.</p>
+      <div class="comp-table-wrap">
+        <table>
+          <thead><tr><th>Rank / Property</th><th>Sold</th><th>Price</th><th>Beds / Baths</th><th>Sq. ft.</th><th>$/sq. ft.</th><th>Distance</th><th>Match</th></tr></thead>
+          <tbody>
+            {% for comp in report.selected_comparables %}
+            <tr>
+              <td><div class="comp-address">{{ comp.rank }}. {{ comp.address }}</div><div class="match-reasons">{{ comp.match_reasons|join(' · ') }}</div>{% if comp.notes %}<div class="match-reasons">{{ comp.notes }}</div>{% endif %}</td>
+              <td>{{ comp.sale_date }}</td>
+              <td>{{ money(comp.sale_price) }}</td>
+              <td>{{ comp.beds }} / {{ comp.baths }}</td>
+              <td>{{ number(comp.sqft) }}<div class="match-reasons">{{ '%+.1f'|format(comp.size_delta_pct) }}%</div></td>
+              <td>{{ money(comp.price_per_sqft) }}</td>
+              <td>{% if comp.distance_miles is not none %}{{ comp.distance_miles }} mi{% else %}&mdash;{% endif %}</td>
+              <td><span class="score">{{ comp.similarity_score }}</span></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card methodology">
+      <h2>How this CMA was calculated</h2>
+      <p>TopAI evaluated {{ report.analysis.candidate_count }} agent-supplied sale{% if report.analysis.candidate_count != 1 %}s{% endif %}; {{ report.analysis.eligible_count }} fell inside the selected date window and the {{ report.analysis.selected_count }} closest matches were retained. The size-adjusted indication applies each selected sale's price per square foot to the target property's {{ number(report.criteria.sqft) }} square feet, then weights those indications by similarity. {{ report.analysis.excluded_count }} candidate{% if report.analysis.excluded_count != 1 %}s were{% else %} was{% endif %} excluded by date.</p>
+    </section>
+
+    <section class="card disclosure">
+      <h2>Important CMA disclosure</h2>
+      <p>This is a comparative market analysis, not an appraisal or guarantee of market value. It is based entirely on property facts and closed-sale data supplied by the real estate professional. Verify all facts, concessions, condition differences, geographic boundaries, and sale records in the local MLS and public records before presenting or relying on this report.</p>
+    </section>
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+</body>
+</html>

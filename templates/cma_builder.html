@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>CMA Generator - {{ product_name }}</title>
+  {% include 'crm_base_styles.html' %}
+  <style>
+    .cma-hero { padding: 26px; background: linear-gradient(135deg, #172554, #1d4ed8); color: white; }
+    .cma-hero h1 { color: white; }
+    .cma-hero p { margin: 5px 0 0; max-width: 790px; color: #dbeafe; }
+    .step-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; }
+    .step-number { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 999px; background: #2563eb; color: white; font-size: 12px; font-weight: 800; }
+    .step-heading h2 { margin: 0; }
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
+    .form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    .field.full { grid-column: 1 / -1; }
+    .field label { color: #445; font-size: 12px; font-weight: 800; }
+    .field input, .field select { width: 100%; min-height: 42px; }
+    .field-hint { color: #778; font-size: 11px; }
+    .source-callout { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-top: 15px; padding: 13px; border: 1px solid #bfdbfe; border-radius: 9px; background: #eff6ff; }
+    .source-callout strong { display: block; color: #1e3a8a; }
+    .source-callout p { margin: 3px 0 0; color: #52637a; font-size: 12px; }
+    .source-callout .btn { flex: 0 0 auto; }
+    .comp-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .comp-header .step-heading { margin-bottom: 3px; }
+    .comp-list { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+    .comp-row { position: relative; border: 1px solid #dfe7f3; border-radius: 10px; padding: 15px; background: #fbfdff; }
+    .comp-row-title { margin-bottom: 10px; padding-right: 80px; color: #172554; font-size: 13px; font-weight: 800; }
+    .remove-comp { position: absolute; right: 12px; top: 10px; border: 0; background: transparent; color: #b91c1c; font-size: 12px; font-weight: 700; cursor: pointer; }
+    .comp-grid { display: grid; grid-template-columns: 2fr 1fr 1.2fr 1.2fr; gap: 10px; }
+    .comp-grid.secondary { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: 10px; }
+    .comp-grid label { display: block; margin-bottom: 4px; color: #667; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .3px; }
+    .comp-grid input, .comp-grid select { width: 100%; min-width: 0; }
+    .generate-bar { position: sticky; bottom: 10px; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 17px; border: 1px solid #c7dbff; border-radius: 11px; background: rgba(255,255,255,.96); box-shadow: 0 8px 30px rgba(30,64,175,.17); backdrop-filter: blur(6px); }
+    .generate-bar p { margin: 0; color: #667; font-size: 12px; }
+    .generate-bar .btn { min-width: 190px; padding: 11px 16px; }
+    .form-error { display: none; margin-bottom: 14px; padding: 12px 14px; border: 1px solid #fecaca; border-radius: 9px; background: #fef2f2; color: #991b1b; font-size: 13px; }
+    .form-error.show { display: block; }
+    .recent-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .recent-report { display: block; padding: 14px; border: 1px solid #e2e8f0; border-radius: 9px; color: inherit; text-decoration: none; }
+    .recent-report:hover { border-color: #93b7f5; background: #f8fbff; }
+    .recent-report strong { display: block; color: #172554; }
+    .recent-meta { margin-top: 5px; color: #667; font-size: 11px; }
+    @media (max-width: 850px) {
+      .comp-grid, .comp-grid.secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .recent-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 640px) {
+      .form-grid, .form-grid.three, .comp-grid, .comp-grid.secondary, .recent-grid { grid-template-columns: 1fr; }
+      .source-callout, .generate-bar { flex-direction: column; }
+      .source-callout .btn, .generate-bar .btn { width: 100%; }
+      .generate-bar { bottom: 6px; }
+    }
+  </style>
+</head>
+<body>
+  {% set page_tagline = 'Client-ready comparable market analysis' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+
+  <main>
+    <section class="card cma-hero">
+      <h1>Create a Competitive Market Analysis</h1>
+      <p>Define the seller's home or a buyer's target property, add verified closed sales, and TopAI will rank the most applicable comparables and build a printable pricing report.</p>
+    </section>
+
+    <form id="cma-form" novalidate>
+      <div class="form-error" id="form-error" role="alert" aria-live="assertive"></div>
+
+      <section class="card">
+        <div class="step-heading"><span class="step-number">1</span><h2>Prospect and target property</h2></div>
+        <div class="form-grid">
+          <div class="field">
+            <label for="prospect-type">CMA for</label>
+            <select id="prospect-type" required>
+              <option value="seller">Seller prospect</option>
+              <option value="buyer">Buyer prospect</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="prospect-name">Prospect name <span class="muted">(optional)</span></label>
+            <input id="prospect-name" maxlength="120" autocomplete="name" />
+          </div>
+          <div class="field full">
+            <label for="subject-address" id="subject-address-label">Seller's property address</label>
+            <input id="subject-address" maxlength="200" autocomplete="street-address" placeholder="123 Main Street" required />
+            <span class="field-hint" id="subject-address-hint">Use the property being evaluated.</span>
+          </div>
+          <div class="field">
+            <label for="city">City</label>
+            <input id="city" maxlength="100" autocomplete="address-level2" required />
+          </div>
+          <div class="field">
+            <label for="state">State</label>
+            <input id="state" maxlength="2" minlength="2" autocomplete="address-level1" placeholder="CO" pattern="[A-Za-z]{2}" required />
+          </div>
+        </div>
+        <div class="form-grid three" style="margin-top:13px">
+          <div class="field">
+            <label for="property-type">Property type</label>
+            <select id="property-type" required>
+              <option value="single_family">Single-family home</option>
+              <option value="condo">Condo</option>
+              <option value="townhome">Townhome</option>
+              <option value="multi_family">Multi-family</option>
+            </select>
+          </div>
+          <div class="field"><label for="beds">Bedrooms</label><input id="beds" type="number" min="0" max="20" step="1" required /></div>
+          <div class="field"><label for="baths">Bathrooms</label><input id="baths" type="number" min="0" max="20" step="0.5" required /></div>
+          <div class="field"><label for="sqft">Square feet</label><input id="sqft" type="number" min="100" max="100000" step="1" required /></div>
+          <div class="field">
+            <label for="comp-count">Comparables in report</label>
+            <select id="comp-count" required>
+              {% for count in range(3, 9) %}<option value="{{ count }}">{{ count }} houses</option>{% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="date-range">Closed-sale date range</label>
+            <select id="date-range" required>
+              <option value="1">Past 1 month</option>
+              <option value="3">Past 3 months</option>
+              <option value="6" selected>Past 6 months</option>
+              <option value="12">Past 12 months</option>
+            </select>
+          </div>
+        </div>
+        <div class="source-callout">
+          <div><strong>Start with verified sold-property facts</strong><p>Find more candidates than the final count so TopAI can rank the closest matches. Confirm sale prices and dates in your MLS or public records.</p></div>
+          <a class="btn secondary" id="research-sales" href="/research" target="_blank" rel="noopener noreferrer">Research this area</a>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="comp-header">
+          <div>
+            <div class="step-heading"><span class="step-number">2</span><h2>Add candidate closed sales</h2></div>
+            <p class="muted" style="margin:0;font-size:12px">Only sales inside the selected date range qualify. Distance is optional but improves ranking.</p>
+          </div>
+          <button class="btn secondary" id="add-comp" type="button">+ Add candidate</button>
+        </div>
+        <div class="comp-list" id="comp-list"></div>
+      </section>
+
+      <div class="generate-bar">
+        <p>The finished report includes selected comps, price-per-square-foot analysis, an indicated range, and methodology disclosures.</p>
+        <button class="btn" id="generate-button" type="submit">Build &amp; Save CMA</button>
+      </div>
+    </form>
+
+    {% if recent_reports %}
+    <section class="card" style="margin-top:18px">
+      <h2>Recent CMA reports</h2>
+      <div class="recent-grid">
+        {% for item in recent_reports %}
+        <a class="recent-report" href="/cma/reports/{{ item.id }}">
+          <strong>{{ item.subject_address }}</strong>
+          <span>{{ item.city }}, {{ item.state }}</span>
+          <div class="recent-meta">{{ item.prospect_type|title }} &middot; {{ item.comp_count }} comps &middot; {{ item.created_at[:10] }}</div>
+        </a>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+  </main>
+
+  <template id="comp-template">
+    <div class="comp-row">
+      <div class="comp-row-title">Candidate sale <span class="comp-number"></span></div>
+      <button class="remove-comp" type="button" aria-label="Remove candidate">Remove</button>
+      <div class="comp-grid">
+        <div><label>Address</label><input data-field="address" maxlength="200" placeholder="456 Comparable Ave" /></div>
+        <div><label>Sale date</label><input data-field="sale_date" type="date" /></div>
+        <div><label>Sale price</label><input data-field="sale_price" inputmode="decimal" placeholder="$525,000" /></div>
+        <div><label>Property type</label><select data-field="property_type"><option value="single_family">Single-family</option><option value="condo">Condo</option><option value="townhome">Townhome</option><option value="multi_family">Multi-family</option></select></div>
+      </div>
+      <div class="comp-grid secondary">
+        <div><label>Beds</label><input data-field="beds" type="number" min="0" max="20" step="1" /></div>
+        <div><label>Baths</label><input data-field="baths" type="number" min="0" max="20" step="0.5" /></div>
+        <div><label>Square feet</label><input data-field="sqft" type="number" min="100" max="100000" step="1" /></div>
+        <div><label>Distance (miles)</label><input data-field="distance_miles" type="number" min="0" max="500" step="0.1" placeholder="Optional" /></div>
+        <div><label>Notes</label><input data-field="notes" maxlength="500" placeholder="Condition, updates..." /></div>
+      </div>
+    </div>
+  </template>
+
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+  <script>
+    (function initCmaBuilder() {
+      const form = document.getElementById('cma-form');
+      const list = document.getElementById('comp-list');
+      const template = document.getElementById('comp-template');
+      const errorBox = document.getElementById('form-error');
+      const submit = document.getElementById('generate-button');
+      const countSelect = document.getElementById('comp-count');
+      const prospectType = document.getElementById('prospect-type');
+      const today = new Date().toISOString().slice(0, 10);
+
+      function renumber() {
+        list.querySelectorAll('.comp-row').forEach((row, index) => {
+          row.querySelector('.comp-number').textContent = String(index + 1);
+          row.querySelectorAll('input, select').forEach(input => {
+            input.setAttribute('aria-label', `${input.dataset.field.replaceAll('_', ' ')} for candidate ${index + 1}`);
+          });
+        });
+      }
+
+      function addComparable() {
+        const row = template.content.firstElementChild.cloneNode(true);
+        row.querySelector('[data-field="sale_date"]').max = today;
+        row.querySelector('.remove-comp').addEventListener('click', () => {
+          row.remove();
+          renumber();
+        });
+        list.appendChild(row);
+        renumber();
+      }
+
+      function ensureRows() {
+        const target = Math.min(10, Number(countSelect.value) + 2);
+        while (list.children.length < target) addComparable();
+      }
+
+      function updateProspectLabels() {
+        const buyer = prospectType.value === 'buyer';
+        document.getElementById('subject-address-label').textContent = buyer ? 'Target address or neighborhood' : "Seller's property address";
+        document.getElementById('subject-address-hint').textContent = buyer ? 'Use the address under consideration or the buyer\'s target neighborhood.' : 'Use the property being evaluated.';
+      }
+
+      function updateResearchLink() {
+        const area = [document.getElementById('subject-address').value, document.getElementById('city').value, document.getElementById('state').value].filter(Boolean).join(', ');
+        document.getElementById('research-sales').href = `/research${area ? `?area=${encodeURIComponent(area)}` : ''}`;
+      }
+
+      function collectComparable(row) {
+        const data = {};
+        row.querySelectorAll('[data-field]').forEach(input => { data[input.dataset.field] = input.value.trim(); });
+        return data;
+      }
+
+      function candidateHasData(candidate) {
+        return Object.entries(candidate).some(([field, value]) => field !== 'property_type' && value !== '');
+      }
+
+      function validateCandidate(candidate, index) {
+        const required = ['address', 'sale_date', 'sale_price', 'property_type', 'beds', 'baths', 'sqft'];
+        const missing = required.find(field => candidate[field] === '');
+        return missing ? `Complete ${missing.replaceAll('_', ' ')} for candidate sale ${index + 1}.` : '';
+      }
+
+      function showError(message) {
+        errorBox.textContent = message;
+        errorBox.classList.add('show');
+        errorBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      document.getElementById('add-comp').addEventListener('click', addComparable);
+      countSelect.addEventListener('change', ensureRows);
+      prospectType.addEventListener('change', updateProspectLabels);
+      ['subject-address', 'city', 'state'].forEach(id => document.getElementById(id).addEventListener('input', updateResearchLink));
+      document.getElementById('state').addEventListener('input', event => { event.target.value = event.target.value.toUpperCase(); });
+
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        errorBox.classList.remove('show');
+        if (!form.reportValidity()) return showError('Complete the required target-property fields.');
+        const comparables = Array.from(list.querySelectorAll('.comp-row')).map(collectComparable).filter(candidateHasData);
+        for (let index = 0; index < comparables.length; index += 1) {
+          const error = validateCandidate(comparables[index], index);
+          if (error) return showError(error);
+        }
+        if (comparables.length < Number(countSelect.value)) return showError(`Add at least ${countSelect.value} complete candidate sales.`);
+
+        const payload = {
+          prospect_type: prospectType.value,
+          prospect_name: document.getElementById('prospect-name').value,
+          subject_address: document.getElementById('subject-address').value,
+          city: document.getElementById('city').value,
+          state: document.getElementById('state').value,
+          property_type: document.getElementById('property-type').value,
+          beds: document.getElementById('beds').value,
+          baths: document.getElementById('baths').value,
+          sqft: document.getElementById('sqft').value,
+          comp_count: countSelect.value,
+          date_range_months: document.getElementById('date-range').value,
+          comparables
+        };
+        submit.disabled = true;
+        submit.textContent = 'Building CMA...';
+        try {
+          const response = await fetch('/api/cma/reports', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || 'Could not build this CMA.');
+          window.location.assign(data.detail_url);
+        } catch (error) {
+          showError(error.message || 'Could not build this CMA.');
+          submit.disabled = false;
+          submit.textContent = 'Build & Save CMA';
+        }
+      });
+
+      ensureRows();
+      updateProspectLabels();
+    })();
+  </script>
+</body>
+</html>

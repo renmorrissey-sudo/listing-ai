@@ -50,6 +50,7 @@ MIGRATION_MODULES = [
     "migrations.versions.023_call_script_history",
     "migrations.versions.024_engaged_lead_status",
     "migrations.versions.025_external_lead_source_roi",
+    "migrations.versions.026_cma_reports",
 ]
 
 # Required after 001_baseline. App has no separate accounts/tenants/subscriptions
