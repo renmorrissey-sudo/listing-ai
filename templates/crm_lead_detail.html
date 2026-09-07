@@ -147,7 +147,7 @@
         <label><strong>Change status</strong></label>
         <select id="status-select">
           {% for slug, label in statuses %}
-          <option value="{{ slug }}" {% if lead.status == slug or (lead.status in ['replied','hot'] and slug == 'contacted') %}selected{% endif %}>{{ label }}</option>
+          <option value="{{ slug }}" {% if lead.status == slug or (lead.status == 'replied' and slug == 'engaged') or (lead.status == 'hot' and slug == 'qualified') %}selected{% endif %}>{{ label }}</option>
           {% endfor %}
         </select>
         <button class="btn" type="button" onclick="setStatus()">Save status</button>

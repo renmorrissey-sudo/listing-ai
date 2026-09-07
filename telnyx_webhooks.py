@@ -318,8 +318,8 @@ def _touch_inbound_lead_state(user_id, lead_id, lead, keyword):
         db.update_lead_from_analysis(
             lead_id, user_id, last_inbound_at=datetime.now(timezone.utc).isoformat()
         )
-        if keyword != "opt_out" and (lead or {}).get("opt_out_status") != "opted_out":
-            crm_db.set_lead_status(user_id, lead_id, "contacted", from_automation=True)
+        if keyword is None and (lead or {}).get("opt_out_status") != "opted_out":
+            crm_db.mark_lead_engaged_from_exchange(user_id, lead_id)
     except Exception:
         logger.exception(
             "Failed to update lead activity state lead_id=%s tenant=%s", lead_id, user_id

@@ -162,6 +162,11 @@ def _build_lead_next_actions(
                     "Confirm motivation, timeframe, location, and financing or selling goals.",
                     "follow_up",
                 ),
+                "engaged": (
+                    "Advance the active conversation",
+                    "Agree on a concrete next step and schedule it while interest is active.",
+                    "follow_up",
+                ),
                 "qualified": (
                     "Move the lead toward an appointment",
                     "Schedule a consultation, showing, or listing conversation.",

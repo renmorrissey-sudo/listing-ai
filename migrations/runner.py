@@ -48,6 +48,7 @@ MIGRATION_MODULES = [
     "migrations.versions.021_email_integrations",
     "migrations.versions.022_user_profile_phone",
     "migrations.versions.023_call_script_history",
+    "migrations.versions.024_engaged_lead_status",
 ]
 
 # Required after 001_baseline. App has no separate accounts/tenants/subscriptions

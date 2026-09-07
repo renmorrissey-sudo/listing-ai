@@ -6,6 +6,7 @@ LEAD_STATUSES = [
     ("new", "New"),
     ("attempting_contact", "Attempting Contact"),
     ("contacted", "Contacted"),
+    ("engaged", "Engaged"),
     ("qualified", "Qualified"),
     ("appointment_scheduled", "Appointment Scheduled"),
     ("appointment_completed", "Appointment Completed"),
@@ -19,7 +20,7 @@ LEAD_STATUSES = [
 LEAD_STATUS_SET = {slug for slug, _ in LEAD_STATUSES}
 
 LEGACY_STATUS_MAP = {
-    "replied": "contacted",
+    "replied": "engaged",
     "hot": "qualified",
     "closed": "closed_won",
 }
@@ -27,7 +28,7 @@ LEGACY_STATUS_MAP = {
 PIPELINE_STAGES = [
     ("new", "New", {"new"}),
     ("contacting", "Contacting", {"attempting_contact", "contacted"}),
-    ("engaged", "Engaged", {"nurture"}),
+    ("engaged", "Engaged", {"engaged", "nurture"}),
     ("qualified", "Qualified", {"qualified"}),
     ("appointment", "Appointment", {"appointment_scheduled", "appointment_completed"}),
     ("active_client", "Active Client", {"under_contract"}),

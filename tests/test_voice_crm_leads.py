@@ -248,7 +248,7 @@ def test_vapi_webhook_updates_linked_lead(app_client, two_users, monkeypatch):
     )
     assert res.status_code == 200
     lead = db.get_lead(lead_id, u1)
-    assert lead["status"] == "contacted"
+    assert lead["status"] == "engaged"
     assert lead.get("latest_call_at")
     assert lead.get("next_action")
     assert "Follow up" in lead["next_action"] or "call" in lead["next_action"].lower()

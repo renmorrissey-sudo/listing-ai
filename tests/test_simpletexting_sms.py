@@ -138,6 +138,7 @@ def test_webhook_inbound_routes_by_account_phone(two_users, monkeypatch):
     assert result["ok"] is True
     lead = db.get_lead(result["lead_id"], u1)
     assert lead is not None
+    assert lead["status"] == "engaged"
     assert db.get_lead_by_phone(u2, contact) is None
 
 

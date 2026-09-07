@@ -286,9 +286,7 @@ def process_inbound_sms(payload: dict, *, defer_coach: bool = True, app=None) ->
     else:
         db.update_lead_from_analysis(lead_id, owner_id, last_inbound_at=now)
         if (lead or {}).get("opt_out_status") != "opted_out":
-            crm_db.set_lead_status(
-                owner_id, lead_id, "contacted", from_automation=True
-            )
+            crm_db.mark_lead_engaged_from_exchange(owner_id, lead_id)
         crm_db.add_lead_activity(
             lead_id,
             owner_id,

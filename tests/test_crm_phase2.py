@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import crm_db
 import db
-from crm_constants import normalize_lead_status
+from crm_constants import normalize_lead_status, stage_for_status
 
 
 def _lead(user_id, phone="+15551110001"):
@@ -27,6 +27,33 @@ def test_status_change_and_timeline(two_users):
     assert normalize_lead_status(lead["status"]) == "qualified"
     activities = crm_db.list_lead_activities(u1, lead_id)
     assert any(a["event_type"] == "status_change" for a in activities)
+
+
+def test_engaged_status_promotes_active_exchange_without_downgrading(two_users):
+    u1, _ = two_users
+    lead_id = _lead(u1, "+15551110009")
+
+    lead, err = crm_db.mark_lead_engaged_from_exchange(u1, lead_id)
+    assert err is None
+    assert lead["status"] == "engaged"
+    assert normalize_lead_status("replied") == "engaged"
+    assert stage_for_status("engaged") == "engaged"
+
+    crm_db.set_lead_status(u1, lead_id, "qualified")
+    lead, err = crm_db.mark_lead_engaged_from_exchange(u1, lead_id)
+    assert err is None
+    assert lead["status"] == "qualified"
+
+
+def test_engaged_status_is_available_on_lead_detail(app_client, two_users):
+    u1, _ = two_users
+    lead_id = _lead(u1, "+15551110010")
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+
+    response = app_client.get(f"/crm/leads/{lead_id}")
+    assert response.status_code == 200
+    assert '<option value="engaged"' in response.get_data(as_text=True)
 
 
 def test_dnc_protected_from_automation(two_users):

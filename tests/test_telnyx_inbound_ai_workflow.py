@@ -118,6 +118,7 @@ def test_inbound_received_accepted_and_persisted(two_users, monkeypatch):
     lead = db.get_lead(result["lead_id"], u1)
     assert lead is not None
     assert lead.get("last_inbound_at")  # last-activity updated
+    assert lead["status"] == "engaged"
 
 
 # 4: formatted stored phone still matches the normalized E.164 sender.

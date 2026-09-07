@@ -308,6 +308,7 @@ def test_claude_draft_creation_no_auto_send(app_client, two_users):
 
     assert result["ok"] is True
     assert result["duplicate"] is False
+    assert db.get_lead(lead_id, u1)["status"] == "engaged"
     analyze.assert_called()
     send_sms.assert_not_called()
 

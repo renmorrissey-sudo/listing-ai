@@ -15,7 +15,7 @@ Return ONLY JSON with these keys:
 - draft_reply: one SMS draft for agent approval (under 420 chars). If escalation is required, draft a brief acknowledgment that the agent will follow up personally.
 - confidence: number from 0 to 1
 - sensitive_topic: true if legal/financing/negotiation/fair housing/complaint/uncertain facts apply
-- suggested_lead_status: one of new, attempting_contact, contacted, qualified, appointment_scheduled, appointment_completed, nurture, under_contract, closed_won, closed_lost, do_not_contact (suggestion only — never applied automatically)
+- suggested_lead_status: one of new, attempting_contact, contacted, engaged, qualified, appointment_scheduled, appointment_completed, nurture, under_contract, closed_won, closed_lost, do_not_contact (suggestion only — never applied automatically)
 - suggested_follow_up_at: ISO-8601 UTC datetime string or null
 - suggested_follow_up_reason: short reason for the follow-up
 - suggested_tasks: array of up to 5 objects {{title, task_type, due_at}} (suggestions only)
@@ -29,6 +29,7 @@ Return ONLY JSON with these keys:
 RULES:
 - Do not auto-send anything; this is advice for agent approval only.
 - Do not assume status, follow-up, tasks, or appointments will be applied — agent must approve.
+- Use engaged when the lead is positively participating in a two-way text or phone conversation; contacted means contact was made but no positive exchange is established yet.
 - Be compliant and professional.
 - Escalate legal, financing, negotiation, fair-housing, complaint, and uncertain property-fact topics for manual handling.
 - If the lead is months away or must sell first, prefer nurture + schedule follow-up and consider a home-value pitch.

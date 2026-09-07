@@ -121,6 +121,8 @@ def handle_inbound(payload: dict, *, app=None):
         _apply_opt_out(user_id, lead_id, contact, source="simpletexting_inbound")
     elif keyword == "opt_in":
         db.clear_lead_sms_opt_out(lead_id, user_id)
+    elif keyword is None and (lead or {}).get("opt_out_status") != "opted_out":
+        crm_db.mark_lead_engaged_from_exchange(user_id, lead_id)
 
     tdb.append_sms_audit(
         user_id,

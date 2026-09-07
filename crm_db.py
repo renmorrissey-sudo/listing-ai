@@ -314,6 +314,36 @@ def set_lead_status(user_id, lead_id, new_status, actor_user_id=None, from_autom
         return dict(lead) if lead else None, None
 
 
+ENGAGEMENT_ELIGIBLE_STATUSES = frozenset(
+    {"new", "attempting_contact", "contacted", "nurture"}
+)
+
+
+def mark_lead_engaged_from_exchange(user_id, lead_id, actor_user_id=None):
+    """Promote an actively responding lead without downgrading later pipeline stages."""
+    with get_db() as conn:
+        lead = conn.execute(
+            "SELECT * FROM leads WHERE id = ? AND user_id = ?",
+            (lead_id, user_id),
+        ).fetchone()
+    if not lead:
+        return None, "Lead not found."
+
+    raw_status = str(lead["status"] or "").strip().lower()
+    current = normalize_lead_status(raw_status)
+    if current == "engaged" and raw_status == "engaged":
+        return dict(lead), None
+    if current != "engaged" and current not in ENGAGEMENT_ELIGIBLE_STATUSES:
+        return dict(lead), None
+    return set_lead_status(
+        user_id,
+        lead_id,
+        "engaged",
+        actor_user_id=actor_user_id,
+        from_automation=True,
+    )
+
+
 FOLLOW_UP_OPEN_STATUSES = ("pending",)
 FOLLOW_UP_DONE_STATUSES = ("done", "cancelled")
 

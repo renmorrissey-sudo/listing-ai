@@ -510,7 +510,14 @@ def apply_voice_call_webhook_to_lead(user_id, call_row, normalized):
     status_for_rules = meaningful_status if emitted else None
 
     if appointment_requested and current not in {"do_not_contact", "closed_won", "closed_lost"}:
-        if current in {"new", "attempting_contact", "contacted", "qualified", "nurture"}:
+        if current in {
+            "new",
+            "attempting_contact",
+            "contacted",
+            "engaged",
+            "qualified",
+            "nurture",
+        }:
             crm_db.set_lead_status(
                 user_id, lead_id, "appointment_scheduled", from_automation=True
             )
@@ -525,8 +532,8 @@ def apply_voice_call_webhook_to_lead(user_id, call_row, normalized):
             source_ref_id=call_row.get("id"),
             reason_text="AI call indicated an appointment should be scheduled.",
         )
-    elif status_for_rules == "completed" and current in {"new", "attempting_contact"}:
-        crm_db.set_lead_status(user_id, lead_id, "contacted", from_automation=True)
+    elif status_for_rules == "completed":
+        crm_db.mark_lead_engaged_from_exchange(user_id, lead_id)
     elif status_for_rules in {"failed", "unanswered", "declined", "cancelled"} and current in {
         "new",
         "attempting_contact",
