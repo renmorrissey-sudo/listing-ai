@@ -104,3 +104,6 @@ def test_call_script_page_has_history_and_area_lookup_controls(app_client, two_u
     assert 'id="area-lookup-btn"' in html
     assert 'id="script-history-dialog"' in html
     assert 'data-tab="soverview"' in html
+    assert 'id="script-zillow-link"' in html
+    assert "https://www.zillow.com/homes/recently_sold/" in html
+    assert 'target="_blank" rel="noopener noreferrer"' in html

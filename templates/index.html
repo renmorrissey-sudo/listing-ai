@@ -103,7 +103,10 @@
     .area-actions { display: flex; align-items: center; gap: 10px; margin: -5px 0 14px; flex-wrap: wrap; }
     .area-overview-preview { display: none; margin: 0 0 14px; padding: 14px; border: 1.5px solid #bfdbfe; border-radius: 8px; background: #eff6ff; color: #27364d; font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
     .area-overview-preview strong { display: block; color: #1d4ed8; margin-bottom: 6px; }
-    .script-save-note { margin-bottom: 10px; color: #15803d; font-size: 12px; font-weight: 600; }
+    .script-result-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .script-save-note { color: #15803d; font-size: 12px; font-weight: 600; }
+    .zillow-link { display: none; background: #006aff; color: #fff; border-color: #006aff; }
+    .zillow-link:hover { background: #0055cc; color: #fff; border-color: #0055cc; }
     .history-dialog { width: min(720px, calc(100% - 24px)); max-height: min(760px, calc(100vh - 32px)); margin: auto; padding: 0; border: 0; border-radius: 14px; box-shadow: 0 24px 64px rgba(15,23,42,.35); }
     .history-dialog::backdrop { background: rgba(15,23,42,.62); }
     .history-dialog-inner { padding: 22px; }
@@ -350,7 +353,7 @@
         <button type="submit" class="btn-generate" id="script-btn"><div class="spinner" id="script-spinner"></div><span id="script-btn-label">Generate Scripts</span></button>
       </form>
     </div>
-    <div class="card results-panel"><div class="placeholder" id="script-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.82 19.79 19.79 0 011 1.18 2 2 0 013 1h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L7.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg><p>Fill in the call details<br/>and click Generate Scripts</p></div><div id="script-output" style="display:none;"><div class="script-save-note" id="script-save-note"></div><div class="tabs"><div class="tab active" data-group="script" data-tab="soverview">Area Overview</div><div class="tab" data-group="script" data-tab="sopening">Opening</div><div class="tab" data-group="script" data-tab="sobjections">Objections</div><div class="tab" data-group="script" data-tab="svoicemail">Voicemail</div></div><div class="tab-content active" id="tab-soverview"><div class="output-box" id="out-overview"></div><button class="copy-btn" data-target="out-overview">Copy</button></div><div class="tab-content" id="tab-sopening"><div class="output-box" id="out-opening"></div><button class="copy-btn" data-target="out-opening">Copy</button></div><div class="tab-content" id="tab-sobjections"><div class="output-box" id="out-objections"></div><button class="copy-btn" data-target="out-objections">Copy</button></div><div class="tab-content" id="tab-svoicemail"><div class="output-box" id="out-voicemail"></div><button class="copy-btn" data-target="out-voicemail">Copy</button></div></div></div>
+    <div class="card results-panel"><div class="placeholder" id="script-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 9.82 19.79 19.79 0 011 1.18 2 2 0 013 1h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L7.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg><p>Fill in the call details<br/>and click Generate Scripts</p></div><div id="script-output" style="display:none;"><div class="script-result-actions"><div class="script-save-note" id="script-save-note"></div><a class="btn zillow-link" id="script-zillow-link" href="#" target="_blank" rel="noopener noreferrer" aria-label="View recently sold homes for this Target Area on Zillow">Zillow</a></div><div class="tabs"><div class="tab active" data-group="script" data-tab="soverview">Area Overview</div><div class="tab" data-group="script" data-tab="sopening">Opening</div><div class="tab" data-group="script" data-tab="sobjections">Objections</div><div class="tab" data-group="script" data-tab="svoicemail">Voicemail</div></div><div class="tab-content active" id="tab-soverview"><div class="output-box" id="out-overview"></div><button class="copy-btn" data-target="out-overview">Copy</button></div><div class="tab-content" id="tab-sopening"><div class="output-box" id="out-opening"></div><button class="copy-btn" data-target="out-opening">Copy</button></div><div class="tab-content" id="tab-sobjections"><div class="output-box" id="out-objections"></div><button class="copy-btn" data-target="out-objections">Copy</button></div><div class="tab-content" id="tab-svoicemail"><div class="output-box" id="out-voicemail"></div><button class="copy-btn" data-target="out-voicemail">Copy</button></div></div></div>
   </main>
   <dialog class="history-dialog" id="script-history-dialog">
     <div class="history-dialog-inner">
@@ -1631,6 +1634,16 @@
       note.style.color = '#15803d';
     } else {
       note.textContent = '';
+    }
+    const targetArea = (item.target_area || document.getElementById('script-form').elements.area.value || '').trim();
+    const zillowLink = document.getElementById('script-zillow-link');
+    if (targetArea) {
+      const locationPath = encodeURIComponent(targetArea.replace(/\s+/g, '-'));
+      zillowLink.href = `https://www.zillow.com/homes/recently_sold/${locationPath}_rb/`;
+      zillowLink.setAttribute('aria-label', `View recently sold homes in ${targetArea} on Zillow`);
+      zillowLink.style.display = 'inline-block';
+    } else {
+      zillowLink.style.display = 'none';
     }
     document.querySelector('.tab[data-group="script"][data-tab="soverview"]')?.click();
   }
