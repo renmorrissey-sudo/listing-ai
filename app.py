@@ -22,6 +22,7 @@ import sms_coach
 from crm import crm_bp
 from crm_constants import status_label
 from external_leads_routes import external_leads_bp
+from source_roi_routes import source_roi_bp
 from email_marketing_routes import email_marketing_bp
 from sms_campaigns import sms_campaigns_bp
 from social_routes import social_bp
@@ -100,6 +101,7 @@ def _active_live_voice_config_for_user(user):
     }
 app.register_blueprint(crm_bp)
 app.register_blueprint(external_leads_bp)
+app.register_blueprint(source_roi_bp)
 app.register_blueprint(email_marketing_bp)
 app.register_blueprint(sms_campaigns_bp)
 app.register_blueprint(social_bp)

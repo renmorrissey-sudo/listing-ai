@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>External Lead Source Metrics - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+  <style>
+    .roi-hero { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(260px,.7fr); gap:18px; margin:18px 0; }
+    .recommendation { background:linear-gradient(135deg,#172554,#1d4ed8); color:white; border:0; }
+    .recommendation .muted { color:#c7d2fe; }
+    .recommendation strong { color:#fff; }
+    .recommendation-value { font-size:32px; font-weight:800; letter-spacing:-.04em; margin:8px 0; }
+    .summary-card { display:grid; align-content:center; }
+    .summary-line { display:flex; justify-content:space-between; gap:16px; padding:8px 0; border-bottom:1px solid #e5e7eb; }
+    .summary-line:last-child { border-bottom:0; }
+    .source-metrics-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+    .source-roi-card { border-top:4px solid #4f8ef7; }
+    .source-roi-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:14px; }
+    .source-roi-name { font-size:20px; font-weight:800; }
+    .roi-badge { padding:6px 9px; border-radius:999px; background:#dcfce7; color:#166534; font-size:14px; font-weight:800; white-space:nowrap; }
+    .roi-badge.empty { background:#f1f5f9; color:#64748b; }
+    .funnel { list-style:none; margin:0; padding:0; }
+    .funnel li { display:flex; justify-content:space-between; gap:14px; padding:7px 0; border-bottom:1px solid #eef2f7; }
+    .funnel li:last-child { border-bottom:0; }
+    .funnel strong { font-variant-numeric:tabular-nums; }
+    .card-foot { margin-top:14px; padding-top:12px; border-top:1px solid #dbe3ef; display:flex; justify-content:space-between; gap:12px; font-size:12px; color:#64748b; }
+    .entry-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-top:18px; }
+    .form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+    .form-grid .full { grid-column:1/-1; }
+    label { display:block; font-size:12px; font-weight:700; color:#475569; margin-bottom:4px; }
+    input, select { width:100%; padding:10px 11px; border:1px solid #cbd5e1; border-radius:7px; background:white; color:#172033; }
+    .closed-row { display:grid; grid-template-columns:minmax(0,1fr) 130px auto; align-items:end; gap:9px; padding:10px 0; border-bottom:1px solid #edf1f6; }
+    .closed-row:last-child { border-bottom:0; }
+    .spend-list { list-style:none; margin:12px 0 0; padding:0; }
+    .spend-list li { display:flex; justify-content:space-between; gap:14px; padding:8px 0; border-bottom:1px solid #edf1f6; }
+    .definition { margin-top:18px; font-size:13px; }
+    @media (max-width:950px) { .source-metrics-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media (max-width:700px) {
+      .roi-hero,.entry-grid,.source-metrics-grid { grid-template-columns:1fr; }
+      .form-grid { grid-template-columns:1fr; }
+      .form-grid .full { grid-column:auto; }
+      .closed-row { grid-template-columns:1fr; align-items:stretch; }
+    }
+  </style>
+</head>
+<body>
+  {% set page_tagline = 'External lead source metrics' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <div class="row" style="justify-content:space-between;align-items:flex-start;gap:18px;">
+      <div>
+        <h1 style="margin-bottom:4px;">Lead Source ROI</h1>
+        <p class="muted" style="margin-top:0;">Follow every external lead from first contact through commission.</p>
+      </div>
+      <a class="btn secondary" href="/crm/external-sources">Manage lead sources</a>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="flash {% if category == 'error' %}err{% endif %}" style="display:block;">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    <section class="roi-hero">
+      <div class="card recommendation">
+        <div class="muted">Where should I spend my next $1,000?</div>
+        {% if dashboard.recommendation %}
+          <div class="recommendation-value">{{ dashboard.recommendation.name }}</div>
+          <p style="margin:0 0 8px;">
+            Based on recorded results, $1,000 at this source corresponds to about
+            <strong>{{ money(dashboard.recommendation.projected_gci_cents) }} in gross commission income</strong>.
+          </p>
+          <div class="muted">Historical {{ '%.1f'|format(dashboard.recommendation.roi_multiple) }}&times; revenue multiple across {{ dashboard.recommendation.closings }} closing{% if dashboard.recommendation.closings != 1 %}s{% endif %}. Use this as a planning benchmark.</div>
+        {% else %}
+          <div class="recommendation-value">More data needed</div>
+          <p style="margin:0;">Record source cost and GCI for at least one closing to generate a recommendation.</p>
+        {% endif %}
+      </div>
+      <div class="card summary-card">
+        <div class="summary-line"><span>Total GCI</span><strong>{{ money(dashboard.total_gci_cents) }}</strong></div>
+        <div class="summary-line"><span>Total lead cost</span><strong>{{ money(dashboard.total_cost_cents) }}</strong></div>
+        <div class="summary-line"><span>Portfolio multiple</span><strong>{% if dashboard.total_roi_multiple is not none %}{{ '%.1f'|format(dashboard.total_roi_multiple) }}&times;{% else %}&mdash;{% endif %}</strong></div>
+      </div>
+    </section>
+
+    {% if dashboard.sources %}
+    <section class="source-metrics-grid" aria-label="Lead source performance">
+      {% for source in dashboard.sources %}
+      <article class="card source-roi-card">
+        <div class="source-roi-head">
+          <div><div class="source-roi-name">{{ source.name }}</div><div class="muted">All-time performance</div></div>
+          <span class="roi-badge {% if source.roi_multiple is none %}empty{% endif %}">{% if source.roi_multiple is not none %}{{ '%.1f'|format(source.roi_multiple) }}&times; ROI{% else %}No cost yet{% endif %}</span>
+        </div>
+        <ul class="funnel">
+          <li><span>{{ source.lead_label }}</span><strong>{{ source.leads }}</strong></li>
+          <li><span>Conversations</span><strong>{{ source.conversations }}</strong></li>
+          <li><span>Appointments</span><strong>{{ source.appointments }}</strong></li>
+          <li><span>{{ source.client_label }}</span><strong>{{ source.clients }}</strong></li>
+          <li><span>Closings</span><strong>{{ source.closings }}</strong></li>
+          <li><span>Gross commission income</span><strong>{{ money(source.gci_cents) }}</strong></li>
+          <li><span>Lead / marketing cost</span><strong>{{ money(source.cost_cents) }}</strong></li>
+        </ul>
+        <div class="card-foot">
+          <span>{% if source.close_rate is not none %}{{ '%.1f'|format(source.close_rate) }}% lead-to-close{% else %}No leads yet{% endif %}</span>
+          <span>{% if source.cost_per_closing_cents is not none %}{{ money(source.cost_per_closing_cents) }} / closing{% else %}No closings yet{% endif %}</span>
+        </div>
+      </article>
+      {% endfor %}
+    </section>
+    {% else %}
+      <div class="card"><h2>No external sources yet</h2><p class="muted">Connect or create a source so TopAI can attribute new leads and measure their outcomes.</p><a class="btn" href="/crm/external-sources">Add a lead source</a></div>
+    {% endif %}
+
+    <section class="entry-grid">
+      <div class="card">
+        <h2>Add marketing cost</h2>
+        <p class="muted">Add each invoice, subscription, or campaign expense to its source.</p>
+        {% if dashboard.sources %}
+        <form method="post" action="/crm/source-roi/spend" class="form-grid">
+          <div><label for="source_id">Lead source</label><select id="source_id" name="source_id" required><option value="">Select source</option>{% for source in dashboard.sources %}<option value="{{ source.id }}">{{ source.name }}</option>{% endfor %}</select></div>
+          <div><label for="amount">Amount</label><input id="amount" name="amount" inputmode="decimal" placeholder="1,000.00" required /></div>
+          <div><label for="spent_on">Spend date</label><input id="spent_on" name="spent_on" type="date" value="{{ today }}" required /></div>
+          <div><label for="notes">Note (optional)</label><input id="notes" name="notes" maxlength="500" placeholder="September Zillow invoice" /></div>
+          <div class="full"><button class="btn" type="submit">Add cost</button></div>
+        </form>
+        {% endif %}
+        {% if dashboard.recent_spend %}
+        <ul class="spend-list">
+          {% for entry in dashboard.recent_spend %}
+          <li>
+            <span><strong>{{ entry.source_name }}</strong><br><span class="muted">{{ entry.spent_on }}{% if entry.notes %} &middot; {{ entry.notes }}{% endif %}</span></span>
+            <span style="display:flex;align-items:center;gap:8px;"><strong>{{ money(entry.amount_cents) }}</strong><form method="post" action="/crm/source-roi/spend/{{ entry.id }}/delete" onsubmit="return confirm('Remove this marketing cost entry?');"><button class="btn secondary" type="submit" style="padding:5px 8px;">Remove</button></form></span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </div>
+
+      <div class="card">
+        <h2>Record closing GCI</h2>
+        <p class="muted">Closed Won external leads appear here. Enter the gross commission income attributable to each closing.</p>
+        {% set closed = namespace(count=0) %}
+        {% for source in dashboard.sources %}{% for lead in source.closed_leads %}{% set closed.count = closed.count + 1 %}
+        <form method="post" action="/crm/source-roi/gci" class="closed-row">
+          <div><strong><a href="/crm/leads/{{ lead.id }}">{{ lead.name }}</a></strong><div class="muted">{{ source.name }}</div></div>
+          <div><label for="gci_{{ lead.id }}">GCI</label><input id="gci_{{ lead.id }}" name="amount" inputmode="decimal" value="{{ '%.2f'|format(lead.gci_cents / 100) }}" required /></div>
+          <input type="hidden" name="lead_id" value="{{ lead.id }}" />
+          <button class="btn secondary" type="submit">Save</button>
+        </form>
+        {% endfor %}{% endfor %}
+        {% if closed.count == 0 %}<p class="empty">No external leads are marked Closed Won yet.</p>{% endif %}
+      </div>
+    </section>
+
+    <div class="card definition">
+      <strong>How TopAI calculates these metrics</strong>
+      <p class="muted" style="margin-bottom:0;">A conversation is a lead with an inbound text or a completed voice call. Appointments exclude cancelled appointments. Clients include Active Client and Closed Won statuses. ROI is shown as the gross revenue multiple: recorded GCI divided by recorded lead cost. Figures are all-time and only include leads tied to an external source.</p>
+    </div>
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+</body>
+</html>
