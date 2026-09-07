@@ -1,6 +1,6 @@
 """Subscriber CMA builder and saved report pages."""
 
-from flask import Blueprint, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, jsonify, make_response, redirect, render_template, request, url_for
 
 import auth
 import cma_db
@@ -32,13 +32,17 @@ def builder():
     user = _page_user()
     if not user:
         return redirect(url_for("subscriber_app"))
-    return render_template(
-        "cma_builder.html",
-        email=user["email"],
-        has_billing_portal=bool(user.get("stripe_customer_id")),
-        active_nav="cma",
-        recent_reports=cma_db.list_recent(user["id"]),
+    response = make_response(
+        render_template(
+            "cma_builder.html",
+            email=user["email"],
+            has_billing_portal=bool(user.get("stripe_customer_id")),
+            active_nav="cma",
+            recent_reports=cma_db.list_recent(user["id"]),
+        )
     )
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
 
 
 @cma_bp.route("/api/cma/reports", methods=["POST"])

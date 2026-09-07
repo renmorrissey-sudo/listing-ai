@@ -136,8 +136,10 @@ def test_cma_builder_requires_authentication(app_client):
 def test_cma_builder_has_required_workflow_controls(app_client, two_users):
     user_id, _ = two_users
     _login(app_client, user_id)
-    html = app_client.get("/cma").get_data(as_text=True)
+    response = app_client.get("/cma")
+    html = response.get_data(as_text=True)
 
+    assert response.headers["Cache-Control"] == "no-store, max-age=0"
     assert "Create a Competitive Market Analysis" in html
     assert 'id="city"' in html and 'id="state"' in html
     for count in range(3, 9):
