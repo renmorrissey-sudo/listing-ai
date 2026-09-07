@@ -100,7 +100,7 @@
           <tbody>
             {% for comp in report.selected_comparables %}
             <tr>
-              <td><div class="comp-address">{{ comp.rank }}. {{ comp.address }}</div><div class="match-reasons">{{ comp.match_reasons|join(' · ') }}</div>{% if comp.notes %}<div class="match-reasons">{{ comp.notes }}</div>{% endif %}</td>
+              <td><div class="comp-address">{{ comp.rank }}. {{ comp.address }}</div><div class="match-reasons">{{ comp.match_reasons|join(' · ') }}</div>{% if comp.notes %}<div class="match-reasons">{{ comp.notes }}</div>{% endif %}{% if comp.verification_source %}<div class="match-reasons"><strong>{{ comp.verification_source }}</strong>{% if comp.assessor_id %} &middot; APN {{ comp.assessor_id }}{% endif %}</div>{% endif %}</td>
               <td>{{ comp.sale_date }}</td>
               <td>{{ money(comp.sale_price) }}</td>
               <td>{{ comp.beds }} / {{ comp.baths }}</td>
@@ -117,12 +117,12 @@
 
     <section class="card methodology">
       <h2>How this CMA was calculated</h2>
-      <p>TopAI evaluated {{ report.analysis.candidate_count }} agent-supplied sale{% if report.analysis.candidate_count != 1 %}s{% endif %}; {{ report.analysis.eligible_count }} fell inside the selected date window and the {{ report.analysis.selected_count }} closest matches were retained. The size-adjusted indication applies each selected sale's price per square foot to the target property's {{ number(report.criteria.sqft) }} square feet, then weights those indications by similarity. {{ report.analysis.excluded_count }} candidate{% if report.analysis.excluded_count != 1 %}s were{% else %} was{% endif %} excluded by date.</p>
+      <p>TopAI evaluated {{ report.analysis.candidate_count }} candidate sale{% if report.analysis.candidate_count != 1 %}s{% endif %}{% if report.analysis.public_record_count %}, including {{ report.analysis.public_record_count }} retrieved from RentCast public property records{% endif %}; {{ report.analysis.eligible_count }} fell inside the selected date window and the {{ report.analysis.selected_count }} closest matches were retained. The size-adjusted indication applies each selected sale's price per square foot to the target property's {{ number(report.criteria.sqft) }} square feet, then weights those indications by similarity. {{ report.analysis.excluded_count }} candidate{% if report.analysis.excluded_count != 1 %}s were{% else %} was{% endif %} excluded by date.</p>
     </section>
 
     <section class="card disclosure">
       <h2>Important CMA disclosure</h2>
-      <p>This is a comparative market analysis, not an appraisal or guarantee of market value. It is based entirely on property facts and closed-sale data supplied by the real estate professional. Verify all facts, concessions, condition differences, geographic boundaries, and sale records in the local MLS and public records before presenting or relying on this report.</p>
+      <p>This is a comparative market analysis, not an appraisal or guarantee of market value. It uses public-record data returned by RentCast together with any facts supplied by the real estate professional. Public-record updates can lag county recordings and may be incomplete. Verify all facts, concessions, condition differences, geographic boundaries, and sale records in the local MLS and public records before presenting or relying on this report.</p>
     </section>
   </main>
   {% include 'subscriber_footer.html' %}

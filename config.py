@@ -219,6 +219,9 @@ INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = (
 )
 APP_BASE_URL = (_env_strip("APP_BASE_URL") or _env_strip("APP_URL") or "http://localhost:8080").rstrip("/")
 
+# Public-record sold-property search for automatic CMA reports.
+RENTCAST_API_KEY = _env_strip("RENTCAST_API_KEY") or ""
+
 # Customer-owned email integrations. These OAuth application credentials never
 # replace SENDGRID_API_KEY, which remains reserved for TopAI system email.
 GOOGLE_EMAIL_CLIENT_ID = _env_strip("GOOGLE_EMAIL_CLIENT_ID") or ""

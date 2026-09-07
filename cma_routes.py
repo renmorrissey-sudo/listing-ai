@@ -6,6 +6,7 @@ import auth
 import cma_db
 import db
 from cma_service import CMAValidationError, build_cma
+from cma_property_search import ComparableSearchError, search_sold_comparables
 
 
 cma_bp = Blueprint("cma", __name__)
@@ -44,9 +45,21 @@ def builder():
 @auth.subscription_required
 def create_report():
     try:
-        report = build_cma(request.get_json(silent=True))
+        payload = request.get_json(silent=True) or {}
+        if payload.get("automatic_search"):
+            if payload.get("records_provider_disclosure_accepted") is not True:
+                raise CMAValidationError(
+                    "Acknowledge the RentCast records-provider disclosure before automatic search."
+                )
+            payload = dict(payload)
+            automatic_comps = search_sold_comparables(payload)
+            manual_comps = payload.get("comparables") if isinstance(payload.get("comparables"), list) else []
+            payload["comparables"] = automatic_comps + manual_comps
+        report = build_cma(payload)
         saved = cma_db.create_report(auth.get_current_user()["id"], report)
         db.record_tool_usage(auth.get_current_user()["id"], "cma_generator", "generated")
+    except ComparableSearchError as exc:
+        return jsonify({"error": str(exc)}), 503
     except CMAValidationError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify(

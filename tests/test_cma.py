@@ -146,7 +146,8 @@ def test_cma_builder_has_required_workflow_controls(app_client, two_users):
     assert "Past 3 months" in html
     assert "Past 6 months" in html
     assert "Past 12 months" in html
-    assert "candidate closed sales" in html
+    assert "Optional manual comparable sales" in html
+    assert 'id="build-cma-primary"' in html
     assert 'href="/cma" class="active"' in html
 
 

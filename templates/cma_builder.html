@@ -34,6 +34,10 @@
     .comp-grid.secondary { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: 10px; }
     .comp-grid label { display: block; margin-bottom: 4px; color: #667; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .3px; }
     .comp-grid input, .comp-grid select { width: 100%; min-width: 0; }
+    .build-primary-panel { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-top:16px; padding:20px; border:2px solid #2563eb; border-radius:12px; background:#eff6ff; }
+    .provider-disclosure { display:flex; align-items:flex-start; gap:9px; max-width:680px; color:#334155; font-size:12px; }
+    .provider-disclosure input { width:18px; height:18px; margin-top:1px; flex:0 0 auto; }
+    .build-cma-primary { min-width:240px; padding:16px 26px; font-size:19px; font-weight:800; box-shadow:0 8px 20px rgba(37,99,235,.24); }
     .generate-bar { position: sticky; bottom: 10px; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 17px; border: 1px solid #c7dbff; border-radius: 11px; background: rgba(255,255,255,.96); box-shadow: 0 8px 30px rgba(30,64,175,.17); backdrop-filter: blur(6px); }
     .generate-bar p { margin: 0; color: #667; font-size: 12px; }
     .generate-bar .btn { min-width: 190px; padding: 11px 16px; }
@@ -50,9 +54,13 @@
     }
     @media (max-width: 640px) {
       .form-grid, .form-grid.three, .comp-grid, .comp-grid.secondary, .recent-grid { grid-template-columns: 1fr; }
-      .source-callout, .generate-bar { flex-direction: column; }
-      .source-callout .btn, .generate-bar .btn { width: 100%; }
-      .generate-bar { bottom: 6px; }
+      .source-callout, .generate-bar, .build-primary-panel { flex-direction: column; }
+      .source-callout .btn, .generate-bar .btn, .build-primary-panel .btn { width: 100%; }
+      .build-primary-panel { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-top:16px; padding:20px; border:2px solid #2563eb; border-radius:12px; background:#eff6ff; }
+    .provider-disclosure { display:flex; align-items:flex-start; gap:9px; max-width:680px; color:#334155; font-size:12px; }
+    .provider-disclosure input { width:18px; height:18px; margin-top:1px; flex:0 0 auto; }
+    .build-cma-primary { min-width:240px; padding:16px 26px; font-size:19px; font-weight:800; box-shadow:0 8px 20px rgba(37,99,235,.24); }
+    .generate-bar { bottom: 6px; }
     }
   </style>
 </head>
@@ -128,16 +136,23 @@
           </div>
         </div>
         <div class="source-callout">
-          <div><strong>Start with verified sold-property facts</strong><p>Find more candidates than the final count so TopAI can rank the closest matches. Confirm sale prices and dates in your MLS or public records.</p></div>
+          <div><strong>Automatic public-record comparable search</strong><p>TopAI searches recorded sales within 5 miles, filters by the selected date range and property type, then ranks the closest matches.</p></div>
           <a class="btn secondary" id="research-sales" href="/research" target="_blank" rel="noopener noreferrer">Research this area</a>
+        </div>
+        <div class="build-primary-panel">
+          <label class="provider-disclosure" for="records-provider-disclosure">
+            <input id="records-provider-disclosure" type="checkbox" required />
+            <span>I understand that the target property address, property type, bedrooms, bathrooms, square footage, and search range will be sent to RentCast to search its public property-record database. I will verify selected sales against my MLS or local records before presenting the report.</span>
+          </label>
+          <button class="btn build-cma-primary" id="build-cma-primary" type="submit">Build CMA</button>
         </div>
       </section>
 
       <section class="card">
         <div class="comp-header">
           <div>
-            <div class="step-heading"><span class="step-number">2</span><h2>Add candidate closed sales</h2></div>
-            <p class="muted" style="margin:0;font-size:12px">Only sales inside the selected date range qualify. Distance is optional but improves ranking.</p>
+            <div class="step-heading"><span class="step-number">2</span><h2>Optional manual comparable sales</h2></div>
+            <p class="muted" style="margin:0;font-size:12px">TopAI searches automatically. Add MLS-verified candidates here only when you want them considered alongside the public-record results.</p>
           </div>
           <button class="btn secondary" id="add-comp" type="button">+ Add candidate</button>
         </div>
@@ -146,7 +161,7 @@
 
       <div class="generate-bar">
         <p>The finished report includes selected comps, price-per-square-foot analysis, an indicated range, and methodology disclosures.</p>
-        <button class="btn" id="generate-button" type="submit">Build &amp; Save CMA</button>
+        <button class="btn" id="generate-button" type="submit">Build CMA</button>
       </div>
     </form>
 
@@ -194,7 +209,7 @@
       const list = document.getElementById('comp-list');
       const template = document.getElementById('comp-template');
       const errorBox = document.getElementById('form-error');
-      const submit = document.getElementById('generate-button');
+      const submitButtons = [document.getElementById('build-cma-primary'), document.getElementById('generate-button')];
       const countSelect = document.getElementById('comp-count');
       const prospectType = document.getElementById('prospect-type');
       const today = new Date().toISOString().slice(0, 10);
@@ -272,7 +287,6 @@
           const error = validateCandidate(comparables[index], index);
           if (error) return showError(error);
         }
-        if (comparables.length < Number(countSelect.value)) return showError(`Add at least ${countSelect.value} complete candidate sales.`);
 
         const payload = {
           prospect_type: prospectType.value,
@@ -286,10 +300,11 @@
           sqft: document.getElementById('sqft').value,
           comp_count: countSelect.value,
           date_range_months: document.getElementById('date-range').value,
-          comparables
+          comparables,
+          automatic_search: true,
+          records_provider_disclosure_accepted: document.getElementById('records-provider-disclosure').checked
         };
-        submit.disabled = true;
-        submit.textContent = 'Building CMA...';
+        submitButtons.forEach(button => { button.disabled = true; button.textContent = 'Searching sold properties...'; });
         try {
           const response = await fetch('/api/cma/reports', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
           const data = await response.json();
@@ -297,8 +312,7 @@
           window.location.assign(data.detail_url);
         } catch (error) {
           showError(error.message || 'Could not build this CMA.');
-          submit.disabled = false;
-          submit.textContent = 'Build & Save CMA';
+          submitButtons.forEach(button => { button.disabled = false; button.textContent = 'Build CMA'; });
         }
       });
 

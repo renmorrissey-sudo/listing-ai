@@ -140,6 +140,9 @@ def _clean_comparable(raw, index):
             else None
         ),
         "notes": _text(raw.get("notes"), f"Notes for {label.lower()}", required=False, max_length=500),
+        "verification_source": _text(raw.get("verification_source"), "Verification source", required=False, max_length=120),
+        "source_record_id": _text(raw.get("source_record_id"), "Source record ID", required=False, max_length=240),
+        "assessor_id": _text(raw.get("assessor_id"), "Assessor ID", required=False, max_length=120),
     }
 
 
@@ -243,6 +246,7 @@ def build_cma(payload, *, today=None):
     analysis = {
         "selected_count": len(selected),
         "candidate_count": len(cleaned),
+        "public_record_count": sum(1 for comp in cleaned if comp.get("verification_source")),
         "eligible_count": len(eligible),
         "excluded_count": len(excluded),
         "average_sale_price": _round_currency(sum(prices) / len(prices)),
