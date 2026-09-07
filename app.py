@@ -2408,6 +2408,21 @@ def dashboard():
     )
 
 
+@app.route("/research")
+def research():
+    """Target-area research launchpad for signed-in subscribers."""
+    user = auth.get_current_user()
+    if not user or not auth.user_has_active_subscription(user):
+        return redirect(url_for("subscriber_app"))
+    return render_template(
+        "research.html",
+        email=user["email"],
+        has_billing_portal=bool(user.get("stripe_customer_id")),
+        active_nav="research",
+        initial_area=(request.args.get("area") or "").strip()[:200],
+    )
+
+
 @app.route("/refund-policy")
 def refund_policy():
     return render_template("legal.html", title="Refund Policy", doc="refund")

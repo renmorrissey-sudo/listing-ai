@@ -20,6 +20,7 @@ APP_NAV_LINKS = [
     ("Listing Generator", "/app"),
     ("Listing Archive", "/listings/archive"),
     ("Cold Call Scripts", "/app#coldcall"),
+    ("Research", "/research"),
     ("AI Calling Assistant", "/app#voice"),
     ("AI SMS Assistant", "/app#sms"),
     ("Bulk SMS", "/crm/sms-campaigns"),
@@ -132,6 +133,9 @@ def test_active_nav_state(app_client, two_users):
 
     dash_html = app_client.get("/dashboard?local_date=2026-07-26&tz_offset_minutes=0").get_data(as_text=True)
     assert re.search(r'href="/dashboard"\s+class="active"', dash_html)
+
+    research_html = app_client.get("/research").get_data(as_text=True)
+    assert re.search(r'href="/research"\s+class="active"', research_html)
 
 
 def test_logo_links_to_dashboard(app_client, two_users):

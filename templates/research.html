@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Target Area Research - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+  <style>
+    .research-hero {
+      padding: 24px;
+      background: linear-gradient(135deg, #172554 0%, #243b72 58%, #1d4ed8 100%);
+      color: white;
+    }
+    .research-hero h1 { color: white; }
+    .research-hero p { margin: 6px 0 0; color: #dbeafe; max-width: 760px; }
+    .area-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; margin-top: 18px; }
+    .area-field label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 800; letter-spacing: .35px; text-transform: uppercase; color: #dbeafe; }
+    .area-field input { width: 100%; min-height: 44px; border-color: white; font-size: 15px; }
+    .area-form .btn { align-self: end; min-height: 44px; background: #fff; color: #1d4ed8; padding: 10px 18px; }
+    .area-hint { margin-top: 7px; font-size: 12px; color: #bfdbfe; }
+    .research-status { margin: 18px 0 12px; }
+    .research-status h2 { margin-bottom: 3px; }
+    .source-section { margin-bottom: 22px; }
+    .source-section-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+    .source-section-heading h2 { margin: 0; }
+    .research-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .research-link {
+      display: flex; flex-direction: column; min-height: 150px; padding: 17px;
+      border: 1px solid #dfe7f3; border-radius: 11px; background: #fff;
+      color: inherit; text-decoration: none; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+    }
+    .research-link:hover { transform: translateY(-1px); border-color: #93b7f5; box-shadow: 0 5px 16px rgba(30, 64, 175, .10); }
+    .research-link-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .research-link-title { font-size: 16px; font-weight: 800; color: #172554; }
+    .external-mark { color: #4f8ef7; font-weight: 800; }
+    .research-link-description { margin-top: 7px; color: #5d6678; font-size: 13px; }
+    .research-link-use { margin-top: auto; padding-top: 12px; color: #1d4ed8; font-size: 12px; font-weight: 700; }
+    .metric-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+    .metric-chip { padding: 9px 10px; border: 1px solid #dce8fb; border-radius: 8px; background: #f7faff; color: #334155; font-size: 12px; font-weight: 700; }
+    .source-note { border-left: 4px solid #f59e0b; background: #fffbeb; color: #713f12; font-size: 13px; }
+    .source-note strong { color: #713f12; }
+    [hidden] { display: none !important; }
+    @media (max-width: 720px) {
+      .area-form { grid-template-columns: 1fr; }
+      .area-form .btn { width: 100%; }
+      .research-grid { grid-template-columns: 1fr; }
+      .metric-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .research-hero { padding: 20px; }
+    }
+  </style>
+</head>
+<body>
+  {% set page_tagline = 'Target-area market intelligence' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+
+  <main>
+    <section class="card research-hero">
+      <h1>Research a Target Area</h1>
+      <p>Build one focused research dashboard for recent sales, market trends, inventory, public records, community context, and local housing news.</p>
+      <form class="area-form" id="research-form">
+        <div class="area-field">
+          <label for="target-area">Neighborhood, City, State</label>
+          <input id="target-area" name="area" type="search" maxlength="200" autocomplete="off"
+                 placeholder="e.g. Meadow Ranch, Littleton, CO" value="{{ initial_area }}" required />
+          <div class="area-hint">Include the city and two-letter state so every search starts in the correct market.</div>
+        </div>
+        <button class="btn" type="submit">Build Research Links</button>
+      </form>
+    </section>
+
+    <section id="research-results" hidden aria-live="polite">
+      <div class="research-status">
+        <h2 id="results-title">Research links</h2>
+        <p class="muted">Each link opens a live source in a new tab with your Target Area included wherever the source supports it.</p>
+      </div>
+
+      <section class="source-section" aria-labelledby="sales-heading">
+        <div class="source-section-heading"><h2 id="sales-heading">Sales &amp; Market Activity</h2><span class="pill">Live sources</span></div>
+        <div class="research-grid" id="sales-links"></div>
+      </section>
+
+      <section class="source-section" aria-labelledby="metrics-heading">
+        <div class="source-section-heading"><h2 id="metrics-heading">DOM, Inventory &amp; Pricing</h2><span class="pill">Market reports</span></div>
+        <div class="research-grid" id="metrics-links"></div>
+        <div class="metric-list" aria-label="Recommended metrics to capture">
+          <div class="metric-chip">Median &amp; Average DOM</div>
+          <div class="metric-chip">Months of Inventory</div>
+          <div class="metric-chip">Active &amp; New Listings</div>
+          <div class="metric-chip">Pending &amp; Closed Sales</div>
+          <div class="metric-chip">Median Sale Price</div>
+          <div class="metric-chip">Sale-to-List Ratio</div>
+          <div class="metric-chip">Price Reductions</div>
+          <div class="metric-chip">Year-over-Year Change</div>
+        </div>
+      </section>
+
+      <section class="source-section" aria-labelledby="local-heading">
+        <div class="source-section-heading"><h2 id="local-heading">Public Records &amp; Community Context</h2></div>
+        <div class="research-grid" id="local-links"></div>
+      </section>
+
+      <section class="source-section" aria-labelledby="news-heading">
+        <div class="source-section-heading"><h2 id="news-heading">Local News &amp; Development</h2></div>
+        <div class="research-grid" id="news-links"></div>
+      </section>
+
+      <aside class="card source-note">
+        <strong>Use your MLS as the final authority.</strong> Public portals can differ in coverage, update timing, geographic boundaries, and how they calculate DOM or inventory. Confirm numbers with the local MLS or REALTOR&reg; association before presenting them to a client.
+      </aside>
+    </section>
+  </main>
+
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+  <script>
+    (function initResearchPage() {
+      const form = document.getElementById('research-form');
+      const input = document.getElementById('target-area');
+      const results = document.getElementById('research-results');
+
+      function googleSearch(query) {
+        return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+      }
+
+      function googleNews(query) {
+        return `https://news.google.com/search?q=${encodeURIComponent(query)}`;
+      }
+
+      function normalizeArea(value) {
+        let area = String(value || '').trim().replace(/\s+/g, ' ');
+        if (/\bmeadows? ranch\b/i.test(area) && /\blittleton\b/i.test(area) && /\bco(?:lorado)?\b/i.test(area)) {
+          area = 'Meadow Ranch, Littleton, CO';
+        }
+        return area;
+      }
+
+      function parseArea(value) {
+        const area = normalizeArea(value);
+        const parts = area.split(',').map(part => part.trim()).filter(Boolean);
+        if (parts.length < 3) return { area, neighborhood: area, city: '', state: '', cityState: '' };
+        const statePart = parts.pop();
+        const city = parts.pop();
+        const neighborhood = parts.join(', ');
+        const stateMatch = statePart.match(/^([A-Za-z]{2})(?:\s+\d{5}(?:-\d{4})?)?$/);
+        const state = stateMatch ? stateMatch[1].toUpperCase() : statePart;
+        return { area, neighborhood, city, state, cityState: `${city}, ${state}` };
+      }
+
+      function citySlug(location) {
+        return `${location.city}-${location.state}`.toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, '');
+      }
+
+      function zillowSoldUrl(location) {
+        if (!location.cityState) {
+          const fallback = location.area.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+          return `https://www.zillow.com/homes/recently_sold/${fallback}_rb/`;
+        }
+        const searchState = {
+          usersSearchTerm: location.cityState,
+          filterState: { keywords: { value: location.neighborhood } }
+        };
+        return `https://www.zillow.com/${citySlug(location)}/sold/?searchQueryState=${encodeURIComponent(JSON.stringify(searchState))}`;
+      }
+
+      function linkCard(item, area) {
+        const link = document.createElement('a');
+        link.className = 'research-link';
+        link.href = item.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.setAttribute('aria-label', `${item.title} for ${area} (opens in a new tab)`);
+
+        const top = document.createElement('div');
+        top.className = 'research-link-top';
+        const title = document.createElement('span');
+        title.className = 'research-link-title';
+        title.textContent = item.title;
+        const mark = document.createElement('span');
+        mark.className = 'external-mark';
+        mark.setAttribute('aria-hidden', 'true');
+        mark.textContent = '\u2197';
+        top.append(title, mark);
+
+        const description = document.createElement('div');
+        description.className = 'research-link-description';
+        description.textContent = item.description;
+        const use = document.createElement('div');
+        use.className = 'research-link-use';
+        use.textContent = item.use;
+        link.append(top, description, use);
+        return link;
+      }
+
+      function renderGroup(id, items, area) {
+        const container = document.getElementById(id);
+        container.replaceChildren(...items.map(item => linkCard(item, area)));
+      }
+
+      function buildResearch(rawArea) {
+        const location = parseArea(rawArea);
+        if (!location.area) return;
+        const cityContext = location.cityState || location.area;
+        const exactArea = `\"${location.area}\"`;
+
+        renderGroup('sales-links', [
+          {
+            title: 'Zillow Recently Sold',
+            url: zillowSoldUrl(location),
+            description: `Starts with sold homes in ${cityContext}${location.neighborhood ? ` and applies ${location.neighborhood} as the neighborhood keyword` : ''}.`,
+            use: 'Review recent closings and property-level sale history'
+          },
+          {
+            title: 'Redfin Area & Market Trends',
+            url: googleSearch(`site:redfin.com ${exactArea} housing market recently sold homes`),
+            description: 'Find the closest Redfin area page, housing-market trend page, and recent sold listings.',
+            use: 'Compare DOM, sale price, sale-to-list ratio, and recent sales'
+          },
+          {
+            title: 'Realtor.com Area Search',
+            url: googleSearch(`site:realtor.com/realestateandhomes-search ${exactArea} recently sold market trends`),
+            description: 'Open Realtor.com results for recent sales, listings, and local market context.',
+            use: 'Cross-check active inventory, listing history, and sold homes'
+          },
+          {
+            title: 'Homes.com Neighborhood Research',
+            url: googleSearch(`site:homes.com ${exactArea} neighborhood homes sold market`),
+            description: 'Find neighborhood guides, available homes, and sold-property context from another major portal.',
+            use: 'Add a third portal perspective to property and neighborhood research'
+          }
+        ], location.area);
+
+        renderGroup('metrics-links', [
+          {
+            title: 'Redfin Data Center',
+            url: 'https://www.redfin.com/news/data-center/',
+            description: 'Download and chart local housing metrics, including median DOM, inventory, prices, sales, and months of supply.',
+            use: `Select the closest geography to ${cityContext}`
+          },
+          {
+            title: 'Realtor.com Research Data',
+            url: 'https://www.realtor.com/research/reports/',
+            description: 'Access current inventory, listing, affordability, and local-market research reports.',
+            use: `Look for ${cityContext} in local market trends and data downloads`
+          },
+          {
+            title: 'Local MLS / REALTOR Reports',
+            url: googleSearch(`${exactArea} ${cityContext} monthly housing market report days on market months supply inventory REALTOR association MLS`),
+            description: 'Locate monthly reports from the local MLS or REALTOR association—the best source for market-specific definitions.',
+            use: 'Capture current DOM, months supply, listings, closings, and price trends'
+          },
+          {
+            title: 'FRED Housing Market Data',
+            url: googleSearch(`site:fred.stlouisfed.org ${cityContext} housing inventory days on market`),
+            description: 'Find Federal Reserve time series for metro or county housing trends when available.',
+            use: 'Compare local trends over time and against wider markets'
+          }
+        ], location.area);
+
+        renderGroup('local-links', [
+          {
+            title: 'County Assessor & Sales Records',
+            url: googleSearch(`${exactArea} ${cityContext} official county assessor property search recorded sales`),
+            description: 'Find the official county property-search site for assessed values, ownership, parcel data, and recorded sales.',
+            use: 'Verify public-record facts and identify the correct county'
+          },
+          {
+            title: 'U.S. Census Area Data',
+            url: `https://data.census.gov/all?q=${encodeURIComponent(cityContext)}`,
+            description: 'Explore official population, housing, household, income, commuting, and demographic data.',
+            use: 'Build an objective community and housing profile'
+          },
+          {
+            title: 'FEMA Flood Maps',
+            url: `https://msc.fema.gov/portal/search?AddressQuery=${encodeURIComponent(location.area)}`,
+            description: 'Open the FEMA Map Service Center to review official flood-hazard information for the area.',
+            use: 'Flag properties that need address-level flood-map review'
+          },
+          {
+            title: 'Schools & District Sources',
+            url: googleSearch(`${exactArea} ${cityContext} official school district school boundary performance data`),
+            description: 'Find official district boundaries, nearby schools, report cards, and state education data.',
+            use: 'Verify school assignments with official sources before client use'
+          }
+        ], location.area);
+
+        renderGroup('news-links', [
+          {
+            title: 'Housing Market News',
+            url: googleNews(`${location.area} housing market inventory days on market home prices sales`),
+            description: 'Search recent reporting about listings, buyer demand, prices, DOM, inventory, and closed sales.',
+            use: 'Add current context to the latest market statistics'
+          },
+          {
+            title: 'Planning, Zoning & Development',
+            url: googleSearch(`${exactArea} ${cityContext} city planning zoning development projects official`),
+            description: 'Find official plans, zoning changes, major development proposals, and public meeting materials.',
+            use: 'Identify changes that may affect future supply and neighborhood appeal'
+          },
+          {
+            title: 'Permits & New Construction',
+            url: googleSearch(`${exactArea} ${cityContext} building permits new construction development official`),
+            description: 'Locate permit portals and reporting on residential construction and planned projects.',
+            use: 'Research the local supply pipeline'
+          },
+          {
+            title: 'Local Business & Community News',
+            url: googleNews(`${location.area} ${cityContext} development business schools transportation`),
+            description: 'Track nearby employers, retail, transportation, schools, and community changes.',
+            use: 'Prepare informed neighborhood talking points'
+          }
+        ], location.area);
+
+        document.getElementById('results-title').textContent = `Research links for ${location.area}`;
+        results.hidden = false;
+        const url = new URL(window.location.href);
+        url.searchParams.set('area', location.area);
+        window.history.replaceState({}, '', url);
+      }
+
+      form.addEventListener('submit', event => {
+        event.preventDefault();
+        if (!form.reportValidity()) return;
+        buildResearch(input.value);
+        results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+
+      if (input.value.trim()) buildResearch(input.value);
+    })();
+  </script>
+</body>
+</html>
