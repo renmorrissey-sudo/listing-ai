@@ -1638,9 +1638,13 @@
     const targetArea = (item.target_area || document.getElementById('script-form').elements.area.value || '').trim();
     const zillowLink = document.getElementById('script-zillow-link');
     if (targetArea) {
-      const locationPath = encodeURIComponent(targetArea.replace(/\s+/g, '-'));
+      let zillowTargetArea = targetArea;
+      if (/\bmeadows? ranch\b/i.test(targetArea) && /\blittleton\b/i.test(targetArea) && /\bco(?:lorado)?\b/i.test(targetArea)) {
+        zillowTargetArea = 'Meadow Ranch, Littleton, CO 80127';
+      }
+      const locationPath = encodeURIComponent(zillowTargetArea.replace(/\s+/g, '-'));
       zillowLink.href = `https://www.zillow.com/homes/recently_sold/${locationPath}_rb/`;
-      zillowLink.setAttribute('aria-label', `View recently sold homes in ${targetArea} on Zillow`);
+      zillowLink.setAttribute('aria-label', `View recently sold homes in ${zillowTargetArea} on Zillow`);
       zillowLink.style.display = 'inline-block';
     } else {
       zillowLink.style.display = 'none';

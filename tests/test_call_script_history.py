@@ -107,3 +107,5 @@ def test_call_script_page_has_history_and_area_lookup_controls(app_client, two_u
     assert 'id="script-zillow-link"' in html
     assert "https://www.zillow.com/homes/recently_sold/" in html
     assert 'target="_blank" rel="noopener noreferrer"' in html
+    assert "zillowTargetArea = 'Meadow Ranch, Littleton, CO 80127'" in html
+    assert r"/\bmeadows? ranch\b/i" in html
