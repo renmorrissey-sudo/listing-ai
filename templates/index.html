@@ -1615,6 +1615,43 @@
     if (listingId) openListing(listingId);
   }
 
+  function buildZillowSoldUrl(targetArea) {
+    let area = String(targetArea || '').trim();
+    if (!area) return '';
+
+    // Anchor this easily-confused neighborhood to its actual city before
+    // asking Zillow to apply the neighborhood filter.
+    if (/\bmeadows? ranch\b/i.test(area) && /\blittleton\b/i.test(area) && /\bco(?:lorado)?\b/i.test(area)) {
+      area = 'Meadow Ranch, Littleton, CO';
+    }
+
+    const parts = area.split(',').map(part => part.trim()).filter(Boolean);
+    if (parts.length < 2) {
+      const locationPath = encodeURIComponent(area.replace(/\s+/g, '-'));
+      return `https://www.zillow.com/homes/recently_sold/${locationPath}_rb/`;
+    }
+
+    const neighborhood = parts.shift();
+    let cityState = parts.join(', ');
+    const cityStateMatch = cityState.match(/^(.+?)\s*,?\s+([A-Za-z]{2})(?:\s+\d{5})?$/);
+    if (!cityStateMatch) {
+      const locationPath = encodeURIComponent(area.replace(/\s+/g, '-'));
+      return `https://www.zillow.com/homes/recently_sold/${locationPath}_rb/`;
+    }
+
+    const city = cityStateMatch[1].trim();
+    const state = cityStateMatch[2].toUpperCase();
+    cityState = `${city}, ${state}`;
+    const citySlug = `${city}-${state}`.toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
+    const searchState = {
+      usersSearchTerm: cityState,
+      filterState: {keywords: {value: neighborhood}}
+    };
+    return `https://www.zillow.com/${citySlug}/sold/?searchQueryState=${encodeURIComponent(JSON.stringify(searchState))}`;
+  }
+
   function renderScriptOutput(item, options = {}) {
     document.getElementById('out-overview').textContent = item.overview || item.area_overview || 'No area overview was saved for this run.';
     document.getElementById('out-opening').textContent = item.opening || item.opening_script || '';
@@ -1638,13 +1675,8 @@
     const targetArea = (item.target_area || document.getElementById('script-form').elements.area.value || '').trim();
     const zillowLink = document.getElementById('script-zillow-link');
     if (targetArea) {
-      let zillowTargetArea = targetArea;
-      if (/\bmeadows? ranch\b/i.test(targetArea) && /\blittleton\b/i.test(targetArea) && /\bco(?:lorado)?\b/i.test(targetArea)) {
-        zillowTargetArea = 'Meadow Ranch, Littleton, CO 80127';
-      }
-      const locationPath = encodeURIComponent(zillowTargetArea.replace(/\s+/g, '-'));
-      zillowLink.href = `https://www.zillow.com/homes/recently_sold/${locationPath}_rb/`;
-      zillowLink.setAttribute('aria-label', `View recently sold homes in ${zillowTargetArea} on Zillow`);
+      zillowLink.href = buildZillowSoldUrl(targetArea);
+      zillowLink.setAttribute('aria-label', `View recently sold homes in ${targetArea} on Zillow`);
       zillowLink.style.display = 'inline-block';
     } else {
       zillowLink.style.display = 'none';
