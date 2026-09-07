@@ -53,7 +53,6 @@ def _records():
         for index in range(4)
     ]
 
-
 def test_rentcast_search_requests_local_recorded_sales_and_maps_provenance():
     captured = {}
 
@@ -76,6 +75,54 @@ def test_rentcast_search_requests_local_recorded_sales_and_maps_provenance():
     assert comps[0]["verification_source"] == "RentCast public property records"
     assert comps[0]["assessor_id"] == "APN-0"
 
+def test_rentcast_avm_returns_provider_value_and_distance_correlated_comps():
+    captured = {}
+    comparable = {
+        "id": "nearby-1",
+        "formattedAddress": "10895 W Rockland Dr, Littleton, CO 80127",
+        "price": 1150000,
+        "bedrooms": 5,
+        "bathrooms": 5,
+        "squareFootage": 4731,
+        "distance": 0.3156,
+        "correlation": 0.9926,
+        "removedDate": "2026-05-21T00:00:00.000Z",
+    }
+    response_payload = {
+        "price": 1014000,
+        "priceRangeLow": 858000,
+        "priceRangeHigh": 1171000,
+        "comparables": [
+            {**comparable, "id": f"nearby-{index}", "formattedAddress": f"{index} Nearby St, Littleton, CO 80127", "correlation": 0.99 - index / 100}
+            for index in range(10)
+        ],
+    }
+
+    def opener(request, timeout):
+        captured["request"] = request
+        return _Response(response_payload)
+
+    result = cma_property_search.search_market_comparables(
+        _search_payload(), api_key="test-key", opener=opener
+    )
+
+    query = parse_qs(urlparse(captured["request"].full_url).query)
+    assert urlparse(captured["request"].full_url).path == "/v1/avm/value"
+    assert query["address"] == ["8533 S Miller Court, Littleton, CO"]
+    assert query["bedrooms"] == ["5"]
+    assert query["bathrooms"] == ["5.0"]
+    assert query["squareFootage"] == ["4770"]
+    assert query["daysOld"] == ["184"]
+    assert query["compCount"] == ["10"]
+    assert result["valuation"] == {
+        "indicated_value": 1014000,
+        "range_low": 858000,
+        "range_high": 1171000,
+        "source": "RentCast automated valuation model",
+    }
+    assert result["comparables"][0]["distance_miles"] == 0.316
+    assert result["comparables"][0]["correlation"] == 0.99
+    assert result["comparables"][0]["evidence_type"] == "avm_listing"
 
 def test_automatic_cma_requires_explicit_records_provider_disclosure(app_client, two_users):
     user_id, _ = two_users
@@ -90,7 +137,6 @@ def test_automatic_cma_requires_explicit_records_provider_disclosure(app_client,
     assert response.status_code == 400
     assert "Acknowledge" in response.get_json()["error"]
 
-
 def test_automatic_cma_searches_builds_and_saves_report(app_client, two_users):
     user_id, _ = two_users
     with app_client.session_transaction() as session:
@@ -98,32 +144,48 @@ def test_automatic_cma_searches_builds_and_saves_report(app_client, two_users):
         session["session_version"] = 1
     payload = _search_payload()
     payload.update({"automatic_search": True, "records_provider_disclosure_accepted": True})
-
-    with patch("cma_routes.search_sold_comparables", return_value=[
+    comps = [
         {
-            "address": row["formattedAddress"],
-            "sale_date": row["lastSaleDate"][:10],
-            "sale_price": row["lastSalePrice"],
+            "address": f"{index} Nearby St, Littleton, CO 80127",
+            "sale_date": (date.today() - timedelta(days=30)).isoformat(),
+            "sale_price": 950000 + index * 25000,
             "property_type": "single_family",
-            "beds": row["bedrooms"],
-            "baths": row["bathrooms"],
-            "sqft": row["squareFootage"],
-            "distance_miles": None,
-            "notes": "Public-record sale",
-            "verification_source": "RentCast public property records",
-            "source_record_id": row["id"],
-            "assessor_id": row["assessorID"],
+            "beds": 5,
+            "baths": 5,
+            "sqft": 4500 + index * 50,
+            "distance_miles": 0.1 + index / 10,
+            "correlation": 0.99 - index / 100,
+            "evidence_type": "avm_listing",
+            "notes": "AVM comparable listing",
+            "verification_source": "RentCast AVM sale listings",
+            "source_record_id": f"nearby-{index}",
+            "assessor_id": "",
         }
-        for row in _records()
-    ]):
+        for index in range(4)
+    ]
+    market_data = {
+        "comparables": comps,
+        "valuation": {
+            "indicated_value": 1014000,
+            "range_low": 858000,
+            "range_high": 1171000,
+            "source": "RentCast automated valuation model",
+        },
+    }
+
+    with patch("cma_routes.search_market_comparables", return_value=market_data):
         response = app_client.post("/api/cma/reports", json=payload)
 
     assert response.status_code == 201
     saved = cma_db.get_report(user_id, response.get_json()["report_id"])
     assert len(saved["selected_comparables"]) == 3
-    assert saved["selected_comparables"][0]["verification_source"] == "RentCast public property records"
-    assert saved["analysis"]["public_record_count"] == 4
-
+    assert saved["selected_comparables"][0]["verification_source"] == "RentCast AVM sale listings"
+    assert saved["selected_comparables"][0]["distance_miles"] == 0.1
+    assert saved["analysis"]["avm_comparable_count"] == 4
+    assert saved["analysis"]["indicated_value"] == 1014000
+    assert saved["analysis"]["indicated_range_low"] == 858000
+    assert saved["analysis"]["indicated_range_high"] == 1171000
+    assert saved["analysis"]["valuation_method"] == "provider_avm"
 
 def test_builder_has_prominent_automatic_build_action(app_client, two_users):
     user_id, _ = two_users

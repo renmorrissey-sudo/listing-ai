@@ -6,7 +6,7 @@ import auth
 import cma_db
 import db
 from cma_service import CMAValidationError, build_cma
-from cma_property_search import ComparableSearchError, search_sold_comparables
+from cma_property_search import ComparableSearchError, search_market_comparables
 
 
 cma_bp = Blueprint("cma", __name__)
@@ -56,9 +56,10 @@ def create_report():
                     "Acknowledge the RentCast records-provider disclosure before automatic search."
                 )
             payload = dict(payload)
-            automatic_comps = search_sold_comparables(payload)
+            market_data = search_market_comparables(payload)
             manual_comps = payload.get("comparables") if isinstance(payload.get("comparables"), list) else []
-            payload["comparables"] = automatic_comps + manual_comps
+            payload["comparables"] = market_data["comparables"] + manual_comps
+            payload["market_valuation"] = market_data["valuation"]
         report = build_cma(payload)
         saved = cma_db.create_report(auth.get_current_user()["id"], report)
         db.record_tool_usage(auth.get_current_user()["id"], "cma_generator", "generated")

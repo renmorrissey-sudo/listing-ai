@@ -12,6 +12,7 @@ import config
 
 
 RENTCAST_PROPERTIES_URL = "https://api.rentcast.io/v1/properties"
+RENTCAST_AVM_URL = "https://api.rentcast.io/v1/avm/value"
 PROPERTY_TYPE_MAP = {
     "single_family": "Single Family",
     "condo": "Condo",
@@ -64,8 +65,6 @@ def _request_json(url, api_key, opener):
         raise ComparableSearchError("The sold-property records service is temporarily unavailable.") from exc
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ComparableSearchError("The sold-property records service returned an unreadable response.") from exc
-    if not isinstance(payload, list):
-        raise ComparableSearchError("The sold-property records service returned an unexpected response.")
     return payload
 
 
@@ -98,6 +97,8 @@ def search_sold_comparables(payload, *, api_key=None, opener=urllib.request.urlo
     }
     url = f"{RENTCAST_PROPERTIES_URL}?{urllib.parse.urlencode(params)}"
     records = _request_json(url, api_key, opener)
+    if not isinstance(records, list):
+        raise ComparableSearchError("The sold-property records service returned an unexpected response.")
 
     subject_key = " ".join(f"{address} {city} {state}".lower().replace(",", "").split())
     comparables = []
@@ -148,3 +149,101 @@ def search_sold_comparables(payload, *, api_key=None, opener=urllib.request.urlo
             "Expand the date range or add verified MLS comps manually."
         )
     return comparables
+
+def search_market_comparables(payload, *, api_key=None, opener=urllib.request.urlopen):
+    """Return RentCast's distance-aware AVM and its most correlated market comps."""
+    api_key = (api_key if api_key is not None else config.RENTCAST_API_KEY).strip()
+    if not api_key:
+        raise ComparableSearchError(
+            "Automatic comparable search is not configured yet. Add the RentCast API key to TopAI."
+        )
+
+    address = str(payload.get("subject_address") or "").strip()
+    city = str(payload.get("city") or "").strip()
+    state = str(payload.get("state") or "").strip().upper()
+    property_type = PROPERTY_TYPE_MAP.get(str(payload.get("property_type") or "").strip())
+    bedrooms = _integer(payload.get("beds"), "bedroom count")
+    try:
+        bathrooms = float(payload.get("baths"))
+    except (TypeError, ValueError) as exc:
+        raise ComparableSearchError("Enter a valid bathroom count before building the CMA.") from exc
+    square_feet = _integer(payload.get("sqft"), "square footage", 100)
+    months = _integer(payload.get("date_range_months"), "comparable lookback period", 1)
+    days = _month_days(months)
+    requested = _integer(payload.get("comp_count"), "comparable count", 1)
+    if not address or not city or len(state) != 2 or not property_type or not days:
+        raise ComparableSearchError("Complete the target property and CMA search fields first.")
+
+    params = {
+        "address": f"{address}, {city}, {state}",
+        "propertyType": property_type,
+        "bedrooms": str(bedrooms),
+        "bathrooms": str(bathrooms),
+        "squareFootage": str(square_feet),
+        "maxRadius": "5",
+        "daysOld": str(days),
+        "compCount": str(max(10, requested)),
+        "lookupSubjectAttributes": "true",
+    }
+    url = f"{RENTCAST_AVM_URL}?{urllib.parse.urlencode(params)}"
+    result = _request_json(url, api_key, opener)
+    if not isinstance(result, dict):
+        raise ComparableSearchError("The property valuation service returned an unexpected response.")
+
+    try:
+        valuation = {
+            "indicated_value": int(float(result["price"])),
+            "range_low": int(float(result["priceRangeLow"])),
+            "range_high": int(float(result["priceRangeHigh"])),
+            "source": "RentCast automated valuation model",
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ComparableSearchError("RentCast could not calculate a reliable value for this property.") from exc
+    if not (1_000 <= valuation["range_low"] <= valuation["indicated_value"] <= valuation["range_high"]):
+        raise ComparableSearchError("RentCast returned an invalid valuation range for this property.")
+
+    comparables = []
+    for record in result.get("comparables") or []:
+        if not isinstance(record, dict):
+            continue
+        reference_date = _sale_date(record.get("removedDate") or record.get("lastSeenDate"))
+        required = (
+            record.get("formattedAddress"),
+            reference_date,
+            record.get("price"),
+            record.get("bedrooms"),
+            record.get("bathrooms"),
+            record.get("squareFootage"),
+            record.get("correlation"),
+            record.get("distance"),
+        )
+        if any(value in {None, ""} for value in required):
+            continue
+        try:
+            comparables.append(
+                {
+                    "address": str(record["formattedAddress"]),
+                    "sale_date": reference_date,
+                    "sale_price": int(float(record["price"])),
+                    "property_type": str(payload.get("property_type")),
+                    "beds": int(float(record["bedrooms"])),
+                    "baths": float(record["bathrooms"]),
+                    "sqft": int(float(record["squareFootage"])),
+                    "distance_miles": round(float(record["distance"]), 3),
+                    "correlation": float(record["correlation"]),
+                    "evidence_type": "avm_listing",
+                    "notes": "AVM comparable sale listing; price and reference date are listing-market evidence, not a verified closed-sale record.",
+                    "verification_source": "RentCast AVM sale listings",
+                    "source_record_id": str(record.get("id") or ""),
+                    "assessor_id": "",
+                }
+            )
+        except (TypeError, ValueError):
+            continue
+    if len(comparables) < requested:
+        raise ComparableSearchError(
+            f"RentCast found only {len(comparables)} complete, correlated market comparables. "
+            "Expand the lookback period or add verified MLS comps manually."
+        )
+    comparables.sort(key=lambda comp: (-comp["correlation"], comp["distance_miles"]))
+    return {"comparables": comparables, "valuation": valuation}

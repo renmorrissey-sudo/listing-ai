@@ -64,7 +64,7 @@
       {% if report.prospect_name %}<p>Prepared for {{ report.prospect_name }}</p>{% endif %}
       <div class="report-cover-meta">
         <span>{{ report.criteria.prospect_type_label }} prospect</span>
-        <span>{{ report.criteria.date_range_months }}-month sale window</span>
+        <span>{{ report.criteria.date_range_months }}-month market lookback</span>
         <span>{{ report.analysis.selected_count }} selected comparables</span>
         <span>Prepared {{ report.criteria.report_date }}</span>
       </div>
@@ -73,9 +73,9 @@
     <section class="card">
       <h2>Pricing overview</h2>
       <div class="value-grid">
-        <div class="value-card primary"><div class="value-label">Size-adjusted indication</div><div class="value-number">{{ money(report.analysis.indicated_value) }}</div><div class="value-detail">Weighted by comparable similarity</div></div>
-        <div class="value-card"><div class="value-label">Indicated range</div><div class="value-number" style="font-size:17px">{{ money(report.analysis.indicated_range_low) }}–{{ money(report.analysis.indicated_range_high) }}</div><div class="value-detail">Comparable $/sq. ft. applied to target size</div></div>
-        <div class="value-card"><div class="value-label">Median sale price</div><div class="value-number">{{ money(report.analysis.median_sale_price) }}</div><div class="value-detail">Selected closed sales</div></div>
+        <div class="value-card primary"><div class="value-label">{% if report.analysis.valuation_method == "provider_avm" %}Automated market estimate{% else %}Size-adjusted indication{% endif %}</div><div class="value-number">{{ money(report.analysis.indicated_value) }}</div><div class="value-detail">{{ report.analysis.valuation_source or "Weighted by comparable similarity" }}</div></div>
+        <div class="value-card"><div class="value-label">Indicated range</div><div class="value-number" style="font-size:17px">{{ money(report.analysis.indicated_range_low) }}–{{ money(report.analysis.indicated_range_high) }}</div><div class="value-detail">{% if report.analysis.valuation_method == "provider_avm" %}RentCast AVM confidence range{% else %}Comparable $/sq. ft. applied to target size{% endif %}</div></div>
+        <div class="value-card"><div class="value-label">{% if report.analysis.avm_comparable_count %}Median comp price{% else %}Median sale price{% endif %}</div><div class="value-number">{{ money(report.analysis.median_sale_price) }}</div><div class="value-detail">{% if report.analysis.avm_comparable_count %}Selected comparable market evidence{% else %}Selected closed sales{% endif %}</div></div>
         <div class="value-card"><div class="value-label">Average $/sq. ft.</div><div class="value-number">{{ money(report.analysis.average_price_per_sqft) }}</div><div class="value-detail">Confidence: {{ report.analysis.confidence }}</div></div>
       </div>
     </section>
@@ -92,11 +92,11 @@
     </section>
 
     <section class="card">
-      <h2>Selected comparable sales</h2>
-      <p class="muted" style="font-size:12px">Ranked by property type, living-area similarity, bed/bath count, distance when supplied, and recency.</p>
+      <h2>Selected comparable market evidence</h2>
+      <p class="muted" style="font-size:12px">Ranked by RentCast correlation and distance for automatic AVM searches; manually entered closed sales use TopAI's property-similarity scoring.</p>
       <div class="comp-table-wrap">
         <table>
-          <thead><tr><th>Rank / Property</th><th>Sold</th><th>Price</th><th>Beds / Baths</th><th>Sq. ft.</th><th>$/sq. ft.</th><th>Distance</th><th>Match</th></tr></thead>
+          <thead><tr><th>Rank / Property</th><th>Reference date</th><th>Price evidence</th><th>Beds / Baths</th><th>Sq. ft.</th><th>$/sq. ft.</th><th>Distance</th><th>Match</th></tr></thead>
           <tbody>
             {% for comp in report.selected_comparables %}
             <tr>
@@ -117,12 +117,12 @@
 
     <section class="card methodology">
       <h2>How this CMA was calculated</h2>
-      <p>TopAI evaluated {{ report.analysis.candidate_count }} candidate sale{% if report.analysis.candidate_count != 1 %}s{% endif %}{% if report.analysis.public_record_count %}, including {{ report.analysis.public_record_count }} retrieved from RentCast public property records{% endif %}; {{ report.analysis.eligible_count }} fell inside the selected date window and the {{ report.analysis.selected_count }} closest matches were retained. The size-adjusted indication applies each selected sale's price per square foot to the target property's {{ number(report.criteria.sqft) }} square feet, then weights those indications by similarity. {{ report.analysis.excluded_count }} candidate{% if report.analysis.excluded_count != 1 %}s were{% else %} was{% endif %} excluded by date.</p>
+      <p>{% if report.analysis.valuation_method == "provider_avm" %}The indicated value and range come directly from the RentCast automated valuation model, which evaluates the exact location, subject attributes, nearby listing-market evidence, distance, and comparable correlation. TopAI retained the {{ report.analysis.selected_count }} highest-correlated eligible comparables from {{ report.analysis.avm_comparable_count }} AVM candidates. It does not extrapolate distant luxury-home price per square foot to the subject.{% else %}TopAI evaluated {{ report.analysis.candidate_count }} candidate sales and retained the {{ report.analysis.selected_count }} closest matches. The size-adjusted indication applies each selected sale's price per square foot to the target property's {{ number(report.criteria.sqft) }} square feet, then weights those indications by similarity.{% endif %}</p>
     </section>
 
     <section class="card disclosure">
       <h2>Important CMA disclosure</h2>
-      <p>This is a comparative market analysis, not an appraisal or guarantee of market value. It uses public-record data returned by RentCast together with any facts supplied by the real estate professional. Public-record updates can lag county recordings and may be incomplete. Verify all facts, concessions, condition differences, geographic boundaries, and sale records in the local MLS and public records before presenting or relying on this report.</p>
+      <p>This is a comparative market analysis, not an appraisal or guarantee of market value. RentCast AVM comparable prices and reference dates may come from active or inactive sale listings and are not automatically verified closed-sale amounts. Public records can lag county recordings. Verify status, final sale price, concessions, condition, geographic boundaries, and all material facts in the local MLS and public records before presenting or relying on this report.</p>
     </section>
   </main>
   {% include 'subscriber_footer.html' %}

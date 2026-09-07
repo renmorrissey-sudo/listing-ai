@@ -72,7 +72,7 @@
   <main>
     <section class="card cma-hero">
       <h1>Create a Competitive Market Analysis</h1>
-      <p>Define the seller's home or a buyer's target property, add verified closed sales, and TopAI will rank the most applicable comparables and build a printable pricing report.</p>
+      <p>Define the target property and TopAI will calculate a location-aware market estimate, select the most correlated nearby evidence, and build a printable pricing report.</p>
     </section>
 
     <form id="cma-form" novalidate>
@@ -126,7 +126,7 @@
             </select>
           </div>
           <div class="field">
-            <label for="date-range">Closed-sale date range</label>
+            <label for="date-range">Comparable lookback period</label>
             <select id="date-range" required>
               <option value="1">Past 1 month</option>
               <option value="3">Past 3 months</option>
@@ -136,13 +136,13 @@
           </div>
         </div>
         <div class="source-callout">
-          <div><strong>Automatic public-record comparable search</strong><p>TopAI searches recorded sales within 5 miles, filters by the selected date range and property type, then ranks the closest matches.</p></div>
+          <div><strong>Automatic location-aware valuation and comparable search</strong><p>TopAI uses RentCast's automated valuation model to analyze the exact address, property attributes, nearby market activity, distance, and comparable correlation.</p></div>
           <a class="btn secondary" id="research-sales" href="/research" target="_blank" rel="noopener noreferrer">Research this area</a>
         </div>
         <div class="build-primary-panel">
           <label class="provider-disclosure" for="records-provider-disclosure">
             <input id="records-provider-disclosure" type="checkbox" required />
-            <span>I understand that the target property address, property type, bedrooms, bathrooms, square footage, and search range will be sent to RentCast to search its public property-record database. I will verify selected sales against my MLS or local records before presenting the report.</span>
+            <span>I understand that the target property address, property type, bedrooms, bathrooms, square footage, and lookback period will be sent to RentCast for an automated valuation and comparable-market search. AVM comparable prices and dates may be listing evidence rather than verified closed-sale records, so I will verify them in my MLS or local records before presenting the report.</span>
           </label>
           <button class="btn build-cma-primary" id="build-cma-primary" type="submit">Build CMA</button>
         </div>

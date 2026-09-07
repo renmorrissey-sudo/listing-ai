@@ -143,10 +143,35 @@ def _clean_comparable(raw, index):
         "verification_source": _text(raw.get("verification_source"), "Verification source", required=False, max_length=120),
         "source_record_id": _text(raw.get("source_record_id"), "Source record ID", required=False, max_length=240),
         "assessor_id": _text(raw.get("assessor_id"), "Assessor ID", required=False, max_length=120),
+        "evidence_type": _text(
+            raw.get("evidence_type"), "Evidence type", required=False, max_length=40
+        ),
+        "correlation": (
+            float(
+                _decimal(
+                    raw.get("correlation"),
+                    "Provider correlation",
+                    minimum=0,
+                    maximum=1,
+                    required=False,
+                )
+            )
+            if str(raw.get("correlation") or "").strip()
+            else None
+        ),
     }
 
 
 def _score(subject, comp, today):
+    if comp.get("correlation") is not None:
+        score = Decimal(str(comp["correlation"] * 100))
+        reasons = ["RentCast AVM correlation"]
+        if comp["distance_miles"] is not None and comp["distance_miles"] <= 0.5:
+            reasons.append("within 0.5 mile")
+        if abs(comp["sqft"] - subject["sqft"]) / subject["sqft"] <= 0.15:
+            reasons.append("similar size")
+        return max(Decimal("0"), score).quantize(Decimal("0.1")), reasons
+
     score = Decimal("100")
     reasons = []
     if comp["property_type"] == subject["property_type"]:
@@ -246,7 +271,14 @@ def build_cma(payload, *, today=None):
     analysis = {
         "selected_count": len(selected),
         "candidate_count": len(cleaned),
-        "public_record_count": sum(1 for comp in cleaned if comp.get("verification_source")),
+        "public_record_count": sum(
+            1
+            for comp in cleaned
+            if comp.get("verification_source") and comp.get("evidence_type") != "avm_listing"
+        ),
+        "avm_comparable_count": sum(
+            1 for comp in cleaned if comp.get("evidence_type") == "avm_listing"
+        ),
         "eligible_count": len(eligible),
         "excluded_count": len(excluded),
         "average_sale_price": _round_currency(sum(prices) / len(prices)),
@@ -260,6 +292,27 @@ def build_cma(payload, *, today=None):
         "average_similarity_score": round(average_score, 1),
         "confidence": confidence,
     }
+    market_valuation = payload.get("market_valuation")
+    if isinstance(market_valuation, dict):
+        avm_value = _money_int(market_valuation.get("indicated_value"), "AVM indicated value")
+        avm_low = _money_int(market_valuation.get("range_low"), "AVM range low")
+        avm_high = _money_int(market_valuation.get("range_high"), "AVM range high")
+        if not avm_low <= avm_value <= avm_high:
+            raise CMAValidationError("The AVM range must contain its indicated value.")
+        analysis.update(
+            {
+                "indicated_value": avm_value,
+                "indicated_range_low": avm_low,
+                "indicated_range_high": avm_high,
+                "valuation_source": _text(
+                    market_valuation.get("source"),
+                    "Valuation source",
+                    max_length=120,
+                ),
+                "valuation_method": "provider_avm",
+            }
+        )
+
     criteria = {
         **subject,
         "comp_count": comp_count,
