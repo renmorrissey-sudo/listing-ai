@@ -176,6 +176,71 @@ def test_create_and_render_cma_report(app_client, two_users):
     assert "not an appraisal" in html
 
 
+
+def test_cma_report_pdf_and_email_actions(app_client, two_users, monkeypatch):
+    user_id, _ = two_users
+    saved = cma_db.create_report(user_id, build_cma(_payload()))
+    _login(app_client, user_id)
+
+    page = app_client.get(f"/cma/reports/{saved['id']}")
+    html = page.get_data(as_text=True)
+    assert 'id="print-save-pdf"' in html
+    assert f'href="/cma/reports/{saved["id"]}/pdf"' in html
+    assert 'id="email-cma"' in html
+    assert "Send email with PDF" in html
+    assert 'onclick="window.print()"' not in html
+
+    pdf = app_client.get(f"/cma/reports/{saved['id']}/pdf")
+    assert pdf.status_code == 200
+    assert pdf.mimetype == "application/pdf"
+    assert pdf.data.startswith(b"%PDF-")
+    assert len(pdf.data) > 1500
+    assert "inline" in pdf.headers["Content-Disposition"].lower()
+    assert "CMA-100-Subject-Street.pdf" in pdf.headers["Content-Disposition"]
+
+    captured = {}
+
+    def fake_send(user_id_arg, **kwargs):
+        captured["user_id"] = user_id_arg
+        captured.update(kwargs)
+        return {
+            "to_email": kwargs["to_email"],
+            "provider": "gmail",
+            "provider_status": "sent",
+        }, None
+
+    monkeypatch.setattr("cma_routes.send_direct_email", fake_send)
+    response = app_client.post(
+        f"/api/cma/reports/{saved['id']}/email",
+        json={
+            "to_email": "client@example.com",
+            "subject": "Your CMA",
+            "body": "Please see the attached CMA report.",
+        },
+    )
+    assert response.status_code == 200
+    assert response.get_json()["message"] == "CMA report emailed to client@example.com."
+    assert captured["user_id"] == user_id
+    assert captured["attachments"][0]["filename"] == "CMA-100-Subject-Street.pdf"
+    assert captured["attachments"][0]["content_type"] == "application/pdf"
+    assert captured["attachments"][0]["content"].startswith(b"%PDF-")
+
+
+def test_cma_pdf_and_email_are_tenant_scoped(app_client, two_users, monkeypatch):
+    owner_id, other_id = two_users
+    saved = cma_db.create_report(owner_id, build_cma(_payload()))
+    _login(app_client, other_id)
+    monkeypatch.setattr(
+        "cma_routes.send_direct_email",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not send")),
+    )
+
+    assert app_client.get(f"/cma/reports/{saved['id']}/pdf").status_code == 404
+    assert app_client.post(
+        f"/api/cma/reports/{saved['id']}/email",
+        json={"to_email": "client@example.com", "subject": "CMA", "body": "Attached"},
+    ).status_code == 404
+
 def test_cma_report_is_tenant_scoped(app_client, two_users):
     owner_id, other_id = two_users
     report = build_cma(_payload())

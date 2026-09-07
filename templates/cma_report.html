@@ -8,6 +8,20 @@
   {% include 'crm_base_styles.html' %}
   <style>
     .report-actions { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+    .report-action-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+    .cma-modal[hidden] { display: none; }
+    .cma-modal { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; padding: 18px; background: rgba(15, 23, 42, .62); }
+    .cma-modal-card { width: min(650px, 100%); max-height: calc(100vh - 36px); overflow: auto; border-radius: 14px; background: white; box-shadow: 0 24px 70px rgba(15, 23, 42, .35); }
+    .cma-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px; border-bottom: 1px solid #dfe7f3; }
+    .cma-modal-head h2 { margin: 0; }
+    .cma-modal-body { display: grid; gap: 13px; padding: 20px; }
+    .cma-modal-body label { display: grid; gap: 5px; color: #334155; font-size: 12px; font-weight: 750; }
+    .cma-modal-body input, .cma-modal-body textarea { width: 100%; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px 11px; font: inherit; color: #172554; }
+    .cma-modal-body textarea { min-height: 235px; resize: vertical; line-height: 1.45; }
+    .cma-modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .cma-email-status { min-height: 18px; margin: 0; font-size: 12px; }
+    .cma-email-status.error { color: #b91c1c; }
+    .cma-email-status.success { color: #047857; }
     .report-cover { padding: 30px; background: linear-gradient(135deg, #172554, #1d4ed8); color: white; }
     .report-cover h1 { margin-bottom: 3px; color: white; }
     .report-cover .location { color: #dbeafe; font-size: 17px; }
@@ -54,7 +68,10 @@
   <main>
     <div class="report-actions">
       <a class="btn secondary" href="/cma">&larr; Create another CMA</a>
-      <button class="btn" type="button" onclick="window.print()">Print / Save PDF</button>
+      <div class="report-action-buttons">
+        <a class="btn" id="print-save-pdf" href="/cma/reports/{{ report.id }}/pdf" target="_blank" rel="noopener">Print / Save PDF</a>
+        <button class="btn secondary" id="email-cma" type="button">Email</button>
+      </div>
     </div>
 
     <section class="card report-cover">
@@ -125,7 +142,93 @@
       <p>This is a comparative market analysis, not an appraisal or guarantee of market value. RentCast AVM comparable prices and reference dates may come from active or inactive sale listings and are not automatically verified closed-sale amounts. Public records can lag county recordings. Verify status, final sale price, concessions, condition, geographic boundaries, and all material facts in the local MLS and public records before presenting or relying on this report.</p>
     </section>
   </main>
+
+  <div class="cma-modal" id="cma-email-modal" role="dialog" aria-modal="true" aria-labelledby="cma-email-title" hidden>
+    <div class="cma-modal-card">
+      <div class="cma-modal-head">
+        <h2 id="cma-email-title">Email CMA report</h2>
+        <button class="btn secondary" id="close-cma-email" type="button" aria-label="Close email form">Close</button>
+      </div>
+      <form class="cma-modal-body" id="cma-email-form">
+        <p class="muted" style="margin:0">TopAI will attach <strong>{{ pdf_filename|e }}</strong> to this email.</p>
+        <label>Recipient email
+          <input id="cma-email-to" name="to_email" type="email" autocomplete="email" required placeholder="client@example.com" />
+        </label>
+        <label>Subject
+          <input id="cma-email-subject" name="subject" type="text" maxlength="200" required value="{{ email_template.subject|e }}" />
+        </label>
+        <label>Message
+          <textarea id="cma-email-body" name="body" maxlength="10000" required>{{ email_template.body|e }}</textarea>
+        </label>
+        <p class="cma-email-status" id="cma-email-status" role="status" aria-live="polite"></p>
+        <div class="cma-modal-actions">
+          <button class="btn secondary" id="cancel-cma-email" type="button">Cancel</button>
+          <button class="btn" id="send-cma-email" type="submit">Send email with PDF</button>
+        </div>
+      </form>
+    </div>
+  </div>
   {% include 'subscriber_footer.html' %}
   {% include 'subscriber_nav_script.html' %}
+  <script>
+    (() => {
+      const modal = document.getElementById('cma-email-modal');
+      const form = document.getElementById('cma-email-form');
+      const status = document.getElementById('cma-email-status');
+      const sendButton = document.getElementById('send-cma-email');
+      const openModal = () => {
+        status.textContent = '';
+        status.className = 'cma-email-status';
+        modal.hidden = false;
+        window.setTimeout(() => document.getElementById('cma-email-to').focus(), 0);
+      };
+      const closeModal = () => {
+        if (!sendButton.disabled) modal.hidden = true;
+      };
+      document.getElementById('email-cma').addEventListener('click', openModal);
+      document.getElementById('close-cma-email').addEventListener('click', closeModal);
+      document.getElementById('cancel-cma-email').addEventListener('click', closeModal);
+      modal.addEventListener('click', event => {
+        if (event.target === modal) closeModal();
+      });
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && !modal.hidden) closeModal();
+      });
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        if (!form.reportValidity()) return;
+        sendButton.disabled = true;
+        sendButton.textContent = 'Building PDF and sending...';
+        status.textContent = '';
+        status.className = 'cma-email-status';
+        try {
+          const response = await fetch('/api/cma/reports/{{ report.id }}/email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to_email: document.getElementById('cma-email-to').value,
+              subject: document.getElementById('cma-email-subject').value,
+              body: document.getElementById('cma-email-body').value
+            })
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || 'TopAI could not send this CMA email.');
+          status.textContent = data.message;
+          status.className = 'cma-email-status success';
+          sendButton.textContent = 'Sent';
+          window.setTimeout(() => {
+            modal.hidden = true;
+            sendButton.disabled = false;
+            sendButton.textContent = 'Send email with PDF';
+          }, 1200);
+        } catch (error) {
+          status.textContent = error.message;
+          status.className = 'cma-email-status error';
+          sendButton.disabled = false;
+          sendButton.textContent = 'Send email with PDF';
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

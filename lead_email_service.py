@@ -163,6 +163,87 @@ def personalize_lead_email_body(user_id, lead, body):
     return body[:5000]
 
 
+def send_direct_email(
+    user_id,
+    *,
+    to_email,
+    subject,
+    body,
+    attachments=None,
+    integration_id=None,
+):
+    """Send a direct email through the user's connected provider."""
+    to_email = str(to_email or "").strip()
+    subject = str(subject or "").strip()[:200]
+    body = str(body or "").strip()[:10000]
+    if not _valid_email(to_email):
+        return None, "Enter a valid recipient email address."
+    if not subject or not body:
+        return None, "Subject and message are required before sending email."
+
+    normalized_attachments = []
+    total_size = 0
+    for item in attachments or []:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        filename = str(item.get("filename") or "").strip()[:180]
+        content_type = str(item.get("content_type") or "application/octet-stream").strip()[:120]
+        if not filename or not isinstance(content, bytes):
+            return None, "TopAI could not prepare the email attachment."
+        total_size += len(content)
+        normalized_attachments.append(
+            {
+                "filename": filename,
+                "content_type": content_type,
+                "content": content,
+            }
+        )
+    if total_size > 10 * 1024 * 1024:
+        return None, "The email attachment is too large to send."
+
+    integration = _choose_send_integration(user_id, integration_id=integration_id)
+    if not integration:
+        return None, "Connect Gmail, Microsoft 365, or SendGrid before sending email."
+    try:
+        connection = marketing_db.get_integration_credentials(user_id, integration["id"])
+    except IntegrationCredentialError:
+        return None, "TopAI could not securely read this email connection. Reconnect it."
+    if not connection:
+        return None, "This email account needs to be reconnected."
+
+    try:
+        connection = _refresh_if_needed(user_id, connection)
+        provider = _provider(connection)
+        if not provider:
+            return None, "This email provider is not ready for sending."
+        result = provider.send_email(
+            to_email=to_email,
+            subject=subject,
+            html_content=_render_html(body),
+            plain_content=body,
+            attachments=normalized_attachments,
+            sender_id=connection.get("sender_id"),
+            sender_name=connection.get("sender_name") or connection.get("display_name"),
+            sender_email=connection.get("sender_email")
+            or connection.get("external_account_email"),
+        )
+    except (ValueError, EmailCampaignProviderError) as exc:
+        message = exc.user_message if isinstance(exc, EmailCampaignProviderError) else str(exc)
+        return None, message
+
+    return {
+        "ok": True,
+        "to_email": to_email,
+        "subject": subject,
+        "provider": integration.get("provider"),
+        "integration_id": integration.get("id"),
+        "provider_message_id": result.get("provider_message_id"),
+        "provider_status": result.get("provider_status") or "sent",
+        "sent_at": _now(),
+    }, None
+
+
 def send_lead_email(
     user_id,
     lead_id,

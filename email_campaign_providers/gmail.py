@@ -148,6 +148,7 @@ class GmailEmailProvider(BaseEmailCampaignProvider):
         html_content,
         plain_content,
         sender_email=None,
+        attachments=None,
         **_,
     ):
         message = EmailMessage()
@@ -157,6 +158,19 @@ class GmailEmailProvider(BaseEmailCampaignProvider):
             message["From"] = sender_email
         message.set_content(plain_content)
         message.add_alternative(html_content, subtype="html")
+        for item in attachments or []:
+            content_type = item.get("content_type") or "application/octet-stream"
+            maintype, subtype = (
+                content_type.split("/", 1)
+                if "/" in content_type
+                else ("application", "octet-stream")
+            )
+            message.add_attachment(
+                item["content"],
+                maintype=maintype,
+                subtype=subtype,
+                filename=item["filename"],
+            )
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii").rstrip("=")
         result = request_json(
             "POST",

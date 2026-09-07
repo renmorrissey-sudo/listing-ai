@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import urllib.error
@@ -245,6 +246,7 @@ class SendGridEmailCampaignProvider(BaseEmailCampaignProvider):
         plain_content,
         sender_name=None,
         sender_email=None,
+        attachments=None,
         **_,
     ):
         if not sender_email:
@@ -265,6 +267,16 @@ class SendGridEmailCampaignProvider(BaseEmailCampaignProvider):
             ],
             "categories": ["TopAI", "CRM Lead Email"],
         }
+        if attachments:
+            payload["attachments"] = [
+                {
+                    "content": base64.b64encode(item["content"]).decode("ascii"),
+                    "type": item.get("content_type") or "application/octet-stream",
+                    "filename": item["filename"],
+                    "disposition": "attachment",
+                }
+                for item in attachments
+            ]
         result = self._request("POST", "/mail/send", body=payload, action="send")
         return {
             "provider_message_id": result.get("id"),

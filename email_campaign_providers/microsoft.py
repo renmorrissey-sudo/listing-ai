@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timedelta, timezone
 
 from email_campaign_providers.base import (
@@ -155,20 +156,32 @@ class MicrosoftEmailProvider(BaseEmailCampaignProvider):
         subject,
         html_content,
         plain_content=None,
+        attachments=None,
         **_,
     ):
+        message = {
+            "subject": subject,
+            "body": {"contentType": "HTML", "content": html_content},
+            "toRecipients": [
+                {"emailAddress": {"address": to_email}},
+            ],
+        }
+        if attachments:
+            message["attachments"] = [
+                {
+                    "@odata.type": "#microsoft.graph.fileAttachment",
+                    "name": item["filename"],
+                    "contentType": item.get("content_type") or "application/octet-stream",
+                    "contentBytes": base64.b64encode(item["content"]).decode("ascii"),
+                }
+                for item in attachments
+            ]
         request_json(
             "POST",
             f"{GRAPH_BASE}/me/sendMail",
             bearer=self.access_token,
             json_body={
-                "message": {
-                    "subject": subject,
-                    "body": {"contentType": "HTML", "content": html_content},
-                    "toRecipients": [
-                        {"emailAddress": {"address": to_email}},
-                    ],
-                },
+                "message": message,
                 "saveToSentItems": True,
             },
             provider="Microsoft",

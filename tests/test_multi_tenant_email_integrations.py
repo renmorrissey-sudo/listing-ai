@@ -209,6 +209,7 @@ def test_gmail_creates_recipientless_rfc_mime_draft(monkeypatch):
         html_content="<p>Listing body</p>",
         plain_content="Listing body",
         sender_email="agent@example.com",
+        attachments=[{"filename": "report.pdf", "content_type": "application/pdf", "content": b"%PDF-test"}],
     )
     raw = captured["message"]["raw"]
     decoded = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
@@ -261,6 +262,7 @@ def test_gmail_sends_rfc_mime_to_lead(monkeypatch):
         html_content="<p>Hello</p>",
         plain_content="Hello",
         sender_email="agent@example.com",
+        attachments=[{"filename": "report.pdf", "content_type": "application/pdf", "content": b"%PDF-test"}],
     )
     raw = captured["raw"]
     decoded = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
@@ -268,6 +270,8 @@ def test_gmail_sends_rfc_mime_to_lead(monkeypatch):
     assert captured["url"].endswith("/messages/send")
     assert message["To"] == "lead@example.com"
     assert message["Subject"] == "Follow up"
+    pdf_part = next(part for part in message.walk() if part.get_filename() == "report.pdf")
+    assert pdf_part.get_payload(decode=True) == b"%PDF-test"
     assert result["provider_message_id"] == "gmail-message-1"
 
 
@@ -289,11 +293,15 @@ def test_microsoft_sends_to_lead_and_saves_sent_item(monkeypatch):
         subject="Follow up",
         html_content="<p>Hello</p>",
         plain_content="Hello",
+        attachments=[{"filename": "report.pdf", "content_type": "application/pdf", "content": b"%PDF-test"}],
     )
     assert captured["method"] == "POST"
     assert captured["url"].endswith("/me/sendMail")
     assert captured["body"]["message"]["toRecipients"][0]["emailAddress"]["address"] == "lead@example.com"
     assert captured["body"]["saveToSentItems"] is True
+    attachment = captured["body"]["message"]["attachments"][0]
+    assert attachment["name"] == "report.pdf"
+    assert base64.b64decode(attachment["contentBytes"]) == b"%PDF-test"
     assert result["provider_status"] == "sent"
 
 
@@ -313,12 +321,16 @@ def test_sendgrid_direct_send_uses_mail_send(monkeypatch):
         plain_content="Hello",
         sender_name="Agent",
         sender_email="agent@example.com",
+        attachments=[{"filename": "report.pdf", "content_type": "application/pdf", "content": b"%PDF-test"}],
     )
     assert captured["method"] == "POST"
     assert captured["path"] == "/mail/send"
     assert captured["action"] == "send"
     assert captured["body"]["personalizations"][0]["to"][0]["email"] == "lead@example.com"
     assert captured["body"]["from"]["email"] == "agent@example.com"
+    attachment = captured["body"]["attachments"][0]
+    assert attachment["filename"] == "report.pdf"
+    assert base64.b64decode(attachment["content"]) == b"%PDF-test"
     assert result["provider_status"] == "sent"
 
 
