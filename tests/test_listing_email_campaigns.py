@@ -404,6 +404,8 @@ def test_connection_test_is_read_only(monkeypatch):
 
     def fake_request(method, path, *, body=None, action="draft"):
         calls.append((method, path))
+        if path == "/scopes":
+            return {"scopes": ["mail.send", "marketing.read"]}
         if path == "/verified_senders":
             return {"results": []}
         if path.startswith("/marketing/lists"):
@@ -416,6 +418,24 @@ def test_connection_test_is_read_only(monkeypatch):
     assert calls
     assert all(method == "GET" for method, _ in calls)
     assert all("singlesends" not in path for _, path in calls)
+
+
+def test_connection_rejects_key_without_mail_send_scope(monkeypatch):
+    provider = SendGridEmailCampaignProvider("SG.marketing-only")
+    monkeypatch.setattr(
+        provider,
+        "_request",
+        lambda method, path, **kwargs: {"scopes": ["marketing.read"]},
+    )
+
+    try:
+        provider.test_connection()
+    except EmailCampaignProviderError as exc:
+        assert exc.error_code == "missing_mail_send_scope"
+        assert exc.reconnect_required is True
+        assert "Mail Send to Full Access" in exc.user_message
+    else:
+        raise AssertionError("Expected a marketing-only key to be rejected")
 
 
 def test_reopened_listing_and_archive_include_campaign_state(

@@ -230,6 +230,10 @@ def send_direct_email(
         )
     except (ValueError, EmailCampaignProviderError) as exc:
         message = exc.user_message if isinstance(exc, EmailCampaignProviderError) else str(exc)
+        if isinstance(exc, EmailCampaignProviderError) and exc.reconnect_required:
+            marketing_db.mark_integration_needs_reconnect(
+                user_id, integration["id"], message
+            )
         return None, message
 
     return {
@@ -295,6 +299,10 @@ def send_lead_email(
         )
     except (ValueError, EmailCampaignProviderError) as exc:
         message = exc.user_message if isinstance(exc, EmailCampaignProviderError) else str(exc)
+        if isinstance(exc, EmailCampaignProviderError) and exc.reconnect_required:
+            marketing_db.mark_integration_needs_reconnect(
+                user_id, integration["id"], message
+            )
         crm_db.add_lead_activity(
             lead_id,
             user_id,

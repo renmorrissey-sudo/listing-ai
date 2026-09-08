@@ -310,7 +310,7 @@ def test_sendgrid_direct_send_uses_mail_send(monkeypatch):
 
     def fake_request(self, method, path, *, body=None, action="draft"):
         captured.update({"method": method, "path": path, "body": body, "action": action})
-        return {}
+        return {"scopes": ["mail.send"]} if path == "/scopes" else {}
 
     monkeypatch.setattr(SendGridEmailCampaignProvider, "_request", fake_request)
     provider = SendGridEmailCampaignProvider("SG.test")
@@ -332,6 +332,41 @@ def test_sendgrid_direct_send_uses_mail_send(monkeypatch):
     assert attachment["filename"] == "report.pdf"
     assert base64.b64decode(attachment["content"]) == b"%PDF-test"
     assert result["provider_status"] == "sent"
+
+
+def test_sendgrid_permission_failure_marks_connection_for_reconnect(
+    two_users, monkeypatch
+):
+    user_id, _ = two_users
+    _enable_encryption(monkeypatch)
+    integration = _add_sendgrid(user_id, "SG.marketing-only", "restricted")
+
+    class RestrictedProvider:
+        def send_email(self, **kwargs):
+            raise lead_email_service.EmailCampaignProviderError(
+                "Enable Mail Send access.",
+                error_code="missing_mail_send_scope",
+                reconnect_required=True,
+            )
+
+    monkeypatch.setattr(
+        lead_email_service,
+        "_provider",
+        lambda connection: RestrictedProvider(),
+    )
+
+    result, error = lead_email_service.send_direct_email(
+        user_id,
+        to_email="lead@example.com",
+        subject="CMA",
+        body="Attached is your CMA.",
+    )
+
+    assert result is None
+    assert error == "Enable Mail Send access."
+    saved = marketing_db.get_integration(user_id, integration["id"])
+    assert saved["status"] == "needs_reconnect"
+    assert saved["is_default"] is False
 
 
 def test_lead_email_service_sends_through_default_integration(two_users, monkeypatch):

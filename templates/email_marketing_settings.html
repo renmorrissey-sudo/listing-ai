@@ -85,6 +85,7 @@
                 <form class="connect-form" method="post" action="/integrations/email-marketing/sendgrid/connect">
                   <label for="sendgrid-api-key">SendGrid Marketing API key</label>
                   <input id="sendgrid-api-key" name="api_key" type="password" required autocomplete="new-password" placeholder="SG••••••••" />
+                  <p class="provider-note">CMA and lead emails require <strong>Mail Send → Full Access</strong> on this API key.</p>
                   <button class="btn primary" type="submit">Connect SendGrid</button>
                 </form>
               {% else %}

@@ -18,6 +18,11 @@ from email_campaign_providers.base import (
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.sendgrid.com/v3"
+MAIL_SEND_SCOPE = "mail.send"
+MAIL_SEND_PERMISSION_MESSAGE = (
+    "This SendGrid API key is connected but cannot send email. In SendGrid, "
+    "edit the key and set Mail Send to Full Access, then reconnect it in TopAI."
+)
 
 
 class SendGridEmailCampaignProvider(BaseEmailCampaignProvider):
@@ -72,10 +77,20 @@ class SendGridEmailCampaignProvider(BaseEmailCampaignProvider):
                 raw[:500],
             )
             if exc.code in (401, 403):
+                is_mail_permission_error = (
+                    path == "/mail/send"
+                    and "not authorized to send mail" in raw.lower()
+                )
                 raise EmailCampaignProviderError(
-                    "SendGrid needs to be connected with an API key that has "
-                    "the required email access.",
-                    error_code="authentication_failed",
+                    MAIL_SEND_PERMISSION_MESSAGE
+                    if is_mail_permission_error
+                    else "SendGrid authorization failed. Reconnect the account with a valid API key.",
+                    error_code=(
+                        "missing_mail_send_scope"
+                        if is_mail_permission_error
+                        else "authentication_failed"
+                    ),
+                    reconnect_required=True,
                 ) from None
             if exc.code == 400:
                 raise EmailCampaignProviderError(
@@ -167,13 +182,34 @@ class SendGridEmailCampaignProvider(BaseEmailCampaignProvider):
             if row.get("id") is not None
         ]
 
+    def get_scopes(self):
+        payload = self._request("GET", "/scopes", action="validate")
+        rows = payload.get("scopes") if isinstance(payload, dict) else []
+        return {
+            str(scope).strip()
+            for scope in (rows or [])
+            if str(scope).strip()
+        }
+
+    def require_mail_send_access(self):
+        scopes = self.get_scopes()
+        if MAIL_SEND_SCOPE not in scopes:
+            raise EmailCampaignProviderError(
+                MAIL_SEND_PERMISSION_MESSAGE,
+                error_code="missing_mail_send_scope",
+                reconnect_required=True,
+            )
+        return scopes
+
     def test_connection(self):
         """Read-only validation; never creates, schedules, or sends anything."""
+        scopes = self.require_mail_send_access()
         senders = self.get_senders()
         lists = self.get_lists()
         groups = self.get_suppression_groups()
         return {
             "connected": True,
+            "scopes": sorted(scopes),
             "senders": senders,
             "lists": lists,
             "suppression_groups": groups,
@@ -249,6 +285,7 @@ class SendGridEmailCampaignProvider(BaseEmailCampaignProvider):
         attachments=None,
         **_,
     ):
+        self.require_mail_send_access()
         if not sender_email:
             raise EmailCampaignProviderError(
                 "Choose a verified SendGrid sender before sending lead email.",
