@@ -554,6 +554,48 @@ def test_settings_ui_explains_provider_types_and_never_renders_secret(
     assert "SG.hidden-value" not in html
 
 
+def test_successful_retest_restores_api_key_connection(
+    app_client, two_users, monkeypatch
+):
+    user_id, _ = two_users
+    _enable_encryption(monkeypatch)
+    item = _add_sendgrid(user_id, "SG.restored", "restored", is_default=True)
+    marketing_db.mark_integration_needs_reconnect(
+        user_id, item["id"], "Enable Mail Send access."
+    )
+    _login(app_client, user_id)
+    db.update_user_subscription(user_id, "active")
+
+    class WorkingProvider:
+        def test_connection(self):
+            return {
+                "senders": [],
+                "lists": [],
+                "suppression_groups": [],
+            }
+
+    with patch(
+        "email_marketing_routes._provider_for_integration",
+        return_value=(
+            marketing_db.get_integration_credentials(
+                user_id, item["id"], allow_needs_reconnect=True
+            ),
+            WorkingProvider(),
+        ),
+    ):
+        settings = app_client.get("/integrations/email-marketing")
+        assert b"Retest connection" in settings.data
+        response = app_client.post(
+            f"/integrations/email-marketing/connections/{item['id']}/test"
+        )
+
+    assert response.status_code in (302, 303)
+    restored = marketing_db.get_integration(user_id, item["id"])
+    assert restored["status"] == "connected"
+    assert restored["is_default"] is True
+    assert restored["last_error_summary"] is None
+
+
 def test_export_override_and_idempotency_are_scoped_per_integration(
     two_users, monkeypatch
 ):

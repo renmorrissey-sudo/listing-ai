@@ -490,16 +490,24 @@ def get_default_integration(user_id):
     return _public_integration(row)
 
 
-def get_integration_credentials(user_id, integration_id):
+def get_integration_credentials(
+    user_id, integration_id, *, allow_needs_reconnect=False
+):
     if not user_id or not integration_id:
         return None
     with get_db() as conn:
+        statuses = (
+            ("connected", "needs_reconnect")
+            if allow_needs_reconnect
+            else ("connected",)
+        )
+        placeholders = ",".join("?" for _ in statuses)
         row = conn.execute(
-            """
+            f"""
             SELECT * FROM email_integrations
-            WHERE id = ? AND user_id = ? AND status = 'connected'
+            WHERE id = ? AND user_id = ? AND status IN ({placeholders})
             """,
-            (integration_id, user_id),
+            (integration_id, user_id, *statuses),
         ).fetchone()
     if not row:
         return None
@@ -728,14 +736,42 @@ def set_default_integration(user_id, integration_id):
 
 def mark_integration_test_result(user_id, integration_id, *, error_summary=None):
     with get_db() as conn:
-        conn.execute(
-            """
-            UPDATE email_integrations SET last_tested_at = ?,
-                last_error_summary = ?, updated_at = ?
-            WHERE id = ? AND user_id = ?
-            """,
-            (_now(), error_summary, _now(), integration_id, user_id),
-        )
+        now = _now()
+        if error_summary is None:
+            conn.execute(
+                """
+                UPDATE email_integrations SET status = 'connected',
+                    last_tested_at = ?, last_error_summary = NULL,
+                    updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (now, now, integration_id, user_id),
+            )
+            has_default = conn.execute(
+                """
+                SELECT id FROM email_integrations
+                WHERE user_id = ? AND status = 'connected' AND is_default = ?
+                LIMIT 1
+                """,
+                (user_id, bind_bool(True)),
+            ).fetchone()
+            if not has_default:
+                conn.execute(
+                    """
+                    UPDATE email_integrations SET is_default = ?, updated_at = ?
+                    WHERE id = ? AND user_id = ? AND status = 'connected'
+                    """,
+                    (bind_bool(True), now, integration_id, user_id),
+                )
+        else:
+            conn.execute(
+                """
+                UPDATE email_integrations SET last_tested_at = ?,
+                    last_error_summary = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (now, error_summary, now, integration_id, user_id),
+            )
 
 
 def mark_integration_needs_reconnect(user_id, integration_id, error_summary):

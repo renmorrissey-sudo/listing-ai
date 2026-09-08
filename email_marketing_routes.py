@@ -43,10 +43,14 @@ def _callback_url(provider):
     )
 
 
-def _provider_for_integration(user_id, integration_id):
+def _provider_for_integration(
+    user_id, integration_id, *, allow_needs_reconnect=False
+):
     try:
         connection = marketing_db.get_integration_credentials(
-            user_id, integration_id
+            user_id,
+            integration_id,
+            allow_needs_reconnect=allow_needs_reconnect,
         )
     except IntegrationCredentialError:
         logger.exception(
@@ -423,7 +427,9 @@ def test_connection(integration_id):
     user, response = _auth_gate()
     if response:
         return response
-    connection, provider = _provider_for_integration(user["id"], integration_id)
+    connection, provider = _provider_for_integration(
+        user["id"], integration_id, allow_needs_reconnect=True
+    )
     if not connection or not provider:
         flash("Email account not found or provider setup is incomplete.", "error")
         return redirect(url_for("email_marketing.settings_page"))

@@ -124,6 +124,8 @@
                   {% endif %}
                 {% elif item.auth_type == "oauth" %}
                   <a class="btn primary" href="/integrations/email-marketing/oauth/{{ item.provider }}/start">Reconnect</a>
+                {% elif item.status == "needs_reconnect" %}
+                  <form method="post" action="/integrations/email-marketing/connections/{{ item.id }}/test"><button class="btn primary" type="submit">Retest connection</button></form>
                 {% endif %}
                 <form method="post" action="/integrations/email-marketing/connections/{{ item.id }}/disconnect"><button class="btn danger" type="submit">Disconnect</button></form>
               </div>
