@@ -158,12 +158,13 @@ def connect_sendgrid():
         return redirect(url_for("email_marketing.settings_page"))
     try:
         provider = get_provider("sendgrid", api_key=api_key)
+        resources = provider.test_connection()
+        scopes = set(resources.get("scopes") or [])
         identity = (
             provider.get_identity()
-            if hasattr(provider, "get_identity")
+            if hasattr(provider, "get_identity") and "user.profile.read" in scopes
             else {}
         )
-        resources = provider.test_connection()
         senders = resources.get("senders") or []
         groups = resources.get("suppression_groups") or []
         sender = senders[0] if len(senders) == 1 else None

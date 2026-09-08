@@ -415,9 +415,29 @@ def test_connection_test_is_read_only(monkeypatch):
     monkeypatch.setattr(provider, "_request", fake_request)
     result = provider.test_connection()
     assert result["connected"] is True
-    assert calls
-    assert all(method == "GET" for method, _ in calls)
+    assert calls == [
+        ("GET", "/scopes"),
+        ("GET", "/marketing/lists?page_size=1000"),
+    ]
     assert all("singlesends" not in path for _, path in calls)
+
+
+def test_connection_accepts_mail_send_only_key(monkeypatch):
+    provider = SendGridEmailCampaignProvider("SG.mail-send-only")
+    calls = []
+
+    def fake_request(method, path, **kwargs):
+        calls.append((method, path))
+        return {"scopes": ["mail.send"]}
+
+    monkeypatch.setattr(provider, "_request", fake_request)
+    result = provider.test_connection()
+
+    assert result["connected"] is True
+    assert result["senders"] == []
+    assert result["lists"] == []
+    assert result["suppression_groups"] == []
+    assert calls == [("GET", "/scopes")]
 
 
 def test_connection_rejects_key_without_mail_send_scope(monkeypatch):

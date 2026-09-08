@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.sendgrid.com/v3"
 MAIL_SEND_SCOPE = "mail.send"
+VERIFIED_SENDERS_READ_SCOPE = "verified_senders.read"
+MARKETING_READ_SCOPE = "marketing.read"
+SUPPRESSION_GROUPS_READ_SCOPE = "asm.groups.read"
 MAIL_SEND_PERMISSION_MESSAGE = (
     "This SendGrid API key is connected but cannot send email. In SendGrid, "
     "edit the key and set Mail Send to Full Access, then reconnect it in TopAI."
@@ -204,9 +207,19 @@ class SendGridEmailCampaignProvider(BaseEmailCampaignProvider):
     def test_connection(self):
         """Read-only validation; never creates, schedules, or sends anything."""
         scopes = self.require_mail_send_access()
-        senders = self.get_senders()
-        lists = self.get_lists()
-        groups = self.get_suppression_groups()
+        # Direct CMA and lead email needs only mail.send. Provider resources are
+        # optional and must not make an otherwise send-capable key look invalid.
+        senders = (
+            self.get_senders()
+            if VERIFIED_SENDERS_READ_SCOPE in scopes
+            else []
+        )
+        lists = self.get_lists() if MARKETING_READ_SCOPE in scopes else []
+        groups = (
+            self.get_suppression_groups()
+            if SUPPRESSION_GROUPS_READ_SCOPE in scopes
+            else []
+        )
         return {
             "connected": True,
             "scopes": sorted(scopes),
