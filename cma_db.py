@@ -19,6 +19,11 @@ def _row_to_dict(row):
     if not row:
         return None
     item = dict(row)
+    # SQLite returns TIMESTAMP values as text while PostgreSQL returns a
+    # datetime object.  Keep the persistence boundary consistent so callers
+    # and templates can safely treat report timestamps as ISO-8601 strings.
+    if isinstance(item.get("created_at"), datetime):
+        item["created_at"] = item["created_at"].isoformat()
     item["criteria"] = _loads(item.pop("criteria_json", None), {})
     item["selected_comparables"] = _loads(item.pop("comparables_json", None), [])
     item["excluded_comparables"] = _loads(item.pop("excluded_json", None), [])

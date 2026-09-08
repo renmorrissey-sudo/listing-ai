@@ -1,6 +1,6 @@
 """Competitive Market Analysis builder, selection, persistence, and tenancy."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import cma_db
 import db
@@ -91,6 +91,24 @@ def test_build_cma_selects_requested_best_matches_and_calculates_summary():
     assert report["analysis"]["candidate_count"] == 4
     assert report["analysis"]["indicated_value"] == 500000
     assert report["analysis"]["average_price_per_sqft"] == 250.0
+
+
+def test_cma_row_normalizes_postgres_datetime_for_templates():
+    created_at = datetime(2026, 9, 7, 19, 0, tzinfo=timezone.utc)
+    item = cma_db._row_to_dict(
+        {
+            "id": 1,
+            "user_id": 1,
+            "created_at": created_at,
+            "criteria_json": "{}",
+            "comparables_json": "[]",
+            "excluded_json": "[]",
+            "analysis_json": "{}",
+        }
+    )
+
+    assert item["created_at"] == "2026-09-07T19:00:00+00:00"
+    assert item["created_at"][:10] == "2026-09-07"
 
 
 def test_build_cma_excludes_sales_outside_date_range():
