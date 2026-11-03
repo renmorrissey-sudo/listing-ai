@@ -37,6 +37,9 @@ IS_TEST = APP_ENV == "test"
 ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY")
 CLAUDE_MODEL = _env_strip("CLAUDE_MODEL") or "claude-opus-4-6"
 ASK_TOPAI_MODEL = _env_strip("ASK_TOPAI_MODEL") or "claude-sonnet-5"
+# Cold-call scripts are short, latency-sensitive generations: use the faster
+# Sonnet model already used by Ask TopAI, not the Opus model used for listings.
+SCRIPT_CLAUDE_MODEL = _env_strip("SCRIPT_CLAUDE_MODEL") or "claude-sonnet-5"
 OPENAI_API_KEY = _env("OPENAI_API_KEY")
 ASK_TOPAI_REALTIME_MODEL = _env_strip("ASK_TOPAI_REALTIME_MODEL") or "gpt-realtime-2.1"
 ASK_TOPAI_REALTIME_VOICE = _env_strip("ASK_TOPAI_REALTIME_VOICE") or "marin"

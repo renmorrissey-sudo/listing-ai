@@ -2647,6 +2647,12 @@ def list_calendar_events(
             if assignee and int(item.get("created_by") or item.get("user_id") or 0) != int(assignee):
                 continue
             due = item.get("due_at")
+            # A dateless event cannot fall inside a requested window: without
+            # this, null due dates slip past both range checks below and get
+            # counted as "upcoming this week" while rendering nowhere on the
+            # month grid (no day to place them on).
+            if (start_at or end_at) and not due:
+                continue
             if start_at and due and due < str(start_at):
                 continue
             if end_at and due and due > str(end_at):
@@ -2703,6 +2709,10 @@ def list_calendar_events(
             if assignee and int(item.get("assigned_user_id") or item.get("user_id") or 0) != int(assignee):
                 continue
             due = item.get("due_at")
+            # See follow-up filter above: dateless tasks must not count as
+            # inside a requested window.
+            if (start_at or end_at) and not due:
+                continue
             if start_at and due and due < str(start_at):
                 continue
             if end_at and due and due > str(end_at):
@@ -2759,6 +2769,10 @@ def list_calendar_events(
             if assignee and int(item.get("user_id") or 0) != int(assignee):
                 continue
             start = item.get("start_at")
+            # See follow-up filter above: dateless appointments must not
+            # count as inside a requested window.
+            if (start_at or end_at) and not start:
+                continue
             if start_at and start and start < str(start_at):
                 continue
             if end_at and start and start > str(end_at):

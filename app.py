@@ -252,6 +252,8 @@ Write a short email (subject line + 3 paragraphs) to send to a prospect list ann
 def build_script_prompt(data):
     return f"""You are an expert real estate sales coach. Generate a professional cold call script for a real estate agent.
 
+Plain text only. Do not use markdown, bold/asterisk markers, headings, or bullet lists.
+
 DETAILS:
 - Target area: {data.get("area", "N/A")}
 - Property type: {data.get("property_type", "Single Family")}
@@ -284,6 +286,22 @@ def _extract_section(text, start_marker, end_marker):
         end = text.find(f"---{end_marker}---", start)
         return text[start:end] if end != -1 else text[start:]
     return text[start:]
+
+
+def _strip_markdown(text):
+    """Remove markdown markers from generated script text.
+
+    Script output is inserted with textContent, so markdown is never
+    rendered -- bold markers like **Response:** would show literally.
+    Strip the common markers instead of relying on the model to omit them.
+    """
+    import re
+
+    cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", text or "")
+    cleaned = re.sub(r"__([^_]+)__", r"\1", cleaned)
+    cleaned = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", cleaned)
+    cleaned = re.sub(r"(?m)^\s*[-*]\s+", "", cleaned)
+    return cleaned.strip()
 
 
 from stripe_billing import (
@@ -2584,18 +2602,18 @@ def generate_script():
         return jsonify({"error": error}), 400
     try:
         message = client.messages.create(
-            model=config.CLAUDE_MODEL,
+            model=config.SCRIPT_CLAUDE_MODEL,
             max_tokens=1200,
             messages=[{"role": "user", "content": build_script_prompt(cleaned)}],
         )
         raw = message.content[0].text
-        opening = _extract_section(raw, "OPENING SCRIPT", "OBJECTION HANDLERS")
-        objections = _extract_section(raw, "OBJECTION HANDLERS", "VOICEMAIL SCRIPT")
-        voicemail = _extract_section(raw, "VOICEMAIL SCRIPT", None)
+        opening = _strip_markdown(_extract_section(raw, "OPENING SCRIPT", "OBJECTION HANDLERS"))
+        objections = _strip_markdown(_extract_section(raw, "OBJECTION HANDLERS", "VOICEMAIL SCRIPT"))
+        voicemail = _strip_markdown(_extract_section(raw, "VOICEMAIL SCRIPT", None))
         user = auth.get_current_user()
         if user:
             db.record_tool_usage(user["id"], "cold_call_scripts", "generated")
-        return jsonify({"opening": opening.strip(), "objections": objections.strip(), "voicemail": voicemail.strip()})
+        return jsonify({"opening": opening, "objections": objections, "voicemail": voicemail})
     except Exception:
         logger.exception("Script generation failed")
         return jsonify({"error": "Generation failed. Please try again."}), 500

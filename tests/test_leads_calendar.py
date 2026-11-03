@@ -224,3 +224,28 @@ def test_lead_detail_links_to_calendar(app_client, two_users):
     html = res.get_data(as_text=True)
     assert "View in Leads Calendar" in html
     assert "/crm/calendar" in html
+
+
+def test_dateless_task_is_not_counted_in_a_date_window(two_users):
+    """Regression: a task with no due date must not count as 'upcoming'.
+
+    list_calendar_events previously skipped both range checks when due_at
+    was null, so dateless tasks were counted in week windows (and in the
+    'Upcoming this week' summary) while rendering on no calendar day.
+    """
+    u1, _ = two_users
+    lead_id = _lead(u1, "Dateless Lead")
+    task_id, err = crm_db.create_task(
+        u1, {"title": "No date task", "lead_id": lead_id, "task_type": "general_follow_up"}
+    )
+    assert err is None
+    # Unfiltered list still includes it (it is a real open task).
+    assert f"task:{task_id}" in {e["id"] for e in crm_db.list_calendar_events(u1)}
+    # A date-windowed query must not.
+    now = datetime.now(timezone.utc)
+    windowed = crm_db.list_calendar_events(
+        u1,
+        start_at=now.isoformat(),
+        end_at=(now + timedelta(days=7)).isoformat(),
+    )
+    assert f"task:{task_id}" not in {e["id"] for e in windowed}
