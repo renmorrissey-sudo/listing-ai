@@ -304,6 +304,23 @@ def _strip_markdown(text):
     return cleaned.strip()
 
 
+def _message_text(message):
+    """Extract the response text from an Anthropic message.
+
+    Never index ``message.content[0].text``: the first content block can
+    be a ThinkingBlock, which has no ``.text`` attribute and raises
+    AttributeError (the /generate-script 500s of Nov 3-4, 2026, where the
+    API returned HTTP 200 OK every time). Collect text from every
+    TextBlock and ignore all other block types.
+    """
+    parts = []
+    for block in getattr(message, "content", []) or []:
+        text = getattr(block, "text", None)
+        if isinstance(text, str) and text:
+            parts.append(text)
+    return "\n".join(parts)
+
+
 from stripe_billing import (
     billing_config_error as _billing_config_error,
     billing_is_configured as _billing_is_configured,
@@ -1662,7 +1679,7 @@ def generate_sms():
             max_tokens=300,
             messages=[{"role": "user", "content": build_sms_prompt(persona, cleaned)}],
         )
-        body = message.content[0].text.strip().strip('"').strip("'")
+        body = _message_text(message).strip().strip('"').strip("'")
         db.record_tool_usage(user["id"], "ai_sms", "generated")
         return jsonify({"message_body": body})
     except Exception:
@@ -2347,7 +2364,7 @@ def generate():
             max_tokens=1500,
             messages=[{"role": "user", "content": build_listing_prompt(cleaned)}],
         )
-        raw = message.content[0].text
+        raw = _message_text(message)
         listing = _extract_section(raw, "LISTING DESCRIPTION", "SOCIAL POSTS").strip()
         social = _extract_section(raw, "SOCIAL POSTS", "PROSPECT EMAIL").strip()
         email = _extract_section(raw, "PROSPECT EMAIL", None).strip()
@@ -2606,7 +2623,7 @@ def generate_script():
             max_tokens=1200,
             messages=[{"role": "user", "content": build_script_prompt(cleaned)}],
         )
-        raw = message.content[0].text
+        raw = _message_text(message)
         opening = _strip_markdown(_extract_section(raw, "OPENING SCRIPT", "OBJECTION HANDLERS"))
         objections = _strip_markdown(_extract_section(raw, "OBJECTION HANDLERS", "VOICEMAIL SCRIPT"))
         voicemail = _strip_markdown(_extract_section(raw, "VOICEMAIL SCRIPT", None))
