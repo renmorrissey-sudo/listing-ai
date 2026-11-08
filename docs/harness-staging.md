@@ -119,12 +119,19 @@ Rollback is code + flags only. **Never run a destructive down-migration
 in staging or production** — there is no down-migration for 029 and none
 will be written.
 
-1. **Revert the merge commit on `main`:**
+1. **Revert the deployed commit on `main`:**
    ```bash
-   git revert -m 1 <phase-1 merge commit>   # or git revert <commit> for a
-                                            # single-commit merge
+   git revert <deployed commit>   # plain revert — the deployed commit
+                                  # 1755347 is a SINGLE-PARENT commit, not a
+                                  # merge, so do NOT use -m 1 on it.
    git push origin main
    ```
+   (Correction, 2026-11-08 acceptance test: the earlier wording said
+   "revert the merge commit … `git revert -m 1`", but the commit actually
+   deployed to production, `1755347`, has only one parent — `-m 1`
+   is for a true merge commit such as the local merge `9e1d2ee`. The
+   plain form above was verified in the acceptance test: the reverted
+   tree is byte-identical to pre-Phase-1 `7f760b8`.)
    Railway auto-deploys `main`; the revert redeploys the pre-Phase 1
    code. Alternatively, redeploy the previous production deployment from
    the Railway dashboard (Deployments → previous deployment → Redeploy).
@@ -152,3 +159,28 @@ will be written.
 5. **Test this runbook in staging first** (revert on a staging branch,
    redeploy staging, confirm §4 demo fails safe) before relying on it
    in production.
+
+## 6. Open items requiring Railway access (acceptance H5/H6 — NOT closed by code)
+
+These cannot be verified or completed from the repo alone; they need
+Ren's Railway dashboard access. Do not mark them done until each is
+confirmed in the dashboard and recorded here.
+
+- **H5 — Postgres backup/restore never exercised.** In the Railway
+  dashboard, confirm for the production Postgres service: are automated
+  backups/snapshots enabled, what is the retention window, and is
+  point-in-time recovery available? Before the next production deploy,
+  take a `pg_dump` and record the artifact (date, size, location) here.
+  Exercise a restore once against a scratch/staging Postgres and record
+  the result. No backup artifact exists in the repo today, and no
+  pre-deploy backup was taken before the Nov 8 production deploy.
+- **H6 — No staging environment exists.** The services in §1 have not
+  been created ("spec only"). Create `staging` + `staging-worker` per
+  §1–§2, run the §4 demo and the §5 rollback demo there, and record the
+  dates/results here. Until then, the rollback path is proven only in a
+  local SQLite simulation (acceptance Test 7) and the Postgres claim
+  path is untested live.
+- **Railway redeploy option unverified.** Confirm the pre-Phase-1
+  production deployment is still listed in Railway and redeployable,
+  and note the retention limit. If retention has expired, `git revert`
+  + push is the only rollback path.

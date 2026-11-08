@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 
 import crm_db
@@ -17,6 +18,48 @@ from crm_constants import (
     normalize_lead_status,
     sms_consent_label,
     status_label,
+)
+
+logger = logging.getLogger(__name__)
+
+# Spoken-friendly refusals returned as the tool result when the harness
+# policy gate does not allow a Vapi tool to execute. The handler is never
+# run in these cases, so no write/send reaches a provider.
+_HUMAN_APPROVAL_REFUSAL = (
+    "That action isn't available automatically — it needs human approval."
+)
+_TRY_LATER_REFUSAL = (
+    "That action can't be completed right now — please try again later."
+)
+# Matches Ask TopAI's wording for final lead statuses (ask_topai/actions.py
+# execute_update_status / autonomy.allowed_auto_status).
+_FINAL_STATUS_REFUSAL = "That status cannot be applied automatically."
+
+# Fallback copy of autonomy.FINAL_LEAD_STATUSES, used only if autonomy
+# cannot be imported (fail closed: refuse the status rather than allow it).
+_FINAL_LEAD_STATUSES_FALLBACK = frozenset(
+    {
+        "closed_won",
+        "closed_lost",
+        "do_not_contact",
+        "under_contract",
+        "appointment_completed",
+    }
+)
+
+# Vapi write tools. In drafts_only mode every one of these must become a
+# draft / refusal, never an execution. This set exists because
+# harness.policy._is_write() only recognises the Ask TopAI registry's
+# WRITE_TOOLS, so decide() returns ALLOW for update_lead_contact_info in
+# drafts_only mode; the gate below overrides that ALLOW to DRAFT for these
+# tools when the tenant mode is drafts_only.
+_VOICE_WRITE_TOOLS = frozenset(
+    {
+        "update_lead_status",
+        "update_lead_sms_consent_status",
+        "update_lead_contact_info",
+        "send_lead_email",
+    }
 )
 
 
@@ -79,7 +122,7 @@ def voice_tool_definitions(server_url):
                         "lead_name": {"type": "string"},
                         "status": {
                             "type": "string",
-                            "description": "New pipeline status, such as qualified or closed_won.",
+                            "description": "New pipeline status, such as qualified.",
                         },
                     },
                     "required": ["status"],
@@ -254,6 +297,58 @@ def _tool_name_and_args(call):
     return call.get("name"), call.get("arguments") or call.get("parameters") or {}
 
 
+def _final_lead_statuses():
+    """Final/irreversible lead statuses, never auto-applied (autonomy)."""
+    try:
+        import autonomy
+
+        return frozenset(autonomy.FINAL_LEAD_STATUSES)
+    except Exception as exc:  # fail closed: fall back to the known set
+        logger.warning("voice_tools could not import autonomy: %s", exc)
+        return _FINAL_LEAD_STATUSES_FALLBACK
+
+
+def _normalized_status_arg(args):
+    """Normalize an update_lead_status status argument, as the handler does."""
+    raw_status = str(args.get("status") or "").strip().lower().replace(" ", "_")
+    candidate = LEGACY_STATUS_MAP.get(raw_status, raw_status)
+    if candidate not in LEAD_STATUS_SET:
+        return ""
+    return normalize_lead_status(candidate)
+
+
+def _resolve_lead_id_for_audit(user_id, args):
+    """Best-effort lead id for the audit row. Read-only; never writes."""
+    try:
+        lead, error = _find_lead(user_id, args)
+        if lead and not error:
+            return lead.get("id")
+    except Exception as exc:
+        logger.warning("voice_tools audit lead lookup failed: %s", exc)
+    return None
+
+
+def _record_gate_audit(user_id, name, target_id, mode, decision, reason):
+    """Best-effort harness audit row; never breaks the voice call."""
+    try:
+        from harness.audit import record_audit
+
+        record_audit(
+            user_id,
+            "ai",
+            "vapi_tool_call",
+            tool=name,
+            target_type="lead",
+            target_id=target_id,
+            mode=mode,
+            gate_decision=decision,
+            gate_reason=reason,
+        )
+    except Exception as exc:
+        # E.g. harness tables not migrated yet — log and continue.
+        logger.warning("voice_tools gate audit failed: %s", exc)
+
+
 def _handle_tool_call(user_id, call):
     tool_id = _tool_call_id(call)
     name, args = _tool_name_and_args(call)
@@ -274,11 +369,89 @@ def _handle_tool_call(user_id, call):
     handler = handlers.get(name)
     if not handler:
         return {"toolCallId": tool_id, "result": f"Unknown TopAI voice tool: {name}."}
+
+    # Final lead statuses are refused in ALL modes, matching Ask TopAI
+    # (autonomy.allowed_auto_status returns None for them). Checked before
+    # the policy gate so no mode can re-enable them.
+    if name == "update_lead_status" and _normalized_status_arg(args) in _final_lead_statuses():
+        reason = "final lead status cannot be applied automatically"
+        mode = None
+        try:
+            from harness.policy import get_settings
+
+            mode = get_settings(user_id).get("mode")
+        except Exception:
+            pass
+        _record_gate_audit(
+            user_id, name, _resolve_lead_id_for_audit(user_id, args),
+            mode, "BLOCK", reason,
+        )
+        return {"toolCallId": tool_id, "result": _FINAL_STATUS_REFUSAL}
+
+    # Harness policy gate (lazy import; fail closed if unavailable).
     try:
-        result = handler(user_id, args)
+        from harness import policy as harness_policy
+    except Exception as exc:
+        logger.warning("voice_tools harness policy unavailable: %s", exc)
+        _record_gate_audit(
+            user_id, name, _resolve_lead_id_for_audit(user_id, args),
+            None, "DRAFT", "harness policy unavailable; human review required",
+        )
+        return {"toolCallId": tool_id, "result": _HUMAN_APPROVAL_REFUSAL}
+    try:
+        decision, reason = harness_policy.decide(user_id, name, name)
+    except Exception as exc:
+        logger.warning("voice_tools policy decide failed: %s", exc)
+        decision, reason = "DRAFT", "policy gate error; human review required"
+    try:
+        mode = harness_policy.get_settings(user_id).get("mode")
     except Exception:
-        result = "TopAI could not complete that CRM action."
-    return {"toolCallId": tool_id, "result": result}
+        mode = "drafts_only"
+
+    # Compensate for a harness-policy registry gap: decide() returns ALLOW
+    # for update_lead_contact_info in drafts_only mode because that tool is
+    # not in ask_topai.registry.WRITE_TOOLS. In drafts_only every Vapi
+    # write is a draft, never an execution, so override ALLOW to DRAFT.
+    if mode == "drafts_only" and name in _VOICE_WRITE_TOOLS and decision == "ALLOW":
+        decision = "DRAFT"
+        reason = (
+            "drafts_only mode: writes are drafts pending human approval"
+        )
+
+    target_id = _resolve_lead_id_for_audit(user_id, args)
+
+    if decision == "ALLOW":
+        _record_gate_audit(user_id, name, target_id, mode, decision, reason)
+        try:
+            result = handler(user_id, args)
+        except Exception:
+            result = "TopAI could not complete that CRM action."
+        return {"toolCallId": tool_id, "result": result}
+
+    if decision == "BLOCK":
+        _record_gate_audit(user_id, name, target_id, mode, decision, reason)
+        refusal = (
+            _FINAL_STATUS_REFUSAL
+            if name == "update_lead_status"
+            else _HUMAN_APPROVAL_REFUSAL
+        )
+        return {"toolCallId": tool_id, "result": refusal}
+
+    if decision == "DEFER":
+        _record_gate_audit(user_id, name, target_id, mode, decision, reason)
+        return {"toolCallId": tool_id, "result": _TRY_LATER_REFUSAL}
+
+    # DRAFT (and any unexpected decision, treated as DRAFT — fail closed):
+    # do not execute, except draft_lead_email, whose handler only saves a
+    # draft record for human review — that IS the Drafts Only behaviour.
+    _record_gate_audit(user_id, name, target_id, mode, "DRAFT", reason)
+    if name == "draft_lead_email":
+        try:
+            result = handler(user_id, args)
+        except Exception:
+            result = "TopAI could not complete that CRM action."
+        return {"toolCallId": tool_id, "result": result}
+    return {"toolCallId": tool_id, "result": _HUMAN_APPROVAL_REFUSAL}
 
 
 def _lead_summary(lead):
