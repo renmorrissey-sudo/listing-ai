@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Automation status - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+</head>
+<body>
+  {% set page_tagline = 'AI Automation status' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <h1>AI Automation status</h1>
+    <p class="muted">Read-only status for the AI harness. In Phase 1, all accounts run in Drafts Only mode: the AI drafts replies for your review and never sends automatically. There are no mode controls on this page.</p>
+    <div class="card">
+      <ul>
+        <li>Mode: <strong>{{ mode }}</strong></li>
+        <li>Paused: <strong>{{ 'yes' if paused else 'no' }}</strong></li>
+        <li>AI enabled: <strong>{{ 'yes' if ai_enabled else 'no' }}</strong></li>
+        <li>Pending approvals: <strong>{{ pending_approvals }}</strong></li>
+        <li>Pending jobs: <strong>{{ pending_jobs }}</strong></li>
+        {% if jobs_24h is defined %}
+        <li>Jobs in the last 24 hours: <strong>{{ jobs_24h }}</strong></li>
+        {% endif %}
+      </ul>
+    </div>
+  </main>
+  {% include 'subscriber_footer.html' %}
+</body>
+</html>

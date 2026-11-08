@@ -24,6 +24,7 @@ from lead_display import is_hidden_lead_source, public_lead_source, show_externa
 from external_leads_routes import external_leads_bp
 from email_marketing_routes import email_marketing_bp
 from sms_campaigns import sms_campaigns_bp
+from harness.routes import harness_bp
 from social_routes import social_bp
 from sms_prompts import build_sms_prompt
 from social_content import build_social_content_snapshot
@@ -80,6 +81,7 @@ app.register_blueprint(ask_topai_bp)
 app.register_blueprint(external_leads_bp)
 app.register_blueprint(email_marketing_bp)
 app.register_blueprint(sms_campaigns_bp)
+app.register_blueprint(harness_bp)
 app.register_blueprint(social_bp)
 client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 

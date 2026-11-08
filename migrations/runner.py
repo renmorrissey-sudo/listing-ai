@@ -53,6 +53,7 @@ MIGRATION_MODULES = [
     "migrations.versions.026_ask_topai_live",
     "migrations.versions.027_scheduling_settings",
     "migrations.versions.028_user_profile_phone",
+    "migrations.versions.029_harness_foundation",
 ]
 
 # Required after 001_baseline. App has no separate accounts/tenants/subscriptions

@@ -49,12 +49,28 @@ def analyze_inbound_reply(prompt_text):
     except Exception as exc:
         raise SmsCoachError("Claude analysis request failed.") from exc
 
-    try:
-        content = message.content[0].text
-    except (IndexError, AttributeError, TypeError) as exc:
-        raise SmsCoachError("Claude returned an unexpected response.") from exc
+    # Never index message.content[0].text: the first block can be a
+    # ThinkingBlock with no .text (same crash fixed in app.py Nov 7, 2026).
+    parts = []
+    for block in getattr(message, "content", []) or []:
+        text = getattr(block, "text", None)
+        if isinstance(text, str) and text:
+            parts.append(text)
+    content = "\n".join(parts)
+    if not content:
+        raise SmsCoachError("Claude returned an unexpected response.")
 
-    return validate_coach_response(content)
+    validated = validate_coach_response(content)
+    # Attach token usage for the harness cost ledger (harness/costs.py).
+    # The API response carries it; previously it was discarded.
+    usage = getattr(message, "usage", None)
+    if usage is not None:
+        validated["usage"] = {
+            "input_tokens": getattr(usage, "input_tokens", 0) or 0,
+            "output_tokens": getattr(usage, "output_tokens", 0) or 0,
+            "model": config.CLAUDE_MODEL,
+        }
+    return validated
 
 
 def validate_coach_response(content):
