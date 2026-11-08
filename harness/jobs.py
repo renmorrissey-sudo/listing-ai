@@ -13,12 +13,88 @@ Postgres. Timestamps are UTC ISO strings. No new dependencies.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 import db
 
 MAX_ATTEMPTS = 5
 MAX_BACKOFF_MINUTES = 120
+
+# --- Secret / PII redaction (H3) -------------------------------------------
+# Durable harness rows must never hold verbatim secrets. Payloads are
+# redacted at enqueue time, before anything is persisted: secret-like
+# tokens anywhere in the payload, plus phone numbers / emails inside
+# free-text body fields (the raw inbound body lives in sms_messages and
+# is the source of truth -- the handler loads it by inbound_id instead).
+
+_REDACTED = "[REDACTED]"
+
+# Secret-like token shapes. `sk-...` covers OpenAI / Anthropic-style keys
+# (sk-ant-..., sk-proj-..., sk-live/test-...); the assignment pattern
+# covers `api_key=...` / `api-key: "..."` style leaks; the long-hex and
+# long-opaque-token patterns catch bare hex/base64 secrets.
+_SECRET_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9_\-]{8,}"),
+    re.compile(r"(?i)(?:ghp|gho|github_pat)_[A-Za-z0-9_]{16,}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-~+/=]{16,}"),
+    re.compile(
+        r"(?i)(api[_-]?key|access[_-]?token|secret|password|auth[_-]?token"
+        r"|private[_-]?key)\s*[:=]\s*['\"]?[A-Za-z0-9._\-/+=]{8,}['\"]?"
+    ),
+    re.compile(r"\b[0-9a-fA-F]{32,}\b"),
+    re.compile(r"\b[A-Za-z0-9_\-]{40,}\b"),
+]
+
+# Phone / email redaction applies ONLY to free-text body fields (see
+# _BODY_KEYS): structured fields such as receiving_number keep the number
+# because the send path needs it, and the lead's phone comes from the
+# leads row, never from the payload.
+_BODY_KEYS = frozenset(
+    {"body", "inbound_body", "message_body", "message", "note", "notes",
+     "reason", "text", "content"}
+)
+_PHONE_RE = re.compile(r"\+?1?[\s.\-]?\(?\d{3}\)?[\s.\-]*\d{3}[\s.\-]*\d{4}\b")
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+
+
+def redact_text(value, *, redact_pii=False):
+    """Redact secret-like patterns in *value* (and phone/email when
+    ``redact_pii`` is set, for free-text body fields). Non-strings pass
+    through unchanged."""
+    if not isinstance(value, str):
+        return value
+    redacted = value
+    for pattern in _SECRET_PATTERNS:
+        redacted = pattern.sub(_REDACTED, redacted)
+    if redact_pii:
+        redacted = _EMAIL_RE.sub(_REDACTED, redacted)
+        redacted = _PHONE_RE.sub(_REDACTED, redacted)
+    return redacted
+
+
+def redact_payload(payload):
+    """Recursively redact a job payload dict before persistence.
+
+    Secret-like tokens are redacted in every string value; phone numbers
+    and emails are additionally redacted inside free-text body fields.
+    Non-string leaves (ids, flags, nested dicts/lists) are preserved.
+    """
+    if isinstance(payload, dict):
+        return {
+            key: redact_payload(value)
+            if isinstance(value, (dict, list))
+            else redact_text(value, redact_pii=key in _BODY_KEYS)
+            if isinstance(value, str)
+            else value
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [redact_payload(item) for item in payload]
+    if isinstance(payload, str):
+        return redact_text(payload)
+    return payload
 
 
 def _now():
@@ -42,9 +118,15 @@ def enqueue_job(user_id, kind, payload, idempotency_key=None):
     already exists, the existing job id is returned and no duplicate row
     is created. A concurrent duplicate insert (unique-key race) falls back
     to the same lookup instead of raising.
+
+    The payload is redacted before persistence (see redact_payload): no
+    verbatim secret ever lands in harness_jobs.payload_json. The raw
+    inbound body is not needed here -- handlers load it from sms_messages
+    by inbound_id; a redacted copy is kept only as a fallback for jobs
+    whose inbound row is missing.
     """
     now = _now()
-    payload_json = json.dumps(payload or {})
+    payload_json = json.dumps(redact_payload(payload or {}))
 
     if idempotency_key is not None:
         with db.get_db() as conn:

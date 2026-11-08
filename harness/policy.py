@@ -63,6 +63,15 @@ RESTRICTED_ACTIONS = frozenset(
         "issue_refund",
         "cancel_subscription",
         "cancel_plan",
+        # D3: subscription changes and customer deletion are never
+        # auto-executed (harness.tools also classifies them restricted,
+        # so the registry/policy agreement check covers them).
+        "change_subscription",
+        "modify_subscription",
+        "update_subscription",
+        "change_plan",
+        "update_plan",
+        "delete_customer",
         "change_consent",
         "change_sms_qualification",
         "delete_lead",
@@ -78,6 +87,15 @@ RESTRICTED_ACTIONS = frozenset(
 # the Vapi divergence is resolved here, not per surface). A generic send
 # (send_sms / send_email / initiate_ai_call) is mode-gated, not in this
 # set; these two are never auto-executed, even in "authorized" mode.
+#
+# Registry/policy seam (H2 reconciliation): this set and
+# harness.tools risk_class "restricted" are two views of the same rule —
+# "restricted" in the registry ⟺ decide() BLOCKs in all three modes.
+# Generic sends are risk_class "sensitive" in the registry (mode-gated,
+# so authorized autonomy may allow them); only send_lead_email — a real
+# SendGrid send — stays restricted here and in the registry. Keep the
+# two in agreement; tests/test_harness_policy_gate.py asserts it for
+# every registry tool.
 ALWAYS_BLOCK_TOOLS = frozenset(
     {
         "send_lead_email",  # real SendGrid send from the Vapi surface
@@ -293,6 +311,19 @@ def _is_write(action: str, tool: str) -> bool:
 
     if tool in registry.WRITE_TOOLS or action in registry.WRITE_TOOLS:
         return True
+    # Unified harness registry (harness/tools.py): it also lists the
+    # Vapi-only write tools the Ask TopAI registry does not know, e.g.
+    # update_lead_contact_info. Without this, decide() classified those
+    # as reads and ALLOWed them in drafts_only (found by the C1 fix).
+    try:
+        from harness import tools as harness_tools
+
+        for name in (tool, action):
+            entry = harness_tools.get_tool(name)
+            if entry and entry.get("kind") == "write":
+                return True
+    except Exception:
+        pass
     return False
 
 
@@ -313,6 +344,35 @@ def _escalation_from_context(context: dict) -> set[str]:
         if analysis.get("sensitive_topic"):
             topics.add(str(analysis.get("sensitive_topic")).strip().lower())
     return topics
+
+
+def _known_names() -> set[str]:
+    """Every tool/action name the gate recognises.
+
+    The union of the harness tool registry keys (``harness.tools``,
+    which itself seeds from ``ask_topai.registry`` plus the Vapi tools)
+    and this module's own known action names (restricted actions,
+    always-block tools, sends, draft tools). Anything outside this set
+    is unknown to the harness and must fail closed (H1).
+    """
+    names = (
+        set(RESTRICTED_ACTIONS)
+        | set(ALWAYS_BLOCK_TOOLS)
+        | set(SEND_TOOLS)
+        | set(SEND_ACTIONS)
+        | set(DRAFT_TOOLS)
+    )
+    try:
+        from harness import tools as harness_tools
+
+        names.update(t["name"] for t in harness_tools.list_tools())
+    except Exception as exc:  # registry unavailable — gate on policy names only
+        logger.warning("harness known-names fell back to policy names: %s", exc)
+    try:
+        names.update(autonomy.BLOCK_TOOLS)
+    except Exception:
+        pass
+    return {_normalize(n) for n in names}
 
 
 def decide(user_id, action, tool, context=None) -> tuple[str, str]:
@@ -345,6 +405,22 @@ def decide(user_id, action, tool, context=None) -> tuple[str, str]:
     # 1. Restricted actions block in every mode, for every surface.
     if _is_restricted(action_norm, tool_norm):
         return "BLOCK", f"restricted action: {action_norm or tool_norm} is never auto-executed"
+
+    # 1b. Unknown tools/actions fail closed in every mode (H1). A
+    # provided name that is neither a harness registry tool nor a
+    # policy-known action is BLOCKed — including unknown reads. An empty
+    # name means "not specified" (a caller gating an action without a
+    # tool, or vice versa) and does not by itself trigger this check.
+    known = _known_names()
+    if (action_norm and action_norm not in known) or (
+        tool_norm and tool_norm not in known
+    ):
+        unknown = (
+            action_norm
+            if (action_norm and action_norm not in known)
+            else tool_norm
+        )
+        return "BLOCK", f"unknown tool/action: {unknown} is not a known harness tool or action"
 
     # 2. AI disabled for this tenant: nothing autonomous proceeds.
     if not ai_enabled:
@@ -381,9 +457,58 @@ def decide(user_id, action, tool, context=None) -> tuple[str, str]:
     if topics:
         return "DRAFT", f"escalation topic(s) require human review: {', '.join(sorted(topics))}"
 
-    # 7. Mode rules.
+    # 7. Monthly spend cap (D2), enforced before the mode rules, for
+    # AI-costing actions only (sends and writes). Reads stay ALLOW.
+    # At/above the cap sends BLOCK and other writes DRAFT; at/above 80%
+    # of the cap a warning alert is recorded and the mode rules still
+    # apply. Alert/ledger failures never break the gate (fail open on
+    # the spend read, per harness.costs.current_month_spend_cents).
     is_send = _is_send(action_norm, tool_norm)
     is_write = _is_write(action_norm, tool_norm)
+    if is_send or is_write:
+        cap_cents = 0
+        spend_cents = 0
+        try:
+            from harness.costs import (
+                current_month_spend_cents,
+                get_monthly_spend_cap_cents,
+            )
+
+            cap_cents = get_monthly_spend_cap_cents()
+            spend_cents = (
+                current_month_spend_cents(user_id) if cap_cents > 0 else 0
+            )
+        except Exception as exc:  # ledger/cap unreadable — skip the check
+            logger.warning("harness spend-cap check skipped: %s", exc)
+        if cap_cents > 0 and spend_cents >= cap_cents:
+            try:
+                from harness import alerts as harness_alerts
+
+                harness_alerts.record_spend_alert(
+                    user_id, spend_cents, cap_cents, "limit"
+                )
+            except Exception as exc:
+                logger.warning("harness spend limit alert failed: %s", exc)
+            if is_send:
+                return (
+                    "BLOCK",
+                    "monthly AI spend limit reached; sends are blocked until next month",
+                )
+            return (
+                "DRAFT",
+                "monthly AI spend limit reached; writes need human review until next month",
+            )
+        if cap_cents > 0 and spend_cents * 5 >= cap_cents * 4:
+            try:
+                from harness import alerts as harness_alerts
+
+                harness_alerts.record_spend_alert(
+                    user_id, spend_cents, cap_cents, "warning"
+                )
+            except Exception as exc:
+                logger.warning("harness spend warning alert failed: %s", exc)
+
+    # 8. Mode rules.
     if mode == "drafts_only":
         if is_send:
             return "DRAFT", "drafts_only mode: sends are drafts, never auto-sent"

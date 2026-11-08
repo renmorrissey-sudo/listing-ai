@@ -10,10 +10,25 @@ Risk classes:
 * ``routine`` — safe to auto-execute within the current mode.
 * ``sensitive`` — mutates records or drafts outbound content; drafts in
   Drafts Only, allowed as routine writes in Supervised/Authorized.
+  Generic sends (``send_sms`` / ``send_email`` / ``initiate_ai_call`` /
+  ``place_call`` / ``start_call`` / ``send_listings``) are ``sensitive``,
+  not ``restricted``: they are mode-gated, so authorized autonomy may
+  allow them — that is the point of Mode 3, and
+  ``harness.policy.decide`` already allows them there.
 * ``restricted`` — never auto-executes in any surface. This resolves the
-  per-surface guardrail divergence (plan §1.7): ``send_lead_email`` and
-  any consent-changing tool are ``restricted`` in **all** surfaces, not
-  just Ask TopAI.
+  per-surface guardrail divergence (plan §1.7): ``send_lead_email`` (a
+  real SendGrid send) and any consent-changing tool are ``restricted``
+  in **all** surfaces, not just Ask TopAI.
+
+Registry/policy seam (H2 reconciliation — single source of truth is
+this risk class together with ``harness.policy``): ``restricted`` here
+⟺ ``policy.decide`` BLOCKs in all three modes; ``routine`` /
+``sensitive`` ⟺ ``decide`` does NOT BLOCK in all modes (the mode rules
+decide whether it is ALLOW or DRAFT). The registry used to mark the
+generic sends ``restricted`` while the policy allowed them in
+authorized mode; the registry was wrong, not the policy, and was
+corrected here. ``tests/test_harness_policy_gate.py`` asserts the
+agreement for every tool in this registry.
 
 No tool here executes anything. This module is metadata only; execution
 stays with the existing handlers (``ask_topai/tools.py``,
@@ -36,7 +51,10 @@ VAPI_TOOLS = (
 
 # Tools that are blocked outright in autonomy.py but have no Ask TopAI
 # registry entry. They are registered here as restricted metadata so
-# is_restricted() is complete for every surface.
+# is_restricted() is complete for every surface. The D3 subscription /
+# customer actions are registered here too, so the registry/policy
+# agreement check covers them as well (policy.RESTRICTED_ACTIONS is
+# the enforcement side; this is the metadata side).
 BLOCKED_ONLY_TOOLS = (
     "delete_lead",
     "delete_records",
@@ -49,6 +67,14 @@ BLOCKED_ONLY_TOOLS = (
     "send_listings",
     "place_call",
     "start_call",
+    "change_subscription",
+    "modify_subscription",
+    "update_subscription",
+    "change_plan",
+    "update_plan",
+    "delete_customer",
+    "cancel_subscription",
+    "cancel_plan",
 )
 
 # Every send tool, across surfaces.
@@ -132,13 +158,18 @@ def _build_registry() -> dict:
 
     # Future tools: declared in ask_topai.registry but not sent to any model.
     # They are registered here so the gate can classify them before they are
-    # ever enabled; all sends are restricted, drafts are sensitive.
+    # ever enabled; generic sends are mode-gated ("sensitive", H2 — the
+    # policy allows them in authorized mode), drafts are sensitive. Only
+    # send_lead_email stays "restricted"; it is not a future tool, but
+    # guard it here anyway so a future registry addition cannot
+    # silently reclassify a real SendGrid send as mode-gated.
     for name in _ask_registry.FUTURE_TOOLS:
         if name in tools:
             continue
         if name in SEND_TOOLS:
+            risk = "restricted" if name == "send_lead_email" else "sensitive"
             tools[name] = _entry(
-                name, ("claude", "sms", "email"), "write", "restricted",
+                name, ("claude", "sms", "email"), "write", risk,
                 _IDEMPOTENCY_SEND, 5,
             )
         elif name.startswith("draft_"):
@@ -194,12 +225,20 @@ def _build_registry() -> dict:
             continue
 
     # Blocked-only tools (autonomy.BLOCK_TOOLS with no registry entry).
+    # Generic sends are mode-gated ("sensitive", H2); every other name
+    # here stays "restricted". send_lead_email is the one send that
+    # stays restricted in all surfaces.
     for name in BLOCKED_ONLY_TOOLS:
+        risk = (
+            "sensitive"
+            if (name in SEND_TOOLS and name != "send_lead_email")
+            else "restricted"
+        )
         if name in tools:
-            tools[name]["risk_class"] = "restricted"
+            tools[name]["risk_class"] = risk
             continue
         tools[name] = _entry(
-            name, ("claude",), "write", "restricted",
+            name, ("claude",), "write", risk,
             _IDEMPOTENCY_SEND if name in SEND_TOOLS else _IDEMPOTENCY_CONSENT,
             5,
         )

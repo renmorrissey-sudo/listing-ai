@@ -246,6 +246,42 @@ def _needs_attention(user_id, lead_id, inbound_id, reason_code):
         )
 
 
+def _is_rate_limited(user_id, phone):
+    """Real tenant/contact rate check (sms_authorization._rate_limited:
+    30/min, 500/hr, 2000/day per tenant, 3/contact/day, counted from
+    outbound sms_messages rows). Fail closed: any error in the check
+    itself is treated as rate-limited, never as a green light."""
+    try:
+        from sms_authorization import _rate_limited
+
+        return bool(_rate_limited(user_id, phone))
+    except Exception:
+        logger.exception(
+            "rate-limit check failed tenant=%s; failing closed", user_id
+        )
+        return True
+
+
+def _load_inbound_body(user_id, inbound_id):
+    """Load the raw inbound body from its sms_messages row (the source of
+    truth). The job payload carries only a redacted fallback copy, so the
+    handler prefers the stored row. Returns "" when the row is missing."""
+    if not inbound_id:
+        return ""
+    try:
+        row = db.get_sms_message(inbound_id, user_id)
+    except Exception:
+        logger.warning(
+            "inbound sms_messages row unreadable tenant=%s inbound=%s",
+            user_id,
+            inbound_id,
+        )
+        return ""
+    if not row:
+        return ""
+    return str(row.get("message_body") or "")
+
+
 def _decide_policy(user_id, lead, analysis, draft, mode, paused):
     """Ask harness.policy for the send decision.
 
@@ -254,17 +290,21 @@ def _decide_policy(user_id, lead, analysis, draft, mode, paused):
     ``harness.policy.decide(user_id, action, tool, context)`` is consulted
     lazily; it returns ``(decision, reason)``. Any missing module or error
     defaults to DRAFT -- never to ALLOW.
-    Returns (decision, reason) with decision in {ALLOW, DRAFT, BLOCK, DEFER}.
+    Returns (decision, reason, rate_limited) with decision in
+    {ALLOW, DRAFT, BLOCK, DEFER}; rate_limited is the structured flag the
+    caller uses to re-queue a rate-limit DEFER retryably (never keyed on
+    the reason string, so a future policy rewording cannot silently
+    change the retry behaviour).
     """
     if paused:
-        return "DRAFT", "paused"
+        return "DRAFT", "paused", False
     if mode == "drafts_only":
-        return "DRAFT", "mode_drafts_only"
+        return "DRAFT", "mode_drafts_only", False
     try:
         from harness.policy import decide
     except Exception:
         logger.warning("harness.policy unavailable; defaulting to DRAFT tenant=%s", user_id)
-        return "DRAFT", "policy_unavailable"
+        return "DRAFT", "policy_unavailable", False
     phone = (lead or {}).get("phone_number") or ""
     suppressed = False
     try:
@@ -280,6 +320,7 @@ def _decide_policy(user_id, lead, analysis, draft, mode, paused):
         quiet_hours = bool(in_quiet_hours(user_id, phone=phone, lead=lead))
     except Exception:
         quiet_hours = False
+    rate_limited = _is_rate_limited(user_id, phone)
     context = {
         "mode": mode,
         "paused": paused,
@@ -287,7 +328,10 @@ def _decide_policy(user_id, lead, analysis, draft, mode, paused):
         "opted_out": (lead or {}).get("opt_out_status") == "opted_out",
         "suppressed": suppressed,
         "quiet_hours": quiet_hours,
-        "rate_limited": False,
+        # C2: consult the REAL tenant/contact rate check -- never a
+        # hard-coded False. A tripped limit makes the policy DEFER, and
+        # the caller re-queues that DEFER retryably (see below).
+        "rate_limited": rate_limited,
         "escalation_topics": analysis.get("escalation_topics") or [],
         "analysis": analysis,
         "template_approved": False,
@@ -296,7 +340,7 @@ def _decide_policy(user_id, lead, analysis, draft, mode, paused):
         result = decide(user_id, "send_sms", "send_sms", context)
     except Exception:
         logger.exception("harness.policy.decide failed tenant=%s", user_id)
-        return "DRAFT", "policy_error"
+        return "DRAFT", "policy_error", rate_limited
     if isinstance(result, (tuple, list)) and len(result) == 2:
         decision, reason = result
         decision = str(decision or "DRAFT").upper()
@@ -308,8 +352,8 @@ def _decide_policy(user_id, lead, analysis, draft, mode, paused):
         decision = str(result or "DRAFT").upper()
         reason = ""
     if decision not in {"ALLOW", "DRAFT", "BLOCK", "DEFER"}:
-        return "DRAFT", "policy_unknown_decision"
-    return decision, reason or "policy_decision"
+        return "DRAFT", "policy_unknown_decision", rate_limited
+    return decision, reason or "policy_decision", rate_limited
 
 
 def _payload_dict(job):
@@ -338,7 +382,11 @@ def process_sms_auto_reply_job(job):
     payload = _payload_dict(job)
     lead_id = payload.get("lead_id") or job.get("lead_id")
     inbound_id = payload.get("inbound_id") or job.get("inbound_id")
-    body = payload.get("body") or payload.get("inbound_body") or ""
+    # H3: prefer the raw body from the inbound sms_messages row (source of
+    # truth); the payload only ever carries a redacted fallback copy.
+    body = _load_inbound_body(user_id, inbound_id) or (
+        payload.get("body") or payload.get("inbound_body") or ""
+    )
     receiving_number = payload.get("receiving_number")
 
     if not user_id or not lead_id or not inbound_id:
@@ -373,6 +421,41 @@ def process_sms_auto_reply_job(job):
         }
 
     mode, paused, _ai_enabled = get_harness_mode(user_id)
+
+    # C2 (early): never burn a coach (Anthropic) call on a job that cannot
+    # send right now. A tripped tenant/contact rate limit defers the job
+    # retryably before any model call; _decide_policy re-checks at decision
+    # time as defence in depth (a limit can trip between here and the send).
+    # Drafts Only / paused short-circuit to DRAFT later and never send, so
+    # they skip this check.
+    if mode != "drafts_only" and not paused and _is_rate_limited(
+        user_id, (lead or {}).get("phone_number") or ""
+    ):
+        _audit(
+            user_id,
+            action="sms_auto_reply_deferred",
+            gate_decision="DEFER",
+            gate_reason="tenant/per-contact rate limit reached; retry later",
+            mode=mode,
+            target_type="lead",
+            target_id=lead_id,
+            job_id=job_id,
+        )
+        _needs_attention(user_id, lead_id, inbound_id, "ai_reply_deferred")
+        logger.info(
+            "sms_auto_reply DEFERRED by rate limit before coach (will retry) job=%s tenant=%s lead=%s",
+            job_id,
+            user_id,
+            lead_id,
+        )
+        return {
+            "ok": False,
+            "sent": False,
+            "decision": "DEFER",
+            "reason": "tenant/per-contact rate limit reached; retry later",
+            "approval_id": None,
+            "retryable": True,
+        }
 
     # (2) Existing coach analysis -- never reimplemented here.
     from sms_inbound import analyze_inbound_and_coach
@@ -415,7 +498,9 @@ def process_sms_auto_reply_job(job):
     _record_cost(user_id, coach.get("usage") or analysis.get("usage"), job_id=job_id)
 
     # (3) Policy gate.
-    decision, gate_reason = _decide_policy(user_id, lead, analysis, draft, mode, paused)
+    decision, gate_reason, rate_limited = _decide_policy(
+        user_id, lead, analysis, draft, mode, paused
+    )
 
     # Defense in depth: escalation topics can never auto-send, even if the
     # policy module returned ALLOW.
@@ -516,6 +601,38 @@ def process_sms_auto_reply_job(job):
         }
 
     # BLOCK / DEFER: audit, flag for human attention, no send.
+    # C2: a DEFER caused by a tripped rate limit is transient -- return
+    # ok=False, retryable=True so the worker re-queues the job with
+    # backoff instead of completing (dropping) or dead-lettering it.
+    # Other DEFER causes (e.g. quiet hours) keep the existing behaviour:
+    # ok=True, completed, no send. Keyed on the structured rate_limited
+    # flag from _decide_policy, never on the reason string.
+    if decision == "DEFER" and rate_limited:
+        _audit(
+            user_id,
+            action="sms_auto_reply_deferred",
+            gate_decision="DEFER",
+            gate_reason=gate_reason,
+            mode=mode,
+            target_type="lead",
+            target_id=lead_id,
+            job_id=job_id,
+        )
+        _needs_attention(user_id, lead_id, inbound_id, "ai_reply_deferred")
+        logger.info(
+            "sms_auto_reply DEFERRED by rate limit (will retry) job=%s tenant=%s lead=%s",
+            job_id,
+            user_id,
+            lead_id,
+        )
+        return {
+            "ok": False,
+            "sent": False,
+            "decision": "DEFER",
+            "reason": gate_reason,
+            "approval_id": None,
+            "retryable": True,
+        }
     _audit(
         user_id,
         action="sms_auto_reply_blocked" if decision == "BLOCK" else "sms_auto_reply_deferred",

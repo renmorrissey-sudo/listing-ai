@@ -13,10 +13,10 @@
   {% include 'subscriber_tool_nav.html' %}
   <main>
     <h1>AI Automation status</h1>
-    <p class="muted">Read-only status for the AI harness. In Phase 1, all accounts run in Drafts Only mode: the AI drafts replies for your review and never sends automatically. There are no mode controls on this page.</p>
+    <p class="muted">Read-only status for the AI harness. In Phase 1, all accounts run in Drafts Only mode: the AI drafts replies for your review and never sends automatically. Approving a draft below queues it for sending; the send is re-checked against consent, opt-out, quiet hours and rate limits at send time. There are no mode controls on this page.</p>
     <div class="card">
       <ul>
-        <li>Mode: <strong>{{ mode }}</strong></li>
+        <li>Mode: <strong>{{ mode }}</strong>{% if mode == 'drafts_only' %} (Drafts Only — nothing sends without your approval){% endif %}</li>
         <li>Paused: <strong>{{ 'yes' if paused else 'no' }}</strong></li>
         <li>AI enabled: <strong>{{ 'yes' if ai_enabled else 'no' }}</strong></li>
         <li>Pending approvals: <strong>{{ pending_approvals }}</strong></li>
@@ -24,9 +24,81 @@
         {% if jobs_24h is defined %}
         <li>Jobs in the last 24 hours: <strong>{{ jobs_24h }}</strong></li>
         {% endif %}
+        {% if spend_cents is defined %}
+        <li>AI spend this month: <strong>${{ '%.2f' % (spend_cents / 100) }}</strong></li>
+        {% endif %}
       </ul>
     </div>
+
+    <h2>Pending approvals</h2>
+    {% if approvals %}
+    <div class="card">
+      {% for approval in approvals %}
+      <div class="approval" data-approval-id="{{ approval.id }}">
+        <p><strong>{{ approval.kind }}</strong> &middot; lead {{ approval.lead_id }} &middot; created {{ approval.created_at }}{% if approval.expires_at %} &middot; expires {{ approval.expires_at }}{% endif %}</p>
+        {% if approval.draft_reply %}
+        <blockquote>{{ approval.draft_reply }}</blockquote>
+        {% endif %}
+        <p>
+          <button type="button" class="approval-approve" data-approval-id="{{ approval.id }}">Approve &amp; send</button>
+          <button type="button" class="approval-reject" data-approval-id="{{ approval.id }}">Reject</button>
+        </p>
+        <p class="muted approval-status" aria-live="polite"></p>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted">No pending approvals.</p>
+    {% endif %}
+
+    {% if recent_audit is defined and recent_audit %}
+    <h2>Recent activity</h2>
+    <div class="card">
+      <ul>
+        {% for entry in recent_audit %}
+        <li>{{ entry.created_at }} &mdash; {{ entry.actor }}: {{ entry.action }}{% if entry.gate_reason %} ({{ entry.gate_reason }}){% endif %}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
   </main>
   {% include 'subscriber_footer.html' %}
+  <script>
+    (function () {
+      function postAction(id, action, reason) {
+        var statusEl = document.querySelector(
+          '.approval[data-approval-id="' + id + '"] .approval-status'
+        );
+        if (statusEl) statusEl.textContent = 'Working…';
+        return fetch('/api/harness/approvals/' + id + '/' + action, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(reason ? {reason: reason} : {})
+        }).then(function (resp) {
+          if (!resp.ok) {
+            return resp.json().then(function (data) {
+              throw new Error((data && data.error) || ('Request failed (' + resp.status + ')'));
+            });
+          }
+          return resp.json();
+        }).then(function () {
+          window.location.reload();
+        }).catch(function (err) {
+          if (statusEl) statusEl.textContent = err.message;
+        });
+      }
+      document.querySelectorAll('.approval-approve').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          postAction(btn.getAttribute('data-approval-id'), 'approve');
+        });
+      });
+      document.querySelectorAll('.approval-reject').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var reason = window.prompt('Reason for rejecting (optional):', '') || '';
+          postAction(btn.getAttribute('data-approval-id'), 'reject', reason || undefined);
+        });
+      });
+    })();
+  </script>
 </body>
 </html>

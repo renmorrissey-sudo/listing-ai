@@ -27,9 +27,66 @@ Timestamps are UTC ISO strings. No new dependencies.
 
 from __future__ import annotations
 
+import logging
+import os
 from datetime import datetime, timezone
 
 import db
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Monthly spend cap (D2 enforcement).
+#
+# NOTE — DEFAULT CONFIRMED BY REN 2026-11-08: $50/tenant/month (5000 cents),
+# roughly the $49 subscription price. Override per deployment with the
+# HARNESS_MONTHLY_SPEND_CAP_CENTS env var.
+# ---------------------------------------------------------------------------
+DEFAULT_MONTHLY_SPEND_CAP_CENTS = 5000  # $50 per tenant per month (confirmed)
+
+ENV_MONTHLY_SPEND_CAP_CENTS = "HARNESS_MONTHLY_SPEND_CAP_CENTS"
+
+
+def get_monthly_spend_cap_cents() -> int:
+    """Per-tenant monthly AI spend cap in cents.
+
+    Reads ``HARNESS_MONTHLY_SPEND_CAP_CENTS`` from the environment (there
+    is no existing harness env-var pattern in config.py, so it is read
+    here directly); falls back to
+    :data:`DEFAULT_MONTHLY_SPEND_CAP_CENTS` when unset, blank, or
+    unparsable. A non-positive value disables the cap (returns 0, which
+    callers treat as "no cap").
+    """
+    raw = os.environ.get(ENV_MONTHLY_SPEND_CAP_CENTS)
+    if raw is None or str(raw).strip() == "":
+        return DEFAULT_MONTHLY_SPEND_CAP_CENTS
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning(
+            "invalid %s=%r; using default cap %s cents",
+            ENV_MONTHLY_SPEND_CAP_CENTS, raw, DEFAULT_MONTHLY_SPEND_CAP_CENTS,
+        )
+        return DEFAULT_MONTHLY_SPEND_CAP_CENTS
+    return value
+
+
+def current_month_spend_cents(user_id) -> int:
+    """Tenant's spend in cents for the current UTC month (``harness_costs``).
+
+    Sums ``cost_cents`` for the current YYYY-MM period. Returns 0 when
+    the tenant has no rows, ``user_id`` is None, or the table is missing
+    (e.g. the harness migration has not landed yet) — the gate must fail
+    open on a missing ledger read, not crash, and a missing table means
+    no spend has been recorded through it.
+    """
+    if user_id is None:
+        return 0
+    try:
+        return int(monthly_totals(user_id, _current_period())["total_cents"])
+    except Exception as exc:  # table missing, DB down, etc.
+        logger.warning("harness current-month spend fell back to 0: %s", exc)
+        return 0
 
 # ---------------------------------------------------------------------------
 # PLACEHOLDER PRICING — confirm with Ren before relying on dollar figures.

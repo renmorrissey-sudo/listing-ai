@@ -72,6 +72,25 @@ def _tool_result(response):
     return body["results"][0]["result"]
 
 
+def _set_mode(user_id, mode):
+    """Harness mode for a tenant (Phase 1 default is drafts_only).
+
+    Voice writes are gated by harness.policy: in drafts_only they are
+    refused (DRAFT), so tests exercising a successful write set
+    supervised/authorized first; tests asserting the refusal use the
+    default.
+    """
+    with db.get_db() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO harness_settings
+                (user_id, mode, paused, ai_enabled)
+            VALUES (?, ?, 0, 1)
+            """,
+            (user_id, mode),
+        )
+
+
 def test_voice_tool_lists_all_open_leads_by_name(app_client, two_users):
     u1, u2 = two_users
     apply_pending_migrations()
@@ -95,9 +114,13 @@ def test_voice_tool_lists_all_open_leads_by_name(app_client, two_users):
     assert "Other Tenant" not in result["summary"]
 
 
-def test_voice_tool_can_update_every_pipeline_status(app_client, two_users):
+def test_voice_tool_can_update_routine_pipeline_status(app_client, two_users):
+    # C1: voice writes are gated by harness.policy. Routine statuses apply
+    # in supervised mode; final statuses (closed_won etc.) are refused in
+    # every mode, matching Ask TopAI (autonomy.FINAL_LEAD_STATUSES).
     u1, _ = two_users
     apply_pending_migrations()
+    _set_mode(u1, "supervised")
     call_id = _voice_call(u1)
     lead_id = _lead(u1, "Status Lead")
 
@@ -106,12 +129,7 @@ def test_voice_tool_can_update_every_pipeline_status(app_client, two_users):
         "contacted",
         "qualified",
         "appointment_scheduled",
-        "appointment_completed",
         "nurture",
-        "under_contract",
-        "closed_won",
-        "closed_lost",
-        "do_not_contact",
         "new",
     ]:
         res = app_client.post(
@@ -127,8 +145,32 @@ def test_voice_tool_can_update_every_pipeline_status(app_client, two_users):
         assert _tool_result(res)["ok"] is True
         assert db.get_lead(lead_id, u1)["status"] == status
 
+    for status in [
+        "appointment_completed",
+        "under_contract",
+        "closed_won",
+        "closed_lost",
+        "do_not_contact",
+    ]:
+        res = app_client.post(
+            "/webhook/voice",
+            json=_tool_payload(
+                call_id,
+                "vapi_tools",
+                "update_lead_status",
+                {"lead_id": lead_id, "status": status},
+            ),
+        )
+        assert res.status_code == 200
+        result = _tool_result(res)
+        assert isinstance(result, str)
+        assert "cannot be applied automatically" in result
+        assert db.get_lead(lead_id, u1)["status"] == "new"
 
-def test_voice_tool_can_mark_lead_sms_verified(app_client, two_users):
+
+def test_voice_tool_refuses_sms_consent_change(app_client, two_users):
+    # C1: consent changes are restricted in every mode (harness.policy
+    # ALWAYS_BLOCK_TOOLS) — a voice caller can never mark a lead verified.
     u1, _ = two_users
     apply_pending_migrations()
     call_id = _voice_call(u1)
@@ -150,15 +192,18 @@ def test_voice_tool_can_mark_lead_sms_verified(app_client, two_users):
     )
 
     assert res.status_code == 200
-    assert _tool_result(res)["ok"] is True
+    result = _tool_result(res)
+    assert isinstance(result, str)
     lead = db.get_lead(lead_id, u1)
-    assert lead["sms_consent_status"] == "verified"
-    assert not bool(lead["sms_sending_blocked"])
+    assert lead["sms_consent_status"] == "unverified"
+    assert bool(lead["sms_sending_blocked"])
 
 
 def test_voice_tool_updates_lead_contact_info(app_client, two_users):
     u1, _ = two_users
     apply_pending_migrations()
+    # C1: routine writes are DRAFT/refused in drafts_only; supervised allows them.
+    _set_mode(u1, "supervised")
     call_id = _voice_call(u1)
     lead_id = _lead(u1, "Contact Lead", phone="+13035550105", email="old@example.com")
 
@@ -224,7 +269,11 @@ def test_voice_tool_saves_email_draft_to_lead_timeline(app_client, two_users):
     assert "Checking in" in activities[0]["summary"]
 
 
-def test_voice_tool_sends_email_to_lead(app_client, two_users, monkeypatch):
+def test_voice_tool_refuses_email_send(app_client, two_users, monkeypatch):
+    # C1: send_lead_email is restricted in every mode (harness.policy
+    # ALWAYS_BLOCK_TOOLS) — a voice caller can never trigger a real send.
+    # The draft variant (test_voice_tool_saves_email_draft_to_lead_timeline)
+    # still works: drafting is the safe output.
     u1, _ = two_users
     apply_pending_migrations()
     call_id = _voice_call(u1)
@@ -264,11 +313,5 @@ def test_voice_tool_sends_email_to_lead(app_client, two_users, monkeypatch):
 
     assert res.status_code == 200
     result = _tool_result(res)
-    assert result["ok"] is True
-    assert result["email"]["provider_status"] == "sent"
-    assert sent == {
-        "user_id": u1,
-        "lead_id": lead_id,
-        "subject": "Showing follow-up",
-        "body": "Would you like to see the home this week?",
-    }
+    assert isinstance(result, str)
+    assert sent == {}

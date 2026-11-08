@@ -13,9 +13,9 @@ and dispatches by job kind. Reuses the SMS campaign worker's claim / retry
    in ``dead_letter``. This worker has no campaign-completion aggregation
    that could mistake retryable jobs for finished ones.
 
-Job kinds in Phase 1: ``sms_auto_reply`` only. Unknown kinds fail with
-``retryable=False`` so they land in ``dead_letter`` -- never silently
-dropped.
+Job kinds: ``sms_auto_reply``, ``scheduled_follow_up`` and
+``execute_approval``. Unknown kinds fail with ``retryable=False`` so
+they land in ``dead_letter`` -- never silently dropped.
 
 ``harness.jobs`` is owned by the core harness package and may not exist
 yet; it is imported lazily and defensively, so this worker still starts
@@ -183,6 +183,36 @@ def _job_payload(job):
     return payload if isinstance(payload, dict) else {}
 
 
+def _run_known_handler(jobs, job, handler, kind):
+    """Run one known-kind handler and settle the job by its ok/retryable
+    contract: ok -> complete; ok=False + retryable -> re-queue with
+    backoff; ok=False + not retryable -> dead-letter."""
+    job_id = (job or {}).get("id")
+    try:
+        result = handler(job) or {}
+    except Exception as exc:
+        logger.exception("%s handler crashed job=%s", kind, job_id)
+        _fail_job(jobs, job, f"handler_error: {exc}"[:500], retryable=True)
+        return True
+    if result.get("ok"):
+        _complete_job(jobs, job, result)
+    elif result.get("retryable"):
+        _fail_job(
+            jobs,
+            job,
+            str(result.get("reason") or "handler_failed")[:500],
+            retryable=True,
+        )
+    else:
+        _fail_job(
+            jobs,
+            job,
+            str(result.get("reason") or "handler_failed")[:500],
+            retryable=False,
+        )
+    return True
+
+
 def dispatch_job(job):
     """Dispatch one claimed job. Returns True if the job reached a terminal
     outcome (completed or dead-lettered) or was re-queued retryably."""
@@ -192,31 +222,17 @@ def dispatch_job(job):
     if jobs is None:
         return False
     if kind == "sms_auto_reply":
-        try:
-            from harness.sms_handler import process_sms_auto_reply_job
+        from harness.sms_handler import process_sms_auto_reply_job
 
-            result = process_sms_auto_reply_job(job) or {}
-        except Exception as exc:
-            logger.exception("sms_auto_reply handler crashed job=%s", job_id)
-            _fail_job(jobs, job, f"handler_error: {exc}"[:500], retryable=True)
-            return True
-        if result.get("ok"):
-            _complete_job(jobs, job, result)
-        elif result.get("retryable"):
-            _fail_job(
-                jobs,
-                job,
-                str(result.get("reason") or "handler_failed")[:500],
-                retryable=True,
-            )
-        else:
-            _fail_job(
-                jobs,
-                job,
-                str(result.get("reason") or "handler_failed")[:500],
-                retryable=False,
-            )
-        return True
+        return _run_known_handler(jobs, job, process_sms_auto_reply_job, kind)
+    if kind == "scheduled_follow_up":
+        from harness.followup import process_scheduled_follow_up_job
+
+        return _run_known_handler(jobs, job, process_scheduled_follow_up_job, kind)
+    if kind == "execute_approval":
+        from harness.approvals import process_execute_approval_job
+
+        return _run_known_handler(jobs, job, process_execute_approval_job, kind)
     logger.error("Unknown harness job kind=%s job=%s; dead-lettering", kind, job_id)
     _fail_job(jobs, job, f"unknown_kind: {kind}"[:500], retryable=False)
     return True
