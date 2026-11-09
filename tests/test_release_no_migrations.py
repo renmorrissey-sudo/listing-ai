@@ -1,22 +1,29 @@
-"""Migration-free release guarantees (branch ``topai-launch-readiness-release``).
+"""Release migration guarantees (branch ``topai-launch-readiness-release``).
 
-Ren requires this release to contain no database schema migrations, so
-migrations 033 (harness_costs model + correlation_id columns) and 034
+Migrations 033 (harness_costs model + correlation_id columns) and 034
 (harness_jobs claim-path index) are excluded: their files are deleted
-and the runner list ends at 032. The files remain in git history
+and they are not in the runner list. The files remain in git history
 (branch topai-launch-readiness-final, commit e93cf7e) for a future
 migration-bearing release.
 
+Migration 035 (harness_costs.cost_micros + harness_spend_reservations)
+IS in the release: Ren authorized it on 2026-11-09 for defect-2
+remediation (staging migration testing only; production migration is
+NOT authorized yet). The runner list therefore ends at 035 (33
+modules), with 033/034 still excluded.
+
 These tests pin what the release DOES still guarantee on the 029
-column set, and pin the two known degradations explicitly so they are
-visible tradeoffs, not silent surprises:
+column set for model/correlation_id, and pin the two known
+degradations explicitly so they are visible tradeoffs, not silent
+surprises:
 
 * cost recording still works — every path records provider / tool /
   units / unit_type / cost_cents, and the spend cap still trips on
   those totals. ``model`` and ``correlation_id`` are dropped at write
   time (``harness.costs._insert_cost_row`` falls back to the 029
   column set); per-model breakdown and per-event traceability return
-  when 033 lands.
+  when 033 lands. ``cost_micros`` IS recorded (035), so fractional-cent
+  precision is preserved.
 * idempotent true-up dedup is lost — without the correlation_id
   column, ``record_cost_once`` cannot detect a redelivery, so a
   duplicate Vapi true-up inserts a second row. This over-counts spend,
@@ -34,10 +41,10 @@ from harness.jobs import claim_jobs, enqueue_job
 from migrations.runner import MIGRATION_MODULES
 
 
-def test_runner_list_ends_at_032():
-    """No 033/034 migration is listed or present in the release."""
-    assert MIGRATION_MODULES[-1].endswith("032_tenant_sms_senders_scoped_unique")
-    assert len(MIGRATION_MODULES) == 32
+def test_runner_list_ends_at_035_without_033_034():
+    """Migration 035 is listed; 033/034 remain excluded from the release."""
+    assert MIGRATION_MODULES[-1].endswith("035_harness_cost_precise_micros")
+    assert len(MIGRATION_MODULES) == 33
     assert not any("033_" in m or "034_" in m for m in MIGRATION_MODULES)
 
 
@@ -55,7 +62,12 @@ def test_migration_033_034_files_absent():
 
 
 def test_record_cost_degrades_to_029_columns(two_users):
-    """Cost rows are recorded exactly, minus model/correlation_id."""
+    """Cost rows are recorded exactly, minus model/correlation_id.
+
+    033 is still excluded, so model/correlation_id are dropped at
+    write time. 035 IS present, so cost_micros is recorded (the
+    precise micro-cent cost, derived from cost_cents here).
+    """
     u1, _ = two_users
     row_id = costs.record_cost(
         u1, "anthropic", "ask_topai", 1500, "tokens", cost_cents=5,
@@ -68,6 +80,7 @@ def test_record_cost_degrades_to_029_columns(two_users):
     assert row["units"] == 1500
     assert row["unit_type"] == "tokens"
     assert row["cost_cents"] == 5
+    assert row["cost_micros"] == 5_000_000
     assert "model" not in row
     assert "correlation_id" not in row
 

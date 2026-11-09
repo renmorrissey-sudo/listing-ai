@@ -19,6 +19,12 @@ from sms_validation import validate_e164_phone
 
 logger = logging.getLogger(__name__)
 
+
+class _SpendCapReached(Exception):
+    """Internal control-flow marker: the spend reservation was refused
+    (the tenant's cap would be exceeded), so no model call is made."""
+
+
 OPT_OUT_KEYWORDS = frozenset(
     {"stop", "stopall", "unsubscribe", "cancel", "end", "quit"}
 )
@@ -479,19 +485,36 @@ def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_
         result["error"] = "not_configured"
         return result
 
-    # Universal spend cap (launch blocker 5): never burn a coach
-    # (Anthropic) call on a capped tenant. Fail safe — no model call,
-    # and the inbound is flagged for manual review exactly like a
-    # failed analysis, so nothing is silently dropped. This gate covers
-    # BOTH the direct path (sms_ai_agent / inbound webhook) and the
-    # harness SMS handler, which both funnel through this function.
+    # Universal spend cap (launch blocker 5) + atomic reservation
+    # (defect 2, requirement 5): never burn a coach (Anthropic) call on
+    # a capped tenant. A plain recheck of committed ledger totals is
+    # not safe under concurrency — two workers can both read a sub-cap
+    # total and then both spend. So the cap is enforced by RESERVING
+    # an upper-bound estimate before the model call: the check
+    # (committed + reserved + estimate <= cap) and the reservation
+    # insert run in one locked transaction, so a second worker sees
+    # the first worker's reservation and cannot pass. A refused
+    # reservation is a spend-cap block (no model call), and the inbound
+    # is flagged for manual review exactly like a failed analysis, so
+    # nothing is silently dropped. The reservation is released after
+    # the coach call (and its cost recording) in the finally below.
+    # This gate covers BOTH the direct path (sms_ai_agent / inbound
+    # webhook) and the harness SMS handler, which both funnel through
+    # this function.
+    prompt = build_inbound_reply_analysis_prompt(lead, conversation, inbound_body)
+    _reservation_made = False
+    _reservation_corr = correlation_id or f"coach-{inbound_id}"
     try:
-        from harness.costs import is_spend_cap_tripped
+        from harness.costs import estimate_anthropic_call_micros, reserve_spend
 
-        _cap_tripped = is_spend_cap_tripped(user_id)
-    except Exception:
-        _cap_tripped = False  # fail open on an unreadable ledger
-    if _cap_tripped:
+        if not reserve_spend(
+            user_id,
+            estimate_anthropic_call_micros(config.CLAUDE_MODEL, len(prompt)),
+            _reservation_corr,
+        ):
+            raise _SpendCapReached()
+        _reservation_made = True
+    except _SpendCapReached:
         insight_id = db.create_lead_insight(
             lead_id,
             user_id,
@@ -516,10 +539,12 @@ def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_
         result["insight_id"] = insight_id
         result["error"] = "spend_cap_reached"
         return result
+    except Exception:
+        _reservation_made = False  # fail open on reservation errors
 
     try:
         analysis = sms_coach.analyze_inbound_reply(
-            build_inbound_reply_analysis_prompt(lead, conversation, inbound_body),
+            prompt,
             user_id=user_id,
             correlation_id=correlation_id,
         )
@@ -549,6 +574,14 @@ def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_
         result["insight_id"] = insight_id
         result["error"] = "coach_failed"
         return result
+    finally:
+        if _reservation_made:
+            try:
+                from harness.costs import release_reservation
+
+                release_reservation(user_id, _reservation_corr)
+            except Exception:
+                pass
 
     db.update_lead_from_analysis(
         lead_id,

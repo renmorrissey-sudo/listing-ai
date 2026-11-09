@@ -139,6 +139,19 @@ def _outbound_activity(user_id):
     ``send_failed`` / ``blocked`` / ``drafted``) and the ``sms_messages``
     rows actually marked sent. Voice calls are counted from the
     ``voice_calls`` rows actually created. Missing tables degrade to 0.
+
+    Mock vs real (defect 4): mocked sends are NEVER counted as real
+    customer communications. ``sms_sent_60d`` / ``sms_messages_sent_60d``
+    count only real provider sends (audit ``sms_auto_reply_sent`` /
+    message status ``sent``). Mocked executions are tracked in the
+    separate test metrics ``sms_mock_sent_60d`` (message status
+    ``mock_sent``) and ``approvals_executed_60d`` (audit
+    ``approval_executed``), so a mock send is visible in the execution
+    metrics while real outbound customer communications stay zero.
+    ``approvals_blocked_60d`` counts deterministic declines that
+    settled as blocked (defect 1 item 8). ``sms_delivered_60d`` counts
+    confirmed deliveries (message status ``delivered``, set by the
+    provider delivery callback).
     """
     since_60d = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
     return {
@@ -165,6 +178,27 @@ def _outbound_activity(user_id):
         "sms_messages_sent_60d": _count(
             user_id,
             "SELECT COUNT(*) AS n FROM sms_messages WHERE user_id = ? AND direction = 'outbound' AND status = 'sent' AND created_at >= ?",
+            (user_id, since_60d),
+        ),
+        "sms_delivered_60d": _count(
+            user_id,
+            "SELECT COUNT(*) AS n FROM sms_messages WHERE user_id = ? AND direction = 'outbound' AND status = 'delivered' AND created_at >= ?",
+            (user_id, since_60d),
+        ),
+        # Mock / test metrics — never real customer communications.
+        "sms_mock_sent_60d": _count(
+            user_id,
+            "SELECT COUNT(*) AS n FROM sms_messages WHERE user_id = ? AND direction = 'outbound' AND status = 'mock_sent' AND created_at >= ?",
+            (user_id, since_60d),
+        ),
+        "approvals_executed_60d": _count(
+            user_id,
+            "SELECT COUNT(*) AS n FROM harness_audit WHERE user_id = ? AND action = 'approval_executed' AND created_at >= ?",
+            (user_id, since_60d),
+        ),
+        "approvals_blocked_60d": _count(
+            user_id,
+            "SELECT COUNT(*) AS n FROM harness_audit WHERE user_id = ? AND action = 'approval_blocked' AND created_at >= ?",
             (user_id, since_60d),
         ),
         "calls_placed_60d": _count(

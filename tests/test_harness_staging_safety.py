@@ -565,12 +565,19 @@ def _staging_lead(user_id, phone):
     return lead_id
 
 
-def _staging_approval(user_id, lead_id, inbound_id=424242):
+def _staging_approval(user_id, lead_id, inbound_id=424242, draft_extra=None):
     import json as _json
     from datetime import datetime, timezone
 
     import db
 
+    draft = {
+        "draft_reply": "Hi! Yes, it is still available.",
+        "lead_id": lead_id,
+        "inbound_id": inbound_id,
+    }
+    if draft_extra:
+        draft.update(draft_extra)
     with db.get_db() as conn:
         cur = conn.execute(
             """
@@ -581,13 +588,7 @@ def _staging_approval(user_id, lead_id, inbound_id=424242):
             (
                 user_id,
                 None,
-                _json.dumps(
-                    {
-                        "draft_reply": "Hi! Yes, it is still available.",
-                        "lead_id": lead_id,
-                        "inbound_id": inbound_id,
-                    }
-                ),
+                _json.dumps(draft),
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
@@ -784,7 +785,9 @@ def test_staging_auto_reply_flag_off_blocks_approved_execution(
     value), even an approved execution cannot send — the flag gates
     process_inbound_ai itself. Staging must therefore leave the flag
     at its default (true); the harness drafts_only lock is the control
-    that stops unapproved sends."""
+    that stops unapproved sends. ``auto_reply_disabled`` is a
+    deterministic decline, so the approval settles as blocked (never
+    sent, never retried) rather than reverting to approved."""
     from unittest.mock import patch
 
     from harness.approvals import approve_approval, execute_approved
@@ -808,5 +811,6 @@ def test_staging_auto_reply_flag_off_blocks_approved_execution(
         result = execute_approved(u1, approval_id)
     assert result["sent"] is False
     assert result["reason"] == "auto_reply_disabled"
-    assert _approval_row(approval_id)["status"] == "approved"
+    assert result["retryable"] is False
+    assert _approval_row(approval_id)["status"] == "blocked"
     assert sent_messages() == []

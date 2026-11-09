@@ -57,14 +57,19 @@ MIGRATION_MODULES = [
     "migrations.versions.030_harness_scoped_idempotency",
     "migrations.versions.031_harness_job_correlation",
     "migrations.versions.032_tenant_sms_senders_scoped_unique",
+    "migrations.versions.035_harness_cost_precise_micros",
 ]
 
 # RELEASE NOTE (topai-launch-readiness-release, 2026-11-09): the release
-# must contain no schema migrations, so 033 (harness_costs model +
+# was originally migration-free, so 033 (harness_costs model +
 # correlation_id columns) and 034 (harness_jobs claim-path index) were
 # removed from this list and their files deleted. The files remain in git
 # history (branch topai-launch-readiness-final, commit e93cf7e) for a
-# future migration-bearing release. harness.costs.record_cost already
+# future migration-bearing release. On 2026-11-09 Ren AUTHORIZED
+# migration 035 (harness_costs.cost_micros + harness_spend_reservations)
+# for defect-2 remediation (staging migration testing only; production
+# migration is NOT authorized yet), so the release now contains exactly
+# one migration: 035. 033 and 034 remain excluded. harness.costs
 # degrades gracefully to the 029 column set when the 033 columns are
 # absent, so cost recording and cap enforcement still work; model /
 # correlation_id are dropped and idempotent true-up dedup is lost

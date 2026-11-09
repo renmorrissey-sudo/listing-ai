@@ -578,6 +578,11 @@ def process_sms_auto_reply_job(job):
                 "summary": analysis.get("summary"),
                 "suggested_lead_status": suggested_status,
                 "insight_id": coach.get("insight_id"),
+                # Surfaced to the human BEFORE the approval decision:
+                # which escalation topics the coach flagged, and why
+                # this was drafted rather than sent.
+                "escalation_topics": list(analysis.get("escalation_topics") or []),
+                "gate_reason": draft_reason,
             },
         )
         _audit(

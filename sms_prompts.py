@@ -36,6 +36,7 @@ RULES:
 - If the lead is no longer interested, respond politely, set suggested_lead_status to nurture, and do not keep pitching.
 - Capture useful property/context facts in captured_note and property_criteria_updates. Do not clear unspecified criteria fields.
 - Escalate legal, financing, negotiation, fair-housing, complaint, and uncertain property-fact topics. Do not auto-negotiate legal/financial terms.
+- uncertain_property_fact applies ONLY when the draft states a property fact (price, availability, features, terms) that cannot be verified from the lead record and conversation. A reply that only acknowledges the question and promises the agent will verify and follow up — without stating any property fact — is NOT an escalation; leave escalation_topics empty for it. Flagging the topic must reflect what the draft asserts, not merely what the lead asked about.
 - If they ask to stop/unsubscribe, suggest do_not_contact and leave draft_reply empty.
 - Be compliant and professional.
 

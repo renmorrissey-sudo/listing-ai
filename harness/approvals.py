@@ -61,6 +61,31 @@ TERMINAL_STATUSES = frozenset(
     {"rejected", "executed", "blocked", "expired"}
 )
 
+# Send-path decline reasons that are deterministic: retrying the same
+# approved send will produce the same decline, so the approval is
+# settled as blocked (never sent, never retried) instead of reverting
+# to approved and retrying forever. Everything NOT in this set is
+# treated as transient (provider error, coach failure) and reverts to
+# approved for a worker retry. Mirrors the coach's own
+# spend_cap_reached -> retryable=False in harness.sms_handler.
+DETERMINISTIC_DECLINE_REASONS = frozenset(
+    {
+        "escalation_topic",  # hard escalation topic (legal/fair housing/complaint)
+        "opted_out",
+        "consent_blocked",
+        "suppressed",
+        "inquiry_blocked",
+        "auto_reply_disabled",
+        "lead_missing",
+        "empty_draft",
+        "toll_free_not_verified",
+        "trial_destination_blocked",
+        "spend_cap_reached",
+        "reply_rate_limited",
+        "no_analysis",
+    }
+)
+
 # Statuses a human decision may be taken from (pending + not expired).
 DECIDABLE_STATUSES = frozenset({"pending"})
 
@@ -120,7 +145,12 @@ def _draft_dict(row):
 
 
 def serialize_approval(row):
-    """Public dict for one approval row, with parsed draft + expiry."""
+    """Public dict for one approval row, with parsed draft + expiry.
+
+    Surfaces the escalation topics and gate reason recorded when the
+    draft was created, so the human sees BEFORE approving that the
+    inbound was flagged (and why it was drafted rather than sent).
+    """
     if not row:
         return None
     draft = _draft_dict(row)
@@ -135,6 +165,8 @@ def serialize_approval(row):
         "lead_id": draft.get("lead_id"),
         "inbound_id": draft.get("inbound_id"),
         "draft_reply": draft.get("draft_reply"),
+        "escalation_topics": list(draft.get("escalation_topics") or []),
+        "gate_reason": draft.get("gate_reason"),
         "created_at": row.get("created_at"),
         "expires_at": expires_at.isoformat() if expires_at else None,
         "decided_by": row.get("decided_by"),
@@ -650,14 +682,27 @@ def execute_approved(user_id, approval_id, correlation_id=None):
             "retryable": False,
         }
 
-    # Approved + gate ALLOW: send through the EXISTING send path.
+    # Approved + gate ALLOW: send the EXACT stored human-approved
+    # draft through the existing send path, marked as a human-approved
+    # send. The stored draft (cleaned_draft) is passed through so the
+    # coach is NOT re-run — a fresh model call could generate a
+    # different draft, and the content executed must match the stored
+    # human-approved message (approved-draft fidelity). The approval
+    # overrides the routine-verification escalation topics (uncertain
+    # property facts, negotiation, financing) — a human has reviewed
+    # the draft that answers them. Hard escalation topics (legal, fair
+    # housing, complaint) still block inside the send path, and every
+    # other control (consent, opt-out, suppression, rate limit, quiet
+    # hours, spend cap) applies in full. If any check requires the
+    # text to change, the send is blocked (never silently modified).
     body = _load_inbound_body(user_id, inbound_id) or str(draft.get("body") or "")
     receiving_number = draft.get("receiving_number")
     try:
         from sms_ai_agent import process_inbound_ai
 
         send_result = process_inbound_ai(
-            user_id, lead_id, inbound_id, body, receiving_number
+            user_id, lead_id, inbound_id, body, receiving_number,
+            approved=True, approved_draft=cleaned_draft,
         ) or {}
     except Exception as exc:
         logger.exception(
@@ -726,9 +771,29 @@ def execute_approved(user_id, approval_id, correlation_id=None):
             "approval_id": approval_id,
             "retryable": False,
         }
-    # Send path declined without sending (e.g. coach failure inside the
-    # existing path): revert to approved for a worker retry.
+    # Send path declined without sending. A deterministic decline
+    # (policy/compliance/consent — the same send would be declined
+    # again) settles the approval as blocked: never sent, never
+    # retried, with the reason audited so the human can see why. Only
+    # a transient failure (provider error, coach failure) reverts to
+    # approved for a worker retry.
     reason = str(send_result.get("reason") or "send_failed")
+    if reason in DETERMINISTIC_DECLINE_REASONS:
+        logger.warning(
+            "approval execution send declined (deterministic) tenant=%s approval=%s reason=%s",
+            user_id,
+            approval_id,
+            reason,
+        )
+        _mark_blocked(user_id, approval_id, "BLOCK", reason)
+        return {
+            "ok": True,
+            "sent": False,
+            "decision": "BLOCK",
+            "reason": reason,
+            "approval_id": approval_id,
+            "retryable": False,
+        }
     logger.warning(
         "approval execution send declined tenant=%s approval=%s reason=%s",
         user_id,

@@ -87,10 +87,13 @@
     <div class="card">
       <ul>
         {% if outbound_activity is defined %}
-        <li>AI SMS sent (last 60 days): <strong>{{ outbound_activity.sms_sent_60d }}</strong> <span class="muted">(harness audit records; SMS messages actually marked sent: {{ outbound_activity.sms_messages_sent_60d }})</span></li>
+        <li>AI SMS sent (last 60 days): <strong>{{ outbound_activity.sms_sent_60d }}</strong> <span class="muted">(harness audit records; SMS messages actually marked sent: {{ outbound_activity.sms_messages_sent_60d }}; confirmed deliveries: {{ outbound_activity.sms_delivered_60d }})</span></li>
         <li>AI SMS sends failed (last 60 days): <strong>{{ outbound_activity.sms_send_failed_60d }}</strong></li>
         <li>Sends blocked by the policy gate (last 60 days): <strong>{{ outbound_activity.sms_blocked_60d }}</strong></li>
         <li>SMS replies drafted for review (last 60 days): <strong>{{ outbound_activity.sms_drafted_60d }}</strong></li>
+        <li>Approvals executed (last 60 days): <strong>{{ outbound_activity.approvals_executed_60d }}</strong> <span class="muted">(human-approved sends that ran, mock or real)</span></li>
+        <li>Approvals blocked at execution (last 60 days): <strong>{{ outbound_activity.approvals_blocked_60d }}</strong> <span class="muted">(deterministic declines that settled as blocked, never sent)</span></li>
+        <li>Mock SMS sends — test only, never a real customer message (last 60 days): <strong>{{ outbound_activity.sms_mock_sent_60d }}</strong></li>
         <li>AI calls placed (last 60 days): <strong>{{ outbound_activity.calls_placed_60d }}</strong></li>
         {% endif %}
       </ul>
