@@ -40,7 +40,11 @@ def pg_sms_env(monkeypatch):
     # Isolate from other tests sharing the same Postgres instance.
     suffix = uuid.uuid4().hex[:8]
     db.init_db()
-    # Clear shared unique sender numbers so ensure_telnyx_platform_sender can run.
+    # Clear sender rows so this test's tenant starts unregistered
+    # (isolation from other tests sharing the same Postgres instance).
+    # Since migration 032 the number is UNIQUE per (user_id,
+    # sender_number), so sharing the platform number is no longer a
+    # reason for ensure_telnyx_platform_sender to fail.
     with db.get_db() as conn:
         conn.execute("DELETE FROM tenant_sms_senders")
     yield {"db": db, "config": config, "suffix": suffix}
@@ -151,9 +155,10 @@ def test_postgres_full_pre_provider_sms_path_reaches_mocked_telnyx(pg_sms_env, m
 
     uid, persona_id = _seed_user_and_persona(db, config, suffix)
     _telnyx_ready(config, monkeypatch)
-    # Prefer a dedicated platform sender for this user. If the global From number
-    # is already claimed by another tenant row (shared test DB), require_tenant_sender
-    # still falls back to the synthetic Telnyx platform sender.
+    # Register this user's platform sender. Since migration 032 the
+    # platform number may be shared across tenants, so this no longer
+    # fails when another tenant already holds it; require_tenant_sender
+    # is fail-closed and returns no sender if registration fails.
     try:
         tdb.ensure_telnyx_platform_sender(uid)
     except Exception:

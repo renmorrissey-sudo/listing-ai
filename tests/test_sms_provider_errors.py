@@ -243,7 +243,12 @@ def test_api_returns_mapped_error_not_generic(app_client, two_users):
             json={
                 "persona_id": persona_id,
                 "lead_name": "Pat",
-                "phone_number": "+15557654321",
+                # Must not reuse +15557654321: test_sms_consent_page submits a
+                # no-consent public inquiry for that number, and
+                # outbound_sms_blocked_for_phone() blocks outbound SMS for it
+                # globally (shared test DB), which would 403 here before the
+                # provider is ever called.
+                "phone_number": "+15557654399",
                 "message_body": "Hello there",
                 "compliance_confirmed": True,
                 "send_now": True,

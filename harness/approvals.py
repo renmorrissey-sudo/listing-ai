@@ -142,7 +142,7 @@ def serialize_approval(row):
 
 
 def _audit(user_id, *, action, approval_id, mode=None, gate_decision=None,
-           gate_reason=None, actor="system"):
+           gate_reason=None, actor="system", correlation_id=None):
     """Append one harness_audit row for an approval transition.
 
     Best-effort: a missing audit table is logged, never raised — the
@@ -163,7 +163,7 @@ def _audit(user_id, *, action, approval_id, mode=None, gate_decision=None,
             gate_reason=(gate_reason or "")[:500],
             cost_cents=0,
             request_id=str(approval_id),
-            correlation_id=str(approval_id),
+            correlation_id=correlation_id or str(approval_id),
         )
     except Exception:
         logger.warning(
@@ -283,6 +283,42 @@ def approve_approval(user_id, approval_id):
         return serialize_approval(get_approval(user_id, approval_id)), "expired"
     if row.get("status") not in DECIDABLE_STATUSES:
         return serialize_approval(row), "not_pending"
+    # D5: validate the draft's write arguments at approve time — a draft
+    # whose lead was deleted, moved to another tenant, or whose
+    # suggested status is invalid cannot be approved. The approval stays
+    # pending and the failure is audited; nothing is enqueued.
+    draft = _draft_dict(row)
+    if row.get("kind") != "sms_reply":
+        _audit(
+            user_id,
+            action="approval_validation_failed",
+            approval_id=approval_id,
+            mode=_mode(user_id),
+            gate_decision="BLOCK",
+            gate_reason=f"unsupported approval kind: {row.get('kind')}",
+            actor="user",
+        )
+        return serialize_approval(row), "invalid_draft"
+    from harness.validation import validate_sms_reply_draft
+
+    _, draft_error = validate_sms_reply_draft(user_id, draft)
+    if draft_error is not None:
+        _audit(
+            user_id,
+            action="approval_validation_failed",
+            approval_id=approval_id,
+            mode=_mode(user_id),
+            gate_decision="BLOCK",
+            gate_reason=f"draft validation failed: {draft_error}",
+            actor="user",
+        )
+        logger.info(
+            "approval validation failed tenant=%s approval=%s reason=%s",
+            user_id,
+            approval_id,
+            draft_error,
+        )
+        return serialize_approval(row), "invalid_draft"
     _set_status(user_id, approval_id, "approved", decided_by=user_id)
     _audit(
         user_id,
@@ -335,13 +371,15 @@ def enqueue_execute_approval_job(user_id, approval_id):
     Idempotency key ``execute-approval-<id>``: approving twice can never
     create a second execution job.
     """
-    from harness.jobs import enqueue_job
+    from harness.jobs import enqueue_job, new_correlation_id
 
+    # L4: one correlation id for approve -> execute job -> send -> audit.
     return enqueue_job(
         user_id,
         "execute_approval",
         {"approval_id": approval_id},
         idempotency_key=f"execute-approval-{approval_id}",
+        correlation_id=new_correlation_id(),
     )
 
 
@@ -439,7 +477,7 @@ def _mark_blocked(user_id, approval_id, decision, reason):
     )
 
 
-def execute_approved(user_id, approval_id):
+def execute_approved(user_id, approval_id, correlation_id=None):
     """Execute an approved approval. Returns a worker result dict.
 
     Result keys mirror ``harness.sms_handler``: ``ok``, ``sent``,
@@ -538,21 +576,29 @@ def execute_approved(user_id, approval_id):
             "approval_id": approval_id,
             "retryable": False,
         }
-    lead_id = draft.get("lead_id")
-    inbound_id = draft.get("inbound_id")
-    if not lead_id or not inbound_id:
-        _mark_blocked(user_id, approval_id, "BLOCK", "approval draft is missing lead_id/inbound_id")
+    # D5: revalidate the draft's write arguments at execution time, with
+    # a fresh lead read. A job enqueued with valid args that later became
+    # invalid (lead deleted, moved to another tenant, inbound dropped,
+    # invalid suggested status) fails safely here instead of executing.
+    from harness.validation import validate_sms_reply_draft
+
+    cleaned_draft, draft_error = validate_sms_reply_draft(user_id, draft)
+    if draft_error is not None:
+        reason = f"validation_failed: {draft_error}"
+        _mark_blocked(user_id, approval_id, "BLOCK", reason)
         return {
             "ok": True,
             "sent": False,
             "decision": "BLOCK",
-            "reason": "approval draft is missing lead_id/inbound_id",
+            "reason": reason,
             "approval_id": approval_id,
             "retryable": False,
         }
-
+    lead_id = cleaned_draft["lead_id"]
+    inbound_id = cleaned_draft["inbound_id"]
     lead = db.get_lead(lead_id, user_id)
     if not lead:
+        # Deleted between validation and this read: fail safely.
         _mark_blocked(user_id, approval_id, "BLOCK", "lead_missing")
         return {
             "ok": True,
@@ -630,6 +676,7 @@ def execute_approved(user_id, approval_id):
             user_id,
             action="approval_executed",
             approval_id=approval_id,
+                correlation_id=correlation_id,
             mode=_mode(user_id),
             gate_decision="ALLOW",
             gate_reason=send_result.get("reason") or gate_reason or "sent",
@@ -659,6 +706,7 @@ def execute_approved(user_id, approval_id):
             user_id,
             action="approval_executed",
             approval_id=approval_id,
+                correlation_id=correlation_id,
             mode=_mode(user_id),
             gate_decision="ALLOW",
             gate_reason="already_replied",
@@ -727,4 +775,6 @@ def process_execute_approval_job(job):
             "approval_id": approval_id,
             "retryable": False,
         }
-    return execute_approved(user_id, approval_id)
+    return execute_approved(
+        user_id, approval_id, correlation_id=job.get("correlation_id")
+    )

@@ -108,18 +108,37 @@ def _resolve_tenant_sender(account_phone, contact_phone):
     """
     Identify the tenant that owns this inbound SMS.
 
-    Deterministic rules, in order:
-      1. When the receiving number is the shared platform TELNYX_PHONE_NUMBER
-         (sender rows are unique per number, but every subscriber sends from it),
-         the tenant with the most recently active matching lead — i.e. whoever
-         actually owns the live conversation, since outbound sends bump the
-         lead's updated_at. The sender row's owner gets no special priority on
-         the shared number; that would misroute replies to a tenant holding a
-         stale lead for the same contact.
-      2. For dedicated numbers: the sender row matching the receiving number
-         whose tenant already has a lead/conversation with the sending phone.
-      3. The sender row that owns the receiving number.
-      4. For the platform number only: any active Telnyx sender.
+    The destination number alone cannot identify a tenant when the
+    number is shared (the platform Telnyx number is registered by every
+    subscriber after migration 032), so resolution is deterministic, in
+    this order -- and never falls back to an arbitrary tenant:
+
+      1. Lead ownership: the tenant(s) holding a lead for the sending
+         phone. Exactly one owner wins outright.
+      2. Ambiguous ownership (the contact is a lead for 2+ tenants):
+         the owner whose most recent OUTBOUND message went to this
+         contact -- a reply belongs to the conversation that messaged
+         them last. If no owner ever messaged the contact, the most
+         recently active lead owner wins. The ambiguity, the owners,
+         the basis, and the choice are logged and written to the audit
+         trail; the choice is deterministic (created_at DESC, id DESC)
+         and never depends on sender-row order.
+      3. No lead owner: the single sender row for the destination
+         number, if exactly one tenant holds it (a dedicated number,
+         or a single-tenant platform deployment). A brand-new contact
+         texting a dedicated number belongs to that number's tenant.
+      4. Otherwise the message is unroutable: no owner and either no
+         sender row for the number, or several tenants sharing it.
+         Returns None so the caller acks it as unknown_destination and
+         stores nothing. This is the genuinely unresolvable case -- a
+         stranger texting the shared platform number with no prior
+         conversation under any tenant -- and attributing it to the
+         first-registered tenant (the old candidates[0] / any-Telnyx-
+         sender fallbacks) would file it in the wrong tenant's inbox.
+
+    The destination must be a number we own (a sender row matches it,
+    or it is the configured platform number); lead ownership alone
+    never routes a message that arrived on an unknown number.
     """
     import config
 
@@ -127,24 +146,92 @@ def _resolve_tenant_sender(account_phone, contact_phone):
     platform = (config.TELNYX_PHONE_NUMBER or "").strip()
     is_platform = bool(platform) and _normalize_phone(account_phone) == _normalize_phone(platform)
 
-    if is_platform and contact_phone:
-        owner_id = db.find_lead_owner_by_phone(contact_phone)
-        if owner_id:
-            return {
-                "user_id": owner_id,
-                "sender_number": platform,
-                "sms_provider": "telnyx",
-                "platform_sender": True,
-            }
+    if not is_platform and not candidates:
+        return None
 
-    if contact_phone:
+    if is_platform and contact_phone:
+        # Shared number: every subscriber sends from it, so the number
+        # alone identifies nobody. Route by who owns the conversation.
+        owners = db.list_lead_owners_by_phone(contact_phone)
+        if len(owners) == 1:
+            return _sender_for_owner(candidates, owners[0]["user_id"], platform, is_platform)
+        if len(owners) > 1:
+            owner_ids = [o["user_id"] for o in owners]
+            chosen = db.most_recent_outbound_sender_by_phone(contact_phone, owner_ids)
+            basis = "most_recent_outbound"
+            if chosen is None:
+                chosen = owners[0]["user_id"]
+                basis = "most_recent_lead"
+            logger.warning(
+                "SMS_ROUTING_AMBIGUOUS contact=%s owners=%s basis=%s chosen_tenant=%s",
+                contact_phone,
+                owner_ids,
+                basis,
+                chosen,
+            )
+            try:
+                chosen_lead_id = next(
+                    o["lead_id"] for o in owners if o["user_id"] == chosen
+                )
+            except StopIteration:
+                chosen_lead_id = None
+            try:
+                tdb.append_sms_audit(
+                    chosen,
+                    "inbound_routing_ambiguous",
+                    lead_id=chosen_lead_id,
+                    metadata={
+                        "contact_phone": contact_phone,
+                        "owner_user_ids": owner_ids,
+                        "basis": basis,
+                        "account_phone": account_phone,
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "SMS_ROUTING_AMBIGUOUS audit write failed chosen_tenant=%s",
+                    chosen,
+                )
+            return _sender_for_owner(candidates, chosen, platform, is_platform)
+
+    if not is_platform and contact_phone:
+        # Dedicated number: the number's tenant owns every message to
+        # it, even when the sender is another tenant's lead (that
+        # tenant simply does not own this number). Only the holding
+        # tenants can win here.
         for sender in candidates:
             if db.find_lead_by_phone_normalized(sender["user_id"], contact_phone):
                 return sender
-    if candidates:
+
+    if len(candidates) == 1:
         return candidates[0]
+    if candidates:
+        logger.warning(
+            "SMS_ROUTING_AMBIGUOUS account_phone=%s contact=%s "
+            "candidates=%s no lead owner; refusing to attribute to an "
+            "arbitrary tenant",
+            account_phone,
+            contact_phone,
+            [c["user_id"] for c in candidates],
+        )
+    return None
+
+
+def _sender_for_owner(candidates, user_id, platform, is_platform):
+    """Sender row for this tenant on the destination number, or the
+    platform-shaped sender when the tenant holds no row for it (the
+    tenant owns the conversation even though another tenant holds the
+    platform sender row)."""
+    for sender in candidates:
+        if sender["user_id"] == user_id:
+            return sender
     if is_platform:
-        return tdb.get_any_telnyx_sender()
+        return {
+            "user_id": user_id,
+            "sender_number": platform,
+            "sms_provider": "telnyx",
+            "platform_sender": True,
+        }
     return None
 
 

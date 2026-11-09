@@ -1,4 +1,32 @@
-"""Convert natural language into validated Phase 1 commands. Never executes them."""
+"""Convert natural language into validated Phase 1 commands. Never executes them.
+
+Confirmation-token design (Phase 1 — intentional, not a bug)
+------------------------------------------------------------
+Ask TopAI executes routine commands immediately: ``ask_topai.service.
+interpret()`` runs the validated commands and always returns
+``confirmation_token: None`` in its response. There is no
+confirmation step for routine Phase 1 actions (create lead / note /
+task / criteria update), so no ``pending_confirmation`` row is ever
+created and no token is ever issued on that path.
+
+``ask_topai.audit.issue_confirmation_token()`` is the issuer for a
+*future* confirmation flow (sensitive actions that must wait for a
+human). It currently has zero callers in non-test code — that is
+deliberate, not dead code to delete: the ``confirm()`` path in
+``ask_topai.service`` and the ``/api/ask-topai/confirm`` route are
+already wired to look a token up (``audit.get_by_token`` /
+``get_pending_by_token``), and removing the issuer would remove the
+only way to mint a token when that flow is switched on. Keep it; do
+not call it from ``interpret()`` unless a confirmation step is added
+for a specific action, and do not remove the ``confirmation_token``
+field from ``interpret()`` responses — clients and tests rely on the
+field being present (always ``None`` today).
+
+The harness human-approval flow (``harness.approvals`` /
+``harness_approvals`` rows) is separate from this token flow and is
+unaffected by it. ``tests/test_ask_topai_confirmation.py`` pins all
+of the above.
+"""
 
 from __future__ import annotations
 

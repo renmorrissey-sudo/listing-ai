@@ -93,15 +93,25 @@ def _clean_str(value, limit=500):
 
 
 def _clean_int(value):
+    """Strict int parsing for model/user-supplied arguments.
+
+    D5: never silently coerce garbage into a wrong id or number —
+    "abc123" used to digit-strip to 123 (a different lead). Only a real
+    int, or a digit-only string, parses; anything else is None (the
+    field is dropped, never invented).
+    """
     if value in (None, ""):
         return None
     if isinstance(value, bool):
         return None
-    try:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
         return int(value)
-    except (TypeError, ValueError):
-        digits = re.sub(r"[^\d]", "", str(value))
-        return int(digits) if digits else None
+    text = str(value).strip()
+    if re.fullmatch(r"-?\d+", text):
+        return int(text)
+    return None
 
 
 def phone_grounded(transcript: str, phone: str) -> bool:
@@ -303,7 +313,10 @@ def sanitize_create_lead(arguments: dict, transcript: str) -> tuple[dict, str | 
     if lead_type:
         lead_type = lead_type.lower()
         if lead_type not in {"buyer", "seller", "renter", "investor", "other"}:
-            lead_type = "buyer" if "buy" in lead_type else lead_type
+            # D5: never invent a lead type. "buy"-containing text still
+            # maps to buyer; any other unrecognized value is dropped
+            # (the field is omitted) rather than stored as garbage.
+            lead_type = "buyer" if "buy" in lead_type else None
     cleaned = {
         "name": name,
         "phone": phone,
@@ -344,8 +357,6 @@ def sanitize_create_task(arguments: dict, transcript: str) -> tuple[dict, str | 
     lead_id = _clean_int(arguments.get("lead_id"))
     lead_name = _clean_str(arguments.get("lead_name") or arguments.get("name"), 200)
     priority = _clean_str(arguments.get("priority"), 20)
-    if priority and priority not in PRIORITIES:
-        priority = "normal"
     due_at = parse_due_at(arguments, transcript=transcript)
     cleaned = {
         "title": title,
@@ -357,6 +368,9 @@ def sanitize_create_task(arguments: dict, transcript: str) -> tuple[dict, str | 
     }
     if not title:
         return cleaned, "Task title is required."
+    if priority and priority not in PRIORITIES:
+        # D5: an invalid priority is an error, never a silent "normal".
+        return cleaned, "Invalid task priority."
     return cleaned, None
 
 

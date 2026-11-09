@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 def _record_audit(user_id, action, *, tool=None, gate_decision=None,
-                  gate_reason=None, request_text=None):
+                  gate_reason=None, request_text=None, correlation_id=None):
     """Best-effort harness audit write. Returns the audit row id or None.
 
     ``harness.audit`` is owned by the data-layer agent; until it exists this
@@ -41,6 +41,8 @@ def _record_audit(user_id, action, *, tool=None, gate_decision=None,
     the orchestrator does not depend on the audit module's exact function
     name — the first callable found wins, and any failure is logged, never
     raised.
+
+    L4: ``correlation_id`` traces one orchestrator run end to end.
     """
     try:
         from harness import audit
@@ -53,6 +55,7 @@ def _record_audit(user_id, action, *, tool=None, gate_decision=None,
         "tool": tool,
         "gate_decision": gate_decision,
         "gate_reason": gate_reason,
+        "correlation_id": correlation_id,
     }
     for name in ("record_audit", "record", "record_event", "log_event", "append", "write"):
         fn = getattr(audit, name, None)
@@ -122,6 +125,13 @@ def run(user_id, text, context=None) -> dict:
 
     text = str(text or "").strip()
     context = _sanitize_context(user_id, context)
+    # L4: one correlation id for the whole run — injection screen, model
+    # call, per-command policy decisions, and audit rows all carry it.
+    from harness.jobs import new_correlation_id
+
+    correlation_id = new_correlation_id()
+    context = dict(context)
+    context["correlation_id"] = correlation_id
 
     # 1. Injection screen — deterministic, before any model call.
     if policy.screen_inbound_text(text):
@@ -129,6 +139,7 @@ def run(user_id, text, context=None) -> dict:
             user_id, "orchestrator.run",
             gate_decision="BLOCK",
             gate_reason="inbound text flagged by prompt-injection screen",
+            correlation_id=correlation_id,
         )
         return {
             "plan": {
@@ -144,6 +155,7 @@ def run(user_id, text, context=None) -> dict:
             "draft": None,
             "tool_calls": [],
             "audit_id": audit_id,
+            "correlation_id": correlation_id,
         }
 
     # 2. Ask TopAI loop — proposes commands; never executes writes itself.
@@ -157,6 +169,7 @@ def run(user_id, text, context=None) -> dict:
             user_id, "orchestrator.run",
             gate_decision="DEFER",
             gate_reason=f"model unavailable: {exc}",
+            correlation_id=correlation_id,
         )
         return {
             "plan": {
@@ -172,6 +185,7 @@ def run(user_id, text, context=None) -> dict:
             "draft": None,
             "tool_calls": [],
             "audit_id": audit_id,
+            "correlation_id": correlation_id,
         }
 
     status = raw.get("status") or "error"
@@ -180,11 +194,34 @@ def run(user_id, text, context=None) -> dict:
     invoked = raw.get("tools_invoked") or []
 
     # 3. Gate every proposed write/send through policy before anything acts.
+    # D5: validate write-tool arguments first — an invalid command is
+    # BLOCKed in the preview, never silently fixed up or passed along.
     tool_calls = []
     gate_context = dict(context)
     for command in commands:
         action = str(command.get("action") or "").strip()
         arguments = command.get("arguments") or {}
+        validation_error = None
+        try:
+            from harness import validation as _validation
+
+            arguments = _validation.validate_tool_arguments(
+                user_id, action, arguments
+            )
+        except _validation.ValidationError as exc:
+            validation_error = f"validation failed ({exc.code}): {exc.message}"
+        except Exception as exc:  # validator unavailable: fail closed
+            validation_error = f"validation unavailable: {exc}"
+        if validation_error is not None:
+            tool_calls.append(
+                {
+                    "action": action,
+                    "arguments": arguments,
+                    "decision": "BLOCK",
+                    "reason": validation_error,
+                }
+            )
+            continue
         decision, reason = policy.decide(user_id, action, action, context=gate_context)
         tool_calls.append(
             {
@@ -227,6 +264,7 @@ def run(user_id, text, context=None) -> dict:
         user_id, "orchestrator.run",
         gate_decision=gate_decision,
         gate_reason=gate_reason,
+        correlation_id=correlation_id,
     )
 
     return {
@@ -236,4 +274,5 @@ def run(user_id, text, context=None) -> dict:
         "draft": draft,
         "tool_calls": tool_calls,
         "audit_id": audit_id,
+            "correlation_id": correlation_id,
     }

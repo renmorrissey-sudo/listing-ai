@@ -24,6 +24,21 @@ from harness import jobs as harness_jobs
 from harness import tools as harness_tools
 from harness.policy import MODES, decide
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_job_queue():
+    """The session DB is shared by every test (tests/conftest.py), so
+    earlier tests can leave harness jobs behind. Tests in this file
+    drive the worker (run_once), which claims the oldest pending job,
+    so clear the queue first: the job the worker picks up is then this
+    test's job, not a leftover."""
+    db.init_db()
+    with db.get_db() as conn:
+        conn.execute("DELETE FROM harness_jobs")
+    yield
+
 
 def _set_mode(user_id, mode="drafts_only", paused=False, ai_enabled=True):
     with db.get_db() as conn:

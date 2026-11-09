@@ -112,6 +112,17 @@ def process_inbound_sms(payload: dict, *, defer_coach: bool = True, app=None) ->
     Persist inbound SMS and enqueue autonomous AI analysis/reply.
     Opt-out and compliance still block sending. Returns a small result dict.
     """
+    # L4: one correlation id for this inbound event — generated at webhook
+    # receipt and carried through the job, policy decision, audit rows,
+    # and provider execution log.
+    try:
+        from harness.jobs import new_correlation_id
+
+        correlation_id = new_correlation_id()
+    except Exception:
+        import uuid
+
+        correlation_id = uuid.uuid4().hex
     result = {
         "ok": False,
         "duplicate": False,
@@ -120,6 +131,7 @@ def process_inbound_sms(payload: dict, *, defer_coach: bool = True, app=None) ->
         "lead_id": None,
         "inbound_id": None,
         "keyword": None,
+        "correlation_id": correlation_id,
     }
 
     if payload.get("from_error") or payload.get("to_error"):
@@ -317,6 +329,7 @@ def process_inbound_sms(payload: dict, *, defer_coach: bool = True, app=None) ->
             store_body,
             opted_out=opted_out_flag,
             receiving_number=to_number,
+            correlation_id=correlation_id,
         )
     elif opted_out_flag:
         analyze_inbound_and_coach(
@@ -330,7 +343,8 @@ def process_inbound_sms(payload: dict, *, defer_coach: bool = True, app=None) ->
     return result
 
 
-def _schedule_coach(app, user_id, lead_id, inbound_id, body, opted_out=False, receiving_number=None):
+def _schedule_coach(app, user_id, lead_id, inbound_id, body, opted_out=False, receiving_number=None,
+                    correlation_id=None):
     def run():
         try:
             if opted_out:
@@ -347,7 +361,10 @@ def _schedule_coach(app, user_id, lead_id, inbound_id, body, opted_out=False, re
             from sms_ai_agent import process_inbound_ai, schedule_inbound_ai
 
             if app is not None:
-                schedule_inbound_ai(app, user_id, lead_id, inbound_id, body, receiving_number)
+                schedule_inbound_ai(
+                    app, user_id, lead_id, inbound_id, body, receiving_number,
+                    correlation_id=correlation_id,
+                )
             else:
                 process_inbound_ai(user_id, lead_id, inbound_id, body, receiving_number)
         except Exception:

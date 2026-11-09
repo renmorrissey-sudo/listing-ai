@@ -184,6 +184,75 @@ _INJECTION_PATTERNS = [
     re.compile(r"you\s+are\s+now\s+(an?\s+)?(admin|administrator|system|owner|manager)", re.I),
     re.compile(r"(pretend|act)\s+(you\s+are|as)\s+(an?\s+)?(admin|administrator|system)", re.I),
     re.compile(r"transfer\s+the\s+lead", re.I),
+    # L5: role-play / privilege-transfer variants the screen previously
+    # missed (e.g. "pretend you are the system admin..."). The old
+    # patterns required the privileged noun immediately after "you are"
+    # / "as" with no article, so "the system admin" slipped through.
+    # These match the role words with an optional article and cover the
+    # common impersonation verbs. Deliberately narrow: "I am the owner"
+    # (a lead describing their own house) is NOT matched — only
+    # system/admin/root/developer/superuser claims are.
+    re.compile(
+        r"(pretend|imagine|suppose)\s+(you\s+are|you'?re|to\s+be)\s+"
+        r"(the\s+|a\s+|an\s+)?(system|admin|administrator|root|superuser|developer|owner|manager|operator)\b",
+        re.I,
+    ),
+    re.compile(
+        r"\b(act|behave|respond|answer|reply|speak|talk)\s+(as|like)\s+"
+        r"(the\s+|a\s+|an\s+)?(system|admin|administrator|root|superuser|developer|owner|manager|operator)\b",
+        re.I,
+    ),
+    re.compile(
+        r"you\s+are\s+(now\s+)?(the\s+|a\s+|an\s+)?"
+        r"(system|admin|administrator|root|superuser|developer)\b",
+        re.I,
+    ),
+    re.compile(
+        r"from\s+now\s+on\s+(you\s+are|you'?re|act\s+as)\s+"
+        r"(the\s+|a\s+|an\s+)?(system|admin|administrator|root|superuser|developer)",
+        re.I,
+    ),
+    re.compile(
+        r"(roleplay|role-play|role\s+play)\b.{0,40}\b"
+        r"(system|admin|administrator|root|developer|superuser)\b",
+        re.I,
+    ),
+    re.compile(
+        r"(assume|take\s+on)\s+the\s+role\s+of\s+"
+        r"(the\s+|a\s+|an\s+)?(system|admin|administrator|root|superuser|developer|owner|manager)",
+        re.I,
+    ),
+    re.compile(
+        r"your\s+(new\s+)?role\s+is\s+"
+        r"(the\s+|a\s+|an\s+)?(system|admin|administrator|root|superuser|developer)",
+        re.I,
+    ),
+    re.compile(
+        r"\bi\s+am\s+(now\s+)?(the\s+)?(system\s+)?"
+        r"(admin|administrator|root|superuser|developer)\b",
+        re.I,
+    ),
+    re.compile(
+        r"switch\s+to\s+(admin|administrator|system|root|developer|superuser)\s+mode",
+        re.I,
+    ),
+    re.compile(
+        r"(grant|give)\s+(me|us)\s+(admin|root|system|superuser)\s+"
+        r"(access|privileges|permissions|rights)",
+        re.I,
+    ),
+    re.compile(
+        r"you\s+have\s+(now\s+)?(admin|root|system|superuser)\s+"
+        r"(access|privileges|permissions|rights)",
+        re.I,
+    ),
+    re.compile(
+        r"(ignore|disregard|forget)\s+(your\s+)?(role|identity)\s+as\s+"
+        r"(an?\s+)?(assistant|ai|agent|chatbot)",
+        re.I,
+    ),
+    re.compile(r"you\s+are\s+no\s+longer\s+(an?\s+)?(assistant|ai|agent|chatbot)", re.I),
+    re.compile(r"stop\s+(being|acting\s+as)\s+(an?\s+)?(assistant|ai|agent)", re.I),
     # Consent / suppression bypass attempts.
     re.compile(r"(remove|clear|delete|bypass|ignore)\s+.*(suppression|opt.?out|do.?not.?contact|consent)", re.I),
     re.compile(r"mark\s+.*consent\s+(as\s+)?(verified|granted|given)", re.I),
@@ -199,6 +268,25 @@ _INJECTION_PHRASES = (
     "send a text to everyone",
     "transfer money",
     "exfiltrate",
+    # L5 role-play variants (kept specific so ordinary text does not match).
+    "pretend you are the system",
+    "pretend you are an admin",
+    "pretend you are the admin",
+    "pretend you are the system admin",
+    "pretend to be the system",
+    "pretend to be an admin",
+    "act as the system",
+    "act as admin",
+    "act as the admin",
+    "you are the system admin",
+    "you are now the system",
+    "i am the system admin",
+    "i am the system administrator",
+    "roleplay as",
+    "role-play as",
+    "assume the role of",
+    "switch to admin mode",
+    "you are the system",
 )
 
 
@@ -226,14 +314,38 @@ def screen_inbound_text(text) -> bool:
 # --- Settings ---------------------------------------------------------------
 
 def get_settings(user_id) -> dict:
-    """Per-tenant harness settings.
+    """Per-tenant harness settings, safely initialized for new tenants.
 
     Defaults are ``mode="drafts_only"``, ``paused=False``,
-    ``ai_enabled=True``. Reads the ``harness_settings`` table when it
-    exists; if the migration has not landed yet (or any DB error occurs),
-    returns the defaults instead of raising.
+    ``ai_enabled=True``, plus ``monthly_spend_cap_cents`` (the
+    $50/tenant/month cap default from :mod:`harness.costs`, confirmed
+    by Ren 2026-11-08 — the cap itself is enforced in
+    :func:`decide`, never changed here).
+
+    A tenant created after migration 029 has no ``harness_settings``
+    row — the migration only seeded users that existed when it ran, and
+    user creation does not insert one. This function does not rely on
+    that seed: when the row is missing it INSERTs the safe defaults
+    (``ON CONFLICT (user_id) DO NOTHING`` on the ``UNIQUE(user_id)``
+    column, so concurrent first calls are idempotent and an existing
+    row is never overwritten — the same cross-dialect upsert form used
+    in ``scheduling.py``; it works on both SQLite and Postgres), then
+    returns the stored values. Direct SQL readers
+    of ``harness_settings`` therefore see a real row for every tenant,
+    not just the in-memory fallback. If the table is missing or any DB
+    error occurs, returns the defaults instead of raising — the gate
+    must fail to safe defaults, not crash.
     """
     settings = dict(DEFAULT_SETTINGS)
+    try:
+        from harness.costs import get_monthly_spend_cap_cents
+
+        settings["monthly_spend_cap_cents"] = get_monthly_spend_cap_cents()
+    except Exception as exc:  # cap unreadable — keep the confirmed default
+        logger.warning(
+            "harness get_settings fell back to default spend cap: %s", exc
+        )
+        settings["monthly_spend_cap_cents"] = 5000
     if user_id is None:
         return settings
     try:
@@ -244,6 +356,27 @@ def get_settings(user_id) -> dict:
                 "SELECT mode, paused, ai_enabled FROM harness_settings WHERE user_id = ?",
                 (user_id,),
             ).fetchone()
+            if not row:
+                # New tenant (created after migration 029): persist the
+                # safe defaults so every reader — not just this function
+                # — sees them. ON CONFLICT + UNIQUE(user_id) makes
+                # this idempotent under concurrent first calls.
+                from datetime import datetime, timezone
+
+                now = datetime.now(timezone.utc).isoformat()
+                conn.execute(
+                    """
+                    INSERT INTO harness_settings
+                        (user_id, mode, paused, ai_enabled, created_at, updated_at)
+                    VALUES (?, 'drafts_only', 0, 1, ?, ?)
+                    ON CONFLICT (user_id) DO NOTHING
+                    """,
+                    (user_id, now, now),
+                )
+                row = conn.execute(
+                    "SELECT mode, paused, ai_enabled FROM harness_settings WHERE user_id = ?",
+                    (user_id,),
+                ).fetchone()
     except Exception as exc:  # table missing, DB down, etc. — fail to defaults
         logger.warning("harness get_settings fell back to defaults: %s", exc)
         return settings
@@ -375,8 +508,31 @@ def _known_names() -> set[str]:
     return {_normalize(n) for n in names}
 
 
-def decide(user_id, action, tool, context=None) -> tuple[str, str]:
+def decide(user_id, action, tool, context=None, correlation_id=None) -> tuple[str, str]:
     """Gate a proposed action.
+
+    Returns ``(decision, reason)`` with decision in
+    ``{"ALLOW", "DRAFT", "BLOCK", "DEFER"}``. Deterministic; no model input.
+
+    L4: ``correlation_id`` (or ``context["correlation_id"]``) traces one
+    inbound event through the policy decision; the id is written to the
+    structured log with the decision so the gate is a visible link in
+    the trace. The decision itself never depends on the id.
+    """
+    cid = correlation_id or (context or {}).get("correlation_id")
+    decision, reason = _decide(user_id, action, tool, context=context)
+    logger.info(
+        "policy.decide correlation_id=%s tenant=%s action=%s decision=%s",
+        cid,
+        user_id,
+        action,
+        decision,
+    )
+    return decision, reason
+
+
+def _decide(user_id, action, tool, context=None) -> tuple[str, str]:
+    """Gate a proposed action (implementation; see :func:`decide`).
 
     Returns ``(decision, reason)`` with decision in
     ``{"ALLOW", "DRAFT", "BLOCK", "DEFER"}``. Deterministic; no model input.

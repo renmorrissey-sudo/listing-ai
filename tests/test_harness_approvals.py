@@ -18,7 +18,22 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import pytest
+
 import db
+
+
+@pytest.fixture(autouse=True)
+def _isolate_job_queue():
+    """The session DB is shared by every test (tests/conftest.py), so
+    earlier tests can leave harness jobs behind. The execute tests in
+    this file drive the worker (run_once), which claims the oldest
+    pending job, so clear the queue first: the job the worker picks up
+    is then this test's job, not a leftover."""
+    db.init_db()
+    with db.get_db() as conn:
+        conn.execute("DELETE FROM harness_jobs")
+    yield
 
 
 def _login(client, user_id):

@@ -8,12 +8,37 @@ state after the retry budget is exhausted.
 Every query is user_id-scoped where a user_id exists. All SQL uses ``?``
 placeholders; db_backend.CompatConnection translates them to ``%s`` for
 Postgres. Timestamps are UTC ISO strings. No new dependencies.
+
+Tenant-scoping contract (M5/M6):
+
+* Idempotency is scoped by ``(user_id, idempotency_key)`` (migration 030).
+  A tenant reusing another tenant's key gets its own job, never the other
+  tenant's job id; the same tenant reusing its own key still gets the
+  original job id back.
+* ``complete_job`` / ``fail_job`` accept an optional ``user_id``. When it
+  is given, the mutation is ownership-checked in the UPDATE itself
+  (``WHERE id = ? AND user_id = ?``): a cross-tenant call raises
+  ``PermissionError`` and leaves the job untouched, an unknown id raises
+  ``ValueError``. Any tenant-facing caller MUST pass ``user_id``.
+* When ``user_id`` is omitted, the call is the authenticated-worker path:
+  only the harness worker (``workers/harness_worker.py``) may call these
+  functions without a tenant, and it only ever mutates jobs it has just
+  claimed (it holds the full claimed row). That path exists so the worker
+  and the existing unscoped call sites keep working; it must never be
+  reached with a tenant-supplied job id. The worker should be updated to
+  pass ``user_id=job["user_id"]`` so its mutations are ownership-checked
+  too (follow-up outside this module).
+* ``claim_jobs`` / ``reclaim_stale_jobs`` are intentionally worker-only
+  bulk operations: the worker claims across tenants and dispatches each
+  job through the per-tenant policy gates. They take no tenant input and
+  must never be exposed to a tenant-facing route.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import db
@@ -111,13 +136,31 @@ def _get_job_row(conn, job_id):
     ).fetchone()
 
 
-def enqueue_job(user_id, kind, payload, idempotency_key=None):
+def new_correlation_id():
+    """One identifier for tracing a single inbound event end to end.
+
+    L4: the same value is carried from the inbound webhook through the
+    job, the policy decision, the audit row, and the provider execution
+    log, so one event can be followed across every surface. A uuid4 hex
+    string (32 chars, no dashes) — never a secret, never PII.
+    """
+    return uuid.uuid4().hex
+
+
+def enqueue_job(user_id, kind, payload, idempotency_key=None, correlation_id=None):
     """Insert a pending job and return its id.
 
-    Idempotent: when idempotency_key is given and a job with that key
-    already exists, the existing job id is returned and no duplicate row
-    is created. A concurrent duplicate insert (unique-key race) falls back
-    to the same lookup instead of raising.
+    Idempotent per tenant: when idempotency_key is given and a job with
+    that key already exists *for this user_id*, the existing job id is
+    returned and no duplicate row is created. Idempotency is scoped by
+    ``(user_id, idempotency_key)`` (migration 030): a different tenant
+    reusing the same key gets a new job of its own, never the other
+    tenant's job id. A concurrent duplicate insert (unique-key race) falls
+    back to the same scoped lookup instead of raising.
+
+    L4: ``correlation_id`` traces one inbound event through webhook,
+    job, policy, audit, and provider execution. When the caller does not
+    supply one, a fresh id is generated — every job carries one.
 
     The payload is redacted before persistence (see redact_payload): no
     verbatim secret ever lands in harness_jobs.payload_json. The raw
@@ -126,13 +169,15 @@ def enqueue_job(user_id, kind, payload, idempotency_key=None):
     whose inbound row is missing.
     """
     now = _now()
+    correlation_id = correlation_id or new_correlation_id()
     payload_json = json.dumps(redact_payload(payload or {}))
 
     if idempotency_key is not None:
         with db.get_db() as conn:
             existing = conn.execute(
-                "SELECT id FROM harness_jobs WHERE idempotency_key = ?",
-                (idempotency_key,),
+                "SELECT id FROM harness_jobs "
+                "WHERE user_id = ? AND idempotency_key = ?",
+                (user_id, idempotency_key),
             ).fetchone()
         if existing:
             row = _row(existing)
@@ -143,11 +188,19 @@ def enqueue_job(user_id, kind, payload, idempotency_key=None):
             cur = conn.execute(
                 """
                 INSERT INTO harness_jobs
-                    (user_id, kind, payload_json, idempotency_key, status,
-                     attempts, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)
+                    (user_id, kind, payload_json, idempotency_key,
+                     correlation_id, status, attempts, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?)
                 """,
-                (user_id, kind, payload_json, idempotency_key, now, now),
+                (
+                    user_id,
+                    kind,
+                    payload_json,
+                    idempotency_key,
+                    correlation_id,
+                    now,
+                    now,
+                ),
             )
             return cur.lastrowid
     except Exception:
@@ -156,8 +209,9 @@ def enqueue_job(user_id, kind, payload, idempotency_key=None):
             raise
         with db.get_db() as conn:
             existing = conn.execute(
-                "SELECT id FROM harness_jobs WHERE idempotency_key = ?",
-                (idempotency_key,),
+                "SELECT id FROM harness_jobs "
+                "WHERE user_id = ? AND idempotency_key = ?",
+                (user_id, idempotency_key),
             ).fetchone()
         if existing:
             return _row(existing)["id"]
@@ -229,6 +283,11 @@ def claim_jobs(limit=10, claimed_by="harness_worker", stale_timeout_seconds=300)
     in the past are due. ``stale_timeout_seconds`` is accepted for
     signature symmetry with reclaim_stale_jobs; stale-claim recovery is
     a separate explicit step, not a side effect of claiming.
+
+    Worker-authority by design (see module docstring): the worker claims
+    across tenants and dispatches each job through the per-tenant policy
+    gates. This function takes no tenant input and must never be exposed
+    to a tenant-facing route.
     """
     import config
 
@@ -245,35 +304,93 @@ def claim_jobs(limit=10, claimed_by="harness_worker", stale_timeout_seconds=300)
     return claimed
 
 
-def complete_job(job_id, result=None):
-    """Mark a job succeeded, storing ``result`` (JSON-serializable) if given."""
+def complete_job(job_id, result=None, *, user_id=None):
+    """Mark a job succeeded, storing ``result`` (JSON-serializable) if given.
+
+    Ownership (M5): when ``user_id`` is given, the UPDATE itself is scoped
+    (``WHERE id = ? AND user_id = ?``), so a job owned by another tenant
+    is never touched: the call raises ``PermissionError`` and the job is
+    left exactly as it was. An unknown id raises ``ValueError`` (as
+    before). When ``user_id`` is omitted, the call is the authenticated
+    worker-authority path (see module docstring): only the harness worker
+    may use it, and only for jobs it has just claimed. Tenant-facing
+    callers must always pass ``user_id``.
+    """
     now = _now()
+    result_json = json.dumps(result) if result is not None else None
     with db.get_db() as conn:
+        if user_id is None:
+            cur = conn.execute(
+                """
+                UPDATE harness_jobs
+                SET status = 'succeeded', result_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (result_json, now, job_id),
+            )
+            if cur.rowcount != 1:
+                raise ValueError(f"complete_job: unknown job id {job_id}")
+            return
         cur = conn.execute(
             """
             UPDATE harness_jobs
             SET status = 'succeeded', result_json = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND user_id = ?
             """,
-            (json.dumps(result) if result is not None else None, now, job_id),
+            (result_json, now, job_id, user_id),
         )
-        if cur.rowcount != 1:
+        if cur.rowcount == 1:
+            return
+        # Nothing updated: distinguish "no such job" from "not your job"
+        # without mutating anything.
+        exists = conn.execute(
+            "SELECT 1 FROM harness_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        if exists is None:
             raise ValueError(f"complete_job: unknown job id {job_id}")
+        raise PermissionError(
+            f"complete_job: job {job_id} does not belong to user {user_id}"
+        )
 
 
-def fail_job(job_id, error, retryable=True):
+def fail_job(job_id, error, retryable=True, *, user_id=None):
     """Record a failure with exponential backoff, or dead-letter the job.
 
     Backoff: next_attempt_at = now + min(2**attempts, 120) minutes, where
     ``attempts`` is the post-claim count. After MAX_ATTEMPTS (5) attempts,
     or when retryable=False, status becomes 'dead_letter' and the job is
     never retried. The error is stored in result_json as {"error": ...}.
+
+    Ownership (M5): same contract as ``complete_job`` — when ``user_id``
+    is given, a job owned by another tenant raises ``PermissionError``
+    and is left untouched (status, attempts and backoff unchanged); an
+    unknown id raises ``ValueError``. When ``user_id`` is omitted, the
+    call is the authenticated worker-authority path (see module
+    docstring); tenant-facing callers must always pass ``user_id``.
     """
     now = _now()
     with db.get_db() as conn:
-        row = _row(_get_job_row(conn, job_id))
-    if not row:
-        raise ValueError(f"fail_job: unknown job id {job_id}")
+        if user_id is None:
+            row = _row(_get_job_row(conn, job_id))
+            if not row:
+                raise ValueError(f"fail_job: unknown job id {job_id}")
+        else:
+            row = _row(
+                conn.execute(
+                    "SELECT * FROM harness_jobs "
+                    "WHERE id = ? AND user_id = ?",
+                    (job_id, user_id),
+                ).fetchone()
+            )
+            if not row:
+                exists = conn.execute(
+                    "SELECT 1 FROM harness_jobs WHERE id = ?", (job_id,)
+                ).fetchone()
+                if exists is None:
+                    raise ValueError(f"fail_job: unknown job id {job_id}")
+                raise PermissionError(
+                    f"fail_job: job {job_id} does not belong to user {user_id}"
+                )
 
     attempts = int(row.get("attempts") or 0)
     error_json = json.dumps({"error": str(error)[:500]})
@@ -288,15 +405,33 @@ def fail_job(job_id, error, retryable=True):
         ).isoformat()
 
     with db.get_db() as conn:
-        conn.execute(
-            """
-            UPDATE harness_jobs
-            SET status = ?, next_attempt_at = ?, claimed_at = NULL,
-                claimed_by = NULL, result_json = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (status, next_attempt_at, error_json, now, job_id),
-        )
+        if user_id is None:
+            conn.execute(
+                """
+                UPDATE harness_jobs
+                SET status = ?, next_attempt_at = ?, claimed_at = NULL,
+                    claimed_by = NULL, result_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (status, next_attempt_at, error_json, now, job_id),
+            )
+        else:
+            cur = conn.execute(
+                """
+                UPDATE harness_jobs
+                SET status = ?, next_attempt_at = ?, claimed_at = NULL,
+                    claimed_by = NULL, result_json = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (status, next_attempt_at, error_json, now, job_id, user_id),
+            )
+            if cur.rowcount != 1:
+                # The job was read scoped above, so a 0 here means it was
+                # deleted or reassigned between the read and the write.
+                # Refuse to report success rather than mutate blindly.
+                raise RuntimeError(
+                    f"fail_job: job {job_id} changed during failure handling"
+                )
     return status
 
 
@@ -308,6 +443,9 @@ def reclaim_stale_jobs(timeout_seconds=300):
     untouched so the retry budget still applies. A crashed worker's jobs
     are never silently lost — this is the recovery the SMS campaign worker
     lacks.
+
+    Worker-authority by design (see module docstring): takes no tenant
+    input and must never be exposed to a tenant-facing route.
     """
     cutoff = (
         datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)

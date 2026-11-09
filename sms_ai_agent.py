@@ -14,7 +14,6 @@ manual attention, and nothing is retried automatically (no duplicate sends).
 from __future__ import annotations
 
 import logging
-import threading
 from datetime import datetime, timedelta, timezone
 
 import config
@@ -33,34 +32,68 @@ def auto_reply_configured() -> bool:
     return bool(config.SMS_AI_AUTO_REPLY_ENABLED) and sms_coach.is_configured()
 
 
-def schedule_inbound_ai(app, user_id, lead_id, inbound_id, body, receiving_number):
+def _record_enqueue_failure(user_id, lead_id, inbound_id, reason):
+    """Fail closed and visibly when the durable enqueue cannot happen.
+
+    L2: there is no daemon-thread fallback and no ungated coaching/send
+    path. The failure is logged at error level and recorded as a
+    high-priority needs-attention entry (the existing visible-failure
+    mechanism, same as other AI-reply failures in this file) so a human
+    sees the inbound message was never processed. Nothing is sent and
+    nothing is coached.
+    """
+    logger.error(
+        "SMS_AI_ENQUEUE_FAILED inbound_id=%s lead_id=%s tenant=%s reason=%s; "
+        "no fallback - message left for manual attention",
+        inbound_id,
+        lead_id,
+        user_id,
+        reason,
+    )
+    from harness.validation import coerce_id
+
+    if coerce_id(lead_id) is not None:
+        _needs_attention(user_id, coerce_id(lead_id), inbound_id, "ai_reply_enqueue_failed")
+
+
+def schedule_inbound_ai(app, user_id, lead_id, inbound_id, body, receiving_number,
+                        correlation_id=None):
     """Enqueue a durable harness job instead of a daemon thread (Phase 1).
 
     The job (kind ``sms_auto_reply``) is claimed by workers/harness_worker.py
     and handled by harness/sms_handler.py, which drafts in Drafts Only mode
-    and never sends. If the harness queue is unavailable (module/tables not
-    present yet, or enqueue raises), fall back to the previous daemon-thread
-    path and log a warning -- the message is never dropped.
+    and never sends.
+
+    Fail closed (L2): if the durable enqueue is unavailable or raises,
+    the inbound message is recorded as a visible failure
+    (needs-attention + error log) and NOTHING is sent or coached. There
+    is no thread fallback and no ungated path in this file - the previous daemon-thread fallback bypassed every harness
+    safety control and has been removed.
     """
-    payload = {
-        "user_id": user_id,
-        "lead_id": lead_id,
-        "inbound_id": inbound_id,
-        "body": body,
-        "receiving_number": receiving_number,
-    }
-    idempotency_key = f"sms-auto-reply-{inbound_id}"
-    try:
-        from harness.jobs import enqueue_job
-    except Exception:
-        logger.warning(
-            "SMS_AI_ENQUEUE_UNAVAILABLE inbound_id=%s lead_id=%s tenant=%s; "
-            "falling back to thread path",
+    from harness.validation import coerce_id
+
+    if coerce_id(lead_id) is None or coerce_id(inbound_id) is None:
+        # Malformed references (D5): refuse to enqueue; without a valid
+        # lead id there is nothing to attach a needs-attention entry to.
+        logger.error(
+            "SMS_AI_ENQUEUE_REFUSED inbound_id=%s lead_id=%s tenant=%s reason=malformed_reference",
             inbound_id,
             lead_id,
             user_id,
         )
-        _schedule_inbound_ai_thread(app, user_id, lead_id, inbound_id, body, receiving_number)
+        return
+    payload = {
+        "user_id": user_id,
+        "lead_id": coerce_id(lead_id),
+        "inbound_id": coerce_id(inbound_id),
+        "body": body,
+        "receiving_number": receiving_number,
+    }
+    idempotency_key = f"sms-auto-reply-{coerce_id(inbound_id)}"
+    try:
+        from harness.jobs import enqueue_job
+    except Exception as exc:
+        _record_enqueue_failure(user_id, lead_id, inbound_id, f"enqueue_unavailable: {exc}")
         return
     try:
         enqueue_job(
@@ -68,63 +101,30 @@ def schedule_inbound_ai(app, user_id, lead_id, inbound_id, body, receiving_numbe
             kind="sms_auto_reply",
             payload=payload,
             idempotency_key=idempotency_key,
+            # L4: the webhook's correlation id traces this event end to end.
+            correlation_id=correlation_id,
         )
     except TypeError:
         # Sibling-owned enqueue_job may take positional args instead.
         try:
-            enqueue_job(user_id, "sms_auto_reply", payload, idempotency_key)
-        except Exception:
-            logger.warning(
-                "SMS_AI_ENQUEUE_FAILED inbound_id=%s lead_id=%s tenant=%s; "
-                "falling back to thread path",
-                inbound_id,
-                lead_id,
-                user_id,
-                exc_info=True,
+            enqueue_job(
+                user_id, "sms_auto_reply", payload, idempotency_key,
+                correlation_id,
             )
-            _schedule_inbound_ai_thread(app, user_id, lead_id, inbound_id, body, receiving_number)
+        except Exception as exc:
+            _record_enqueue_failure(user_id, lead_id, inbound_id, f"enqueue_failed: {exc}")
             return
-    except Exception:
-        logger.warning(
-            "SMS_AI_ENQUEUE_FAILED inbound_id=%s lead_id=%s tenant=%s; "
-            "falling back to thread path",
-            inbound_id,
-            lead_id,
-            user_id,
-            exc_info=True,
-        )
-        _schedule_inbound_ai_thread(app, user_id, lead_id, inbound_id, body, receiving_number)
+    except Exception as exc:
+        _record_enqueue_failure(user_id, lead_id, inbound_id, f"enqueue_failed: {exc}")
         return
     logger.info(
-        "SMS_AI_ENQUEUED inbound_id=%s lead_id=%s tenant=%s key=%s",
+        "SMS_AI_ENQUEUED correlation_id=%s inbound_id=%s lead_id=%s tenant=%s key=%s",
+        correlation_id,
         inbound_id,
         lead_id,
         user_id,
         idempotency_key,
     )
-
-
-def _schedule_inbound_ai_thread(app, user_id, lead_id, inbound_id, body, receiving_number):
-    """Previous behaviour: run analysis + auto-reply in a background thread
-    so the webhook acks fast. Kept as the fallback when the harness queue
-    is unavailable; the gated job path above is the primary path."""
-
-    def run():
-        try:
-            if app is not None:
-                with app.app_context():
-                    process_inbound_ai(user_id, lead_id, inbound_id, body, receiving_number)
-            else:
-                process_inbound_ai(user_id, lead_id, inbound_id, body, receiving_number)
-        except Exception:
-            logger.exception(
-                "SMS_PROCESSING_ERROR stage=ai_thread inbound_id=%s lead_id=%s tenant=%s",
-                inbound_id,
-                lead_id,
-                user_id,
-            )
-
-    threading.Thread(target=run, name=f"sms-ai-{inbound_id}", daemon=True).start()
 
 
 def process_inbound_ai(user_id, lead_id, inbound_id, inbound_body, receiving_number):

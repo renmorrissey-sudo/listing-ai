@@ -76,7 +76,16 @@ def _count(user_id, sql, params):
 
 
 def get_harness_status(user_id):
-    """Read-only status dict for one tenant. Never raises for missing tables."""
+    """Read-only status dict for one tenant. Never raises for missing tables.
+
+    ``job_counts`` (M4) reports four overlapping lenses on the tenant's
+    harness_jobs, not a partition: a job can count in more than one.
+    ``pending`` = status pending (includes retry-queued jobs);
+    ``failed`` = pending after at least one failed attempt
+    (attempts > 0, awaiting retry); ``retried`` = claimed at least twice
+    (attempts >= 2, i.e. actually retried after a failure);
+    ``dead_letter`` = terminal failures that will never be retried.
+    """
     mode, paused, ai_enabled = _harness_settings(user_id)
     pending_approvals = _count(
         user_id,
@@ -88,6 +97,28 @@ def get_harness_status(user_id):
         "SELECT COUNT(*) AS n FROM harness_jobs WHERE user_id = ? AND status IN ('pending', 'claimed', 'running')",
         (user_id,),
     )
+    job_counts = {
+        "pending": _count(
+            user_id,
+            "SELECT COUNT(*) AS n FROM harness_jobs WHERE user_id = ? AND status = 'pending'",
+            (user_id,),
+        ),
+        "failed": _count(
+            user_id,
+            "SELECT COUNT(*) AS n FROM harness_jobs WHERE user_id = ? AND status = 'pending' AND attempts > 0",
+            (user_id,),
+        ),
+        "retried": _count(
+            user_id,
+            "SELECT COUNT(*) AS n FROM harness_jobs WHERE user_id = ? AND attempts >= 2",
+            (user_id,),
+        ),
+        "dead_letter": _count(
+            user_id,
+            "SELECT COUNT(*) AS n FROM harness_jobs WHERE user_id = ? AND status = 'dead_letter'",
+            (user_id,),
+        ),
+    }
     since_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     jobs_24h = _count(
         user_id,
@@ -100,6 +131,7 @@ def get_harness_status(user_id):
         "ai_enabled": ai_enabled,
         "pending_approvals": pending_approvals,
         "pending_jobs": pending_jobs,
+        "job_counts": job_counts,
         "jobs_24h": jobs_24h,
     }
 
@@ -124,6 +156,13 @@ def _approval_error(error):
         return jsonify({"error": "Approval not found."}), 404
     if error == "expired":
         return jsonify({"error": "Approval has expired."}), 410
+    if error == "invalid_draft":
+        return (
+            jsonify(
+                {"error": "Approval draft failed validation and cannot be approved."}
+            ),
+            422,
+        )
     return jsonify({"error": "Approval is no longer pending."}), 409
 
 
@@ -207,6 +246,7 @@ def harness_status_page():
         ai_enabled=status["ai_enabled"],
         pending_approvals=status["pending_approvals"],
         pending_jobs=status["pending_jobs"],
+        job_counts=status["job_counts"],
         jobs_24h=status["jobs_24h"],
         approvals=approvals,
         recent_audit=recent_audit,

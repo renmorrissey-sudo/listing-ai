@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -14,6 +15,101 @@ import config
 import db
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Stripe HTTP timeouts (L6) — explicit, instead of the library defaults.
+#
+# stripe-python (v11, installed) does NOT accept a per-call ``timeout``
+# kwarg on its resource methods — a ``timeout=`` kwarg would be sent to
+# Stripe as an API parameter. The supported control is the HTTP client:
+# ``stripe.default_http_client`` must be a client built with the
+# timeout, so :func:`configure_stripe_http_client` installs a
+# ``RequestsClient(timeout=(connect, read))`` once, at import time.
+# (``stripe.http_client`` is deprecated in v11; the client class is
+# imported from ``stripe`` directly.)
+# ``requests`` accepts the (connect, read) tuple; the values below match
+# the codebase's other provider calls (urllib 20-30s, SendGrid 25s,
+# Anthropic 60s): fail fast on connect, allow a normal API round-trip
+# on read.
+#
+# Retries: stripe-python's library default is ``max_network_retries = 2``
+# — it would silently re-attempt failed requests. This module disables
+# library-level automatic retries (0) because a re-attempted
+# non-idempotent charge is the catastrophic failure here: no Stripe
+# call in this module retries on its own. Idempotent reads surface
+# their error to the caller instead, and the one deliberate
+# re-attempt in this file — ``retry_open_subscription_invoice`` paying
+# an already-open invoice — is a single call, not a retry loop, and
+# Stripe itself refuses to double-pay an invoice (handled as
+# ``already_paid``). Idempotency-keyed writes (Checkout Session
+# creation) are safe to re-issue by the caller with the same key.
+# ---------------------------------------------------------------------------
+STRIPE_CONNECT_TIMEOUT_SECONDS = 5
+STRIPE_READ_TIMEOUT_SECONDS = 30
+
+ENV_STRIPE_CONNECT_TIMEOUT_SECONDS = "STRIPE_CONNECT_TIMEOUT_SECONDS"
+ENV_STRIPE_READ_TIMEOUT_SECONDS = "STRIPE_READ_TIMEOUT_SECONDS"
+
+# No library-level automatic retries: see the comment above.
+STRIPE_MAX_NETWORK_RETRIES = 0
+
+
+def get_stripe_timeout() -> tuple:
+    """(connect, read) timeout seconds for Stripe HTTP calls.
+
+    Defaults (5, 30); override per deployment with
+    ``STRIPE_CONNECT_TIMEOUT_SECONDS`` / ``STRIPE_READ_TIMEOUT_SECONDS``.
+    Invalid values fall back to the defaults with a warning.
+    """
+    def _seconds(env_name, default):
+        raw = os.environ.get(env_name)
+        if raw is None or str(raw).strip() == "":
+            return default
+        try:
+            value = int(str(raw).strip())
+        except (TypeError, ValueError):
+            logger.warning(
+                "invalid %s=%r; using default Stripe timeout %s seconds",
+                env_name, raw, default,
+            )
+            return default
+        if value <= 0:
+            logger.warning(
+                "invalid %s=%r (must be positive); using default %s seconds",
+                env_name, raw, default,
+            )
+            return default
+        return value
+
+    return (
+        _seconds(ENV_STRIPE_CONNECT_TIMEOUT_SECONDS, STRIPE_CONNECT_TIMEOUT_SECONDS),
+        _seconds(ENV_STRIPE_READ_TIMEOUT_SECONDS, STRIPE_READ_TIMEOUT_SECONDS),
+    )
+
+
+def configure_stripe_http_client() -> None:
+    """Install the Stripe HTTP client with explicit timeouts, idempotently.
+
+    Sets ``stripe.default_http_client`` to a ``RequestsClient`` carrying
+    :func:`get_stripe_timeout`, and ``stripe.max_network_retries`` to 0
+    (no silent automatic retries — see the module comment). A no-op
+    when the installed client already carries the desired timeout, so
+    repeated calls and test setup are safe. Never raises: if the client
+    cannot be built (e.g. ``requests`` unavailable), the library falls
+    back to its own default client and the failure is logged.
+    """
+    try:
+        timeout = get_stripe_timeout()
+        stripe.max_network_retries = STRIPE_MAX_NETWORK_RETRIES
+        current = getattr(stripe, "default_http_client", None)
+        if current is not None and getattr(current, "_timeout", None) == timeout:
+            return
+        stripe.default_http_client = stripe.RequestsClient(timeout=timeout)
+    except Exception as exc:  # never break import/boot on client setup
+        logger.warning("could not configure Stripe HTTP client timeout: %s", exc)
+
+
+configure_stripe_http_client()
 
 _PRICE_ID_RE = re.compile(r"^price_[A-Za-z0-9]+$")
 _PLACEHOLDER_PRICE_IDS = {"price_...", "price_xxx", "price_test", "price_live"}
