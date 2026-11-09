@@ -13,11 +13,17 @@
   {% include 'subscriber_tool_nav.html' %}
   <main>
     <h1>AI Automation status</h1>
-    <p class="muted">Read-only status for the AI harness. In Phase 1, all accounts run in Drafts Only mode: the AI drafts replies for your review and never sends automatically. Approving a draft below queues it for sending; the send is re-checked against consent, opt-out, quiet hours and rate limits at send time. There are no mode controls on this page.</p>
+    {# Every status line below is rendered from the same get_harness_status()
+       dict the JSON API returns -- the mode label, pause state, channel
+       state and activity counts are never hardcoded here. The intro copy
+       is chosen from the authoritative mode value, so it can never claim
+       Drafts Only while the account runs another mode, or live automation
+       while it runs Drafts Only. #}
+    <p class="muted">Read-only status for the AI harness.{% if paused %} Automation is currently paused: all automated sending and writes are drafted for review until it is unpaused.{% elif mode == 'drafts_only' %} This account runs in Drafts Only mode: the AI drafts replies for your review and never sends automatically. Approving a draft below queues it for sending; the send is re-checked against consent, opt-out, quiet hours and rate limits at send time.{% elif mode == 'supervised' %} This account runs in Supervised mode: only approved-template sends execute automatically; everything else is drafted for your review.{% elif mode == 'authorized' %} This account runs in Authorized mode: routine sends and writes execute automatically, still re-checked against consent, opt-out, quiet hours and rate limits at send time.{% endif %} There are no mode controls on this page.</p>
     <div class="card">
       <ul>
-        <li>Mode: <strong>{{ mode }}</strong>{% if mode == 'drafts_only' %} (Drafts Only — nothing sends without your approval){% endif %}</li>
-        <li>Paused: <strong>{{ 'yes' if paused else 'no' }}</strong></li>
+        <li>Mode: <strong>{{ mode_label }}</strong> ({{ mode }}){% if paused %} — paused: nothing sends automatically while paused{% elif mode == 'drafts_only' %} — nothing sends without your approval{% elif mode == 'supervised' %} — only approved-template sends execute automatically{% elif mode == 'authorized' %} — routine sends and writes execute automatically{% endif %}</li>
+        <li>Paused: <strong>{{ 'yes' if paused else 'no' }}</strong>{% if paused %} — all automated sending and writes are drafts while paused{% endif %}</li>
         <li>AI enabled: <strong>{{ 'yes' if ai_enabled else 'no' }}</strong></li>
         <li>Pending approvals: <strong>{{ pending_approvals }}</strong></li>
         <li>Pending jobs: <strong>{{ pending_jobs }}</strong></li>
@@ -34,6 +40,55 @@
         <li>AI spend this month: <strong>${{ '%.2f' % (spend_cents / 100) }}</strong></li>
         {% endif %}
       </ul>
+    </div>
+
+    <h2>SMS</h2>
+    <div class="card">
+      <ul>
+        {% if sms is defined %}
+        <li>SMS auto-reply configured: <strong>{{ 'yes' if sms.auto_reply_configured else 'no' }}</strong> <span class="muted">(platform setting: whether the auto-reply path can run at all)</span></li>
+        <li>SMS sending paused: <strong>{{ 'yes' if sms.paused else 'no' }}</strong> <span class="muted">(there is no separate SMS pause — the harness pause above pauses all automated sending, including SMS)</span></li>
+        {% endif %}
+        {% if paused %}
+        <li>SMS automation: <strong>paused — nothing sends automatically while paused</strong></li>
+        {% elif mode == 'drafts_only' %}
+        <li>SMS automation: <strong>drafts only — the AI drafts replies; nothing is sent without your approval</strong></li>
+        {% elif mode == 'supervised' %}
+        <li>SMS automation: <strong>supervised — only approved-template replies send automatically</strong></li>
+        {% elif mode == 'authorized' %}
+        <li>SMS automation: <strong>live — routine replies send automatically, re-checked against consent, opt-out, quiet hours and rate limits</strong></li>
+        {% endif %}
+      </ul>
+    </div>
+
+    <h2>Voice</h2>
+    <div class="card">
+      <ul>
+        {% if voice is defined %}
+        <li>Voice calling configured: <strong>{{ 'yes' if voice.configured else 'no' }}</strong> <span class="muted">(whether the Vapi voice provider has credentials configured)</span></li>
+        {% endif %}
+        {% if paused %}
+        <li>Voice automation: <strong>paused — voice tools can only draft while paused</strong></li>
+        {% elif mode == 'drafts_only' %}
+        <li>Voice automation: <strong>drafts only — voice tools can only draft, never execute</strong></li>
+        {% else %}
+        <li>Voice automation: <strong>gated by the same policy gate as SMS (mode: {{ mode_label }})</strong></li>
+        {% endif %}
+      </ul>
+    </div>
+
+    <h2>Outbound activity</h2>
+    <div class="card">
+      <ul>
+        {% if outbound_activity is defined %}
+        <li>AI SMS sent (last 60 days): <strong>{{ outbound_activity.sms_sent_60d }}</strong> <span class="muted">(harness audit records; SMS messages actually marked sent: {{ outbound_activity.sms_messages_sent_60d }})</span></li>
+        <li>AI SMS sends failed (last 60 days): <strong>{{ outbound_activity.sms_send_failed_60d }}</strong></li>
+        <li>Sends blocked by the policy gate (last 60 days): <strong>{{ outbound_activity.sms_blocked_60d }}</strong></li>
+        <li>SMS replies drafted for review (last 60 days): <strong>{{ outbound_activity.sms_drafted_60d }}</strong></li>
+        <li>AI calls placed (last 60 days): <strong>{{ outbound_activity.calls_placed_60d }}</strong></li>
+        {% endif %}
+      </ul>
+      <p class="muted">These counts come from stored records (harness audit, SMS messages, voice calls) — not from the mode or from assumptions. Zero successful deliveries does not by itself prove no attempts occurred: blocked and failed sends are counted here too.</p>
     </div>
 
     <h2>Pending approvals</h2>
