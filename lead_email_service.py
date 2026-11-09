@@ -116,6 +116,17 @@ def send_lead_email(user_id, lead_id, *, subject, body, actor_user_id=None):
     if not credentials:
         return None, "Connect SendGrid before sending lead emails."
 
+    # Universal spend cap (launch blocker 5): a SendGrid send is a
+    # billable provider call. Fail safe — send nothing on a capped tenant.
+    try:
+        from harness.costs import check_spend_cap
+
+        _cap_allowed, _cap_reason = check_spend_cap(user_id)
+    except Exception:
+        _cap_allowed, _cap_reason = True, None  # fail open on unreadable ledger
+    if not _cap_allowed:
+        return None, _cap_reason
+
     try:
         provider = SendGridEmailCampaignProvider(credentials["api_key"])
         result = provider.send_email(
@@ -150,6 +161,17 @@ def send_lead_email(user_id, lead_id, *, subject, body, actor_user_id=None):
         "provider_status": result.get("provider_status") or "sent",
         "sent_at": _now(),
     }
+    # Universal cost recording: the SendGrid send is billable — record
+    # one message at the placeholder per-message rate (ESTIMATE).
+    try:
+        from harness.costs import record_sendgrid_message
+
+        record_sendgrid_message(
+            user_id,
+            correlation_id=str(result.get("provider_message_id") or "") or None,
+        )
+    except Exception:
+        pass  # recording must never break a send that succeeded
     activity_id = crm_db.add_lead_activity(
         lead_id,
         user_id,

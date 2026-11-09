@@ -151,6 +151,14 @@ def complete(user_id, transcript, context, *, session_id=None, source="text"):
     messages = list(history)
     messages.append({"role": "user", "content": _user_context_text(text, context)})
 
+    # Universal spend cap (launch blocker 5): never burn a model round
+    # on a capped tenant. The cap is re-checked before every round
+    # (spend can cross mid-loop), and every round's token usage is
+    # recorded to the cost ledger with this run's correlation id.
+    correlation_id = context.get("correlation_id")
+    if not isinstance(correlation_id, str) or not correlation_id:
+        correlation_id = None
+
     proposed = []
     clarification = None
     inform = None
@@ -160,11 +168,40 @@ def complete(user_id, transcript, context, *, session_id=None, source="text"):
 
     try:
         for _round in range(MAX_ROUNDS):
+            try:
+                from harness.costs import (
+                    is_spend_cap_tripped,
+                    record_anthropic_message,
+                )
+
+                if is_spend_cap_tripped(user_id):
+                    return _error_result(
+                        "Monthly AI spend limit reached. Ask TopAI did not "
+                        "run this request; the limit resets next month.",
+                        session_id,
+                        source,
+                        invoked,
+                        code="spend_cap_reached",
+                    )
+            except Exception:
+                pass  # fail open on an unreadable ledger (see harness.costs)
             response = call_claude(
                 messages,
                 system=SYSTEM_PROMPT,
                 tools_spec=registry.anthropic_tools(),
             )
+            try:
+                from harness.costs import record_anthropic_message
+
+                record_anthropic_message(
+                    user_id,
+                    "ask_topai",
+                    response,
+                    model=model_name(),
+                    correlation_id=correlation_id,
+                )
+            except Exception:
+                pass  # recording must never break the agent loop
             content = list(getattr(response, "content", None) or [])
             last_text = _text_from_blocks(content)
             assistant = _assistant_content(content)

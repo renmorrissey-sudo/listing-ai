@@ -232,11 +232,14 @@ def test_api_returns_mapped_error_not_generic(app_client, two_users):
         400,
         {"code": 30034, "message": "unregistered", "more_info": "https://www.twilio.com/docs/errors/30034"},
     )
+    # Time-independent: these tests assert provider-error mapping, not
+    # quiet-hours deferral (21:00-08:00 would otherwise 409 after 9pm).
     with patch.object(config, "SMS_PROVIDER", "twilio"), \
          patch.object(config, "TWILIO_ACCOUNT_SID", "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), \
          patch.object(config, "TWILIO_AUTH_TOKEN", "token"), \
          patch.object(config, "TWILIO_PHONE_NUMBER", "+15551234567"), \
          patch.object(config, "TWILIO_MESSAGING_SERVICE_SID", ""), \
+         patch("sms_authorization.in_quiet_hours", return_value=False), \
          patch("urllib.request.urlopen", side_effect=err):
         res = app_client.post(
             "/sms/messages",
@@ -274,10 +277,12 @@ def test_non_twilio_application_error(app_client, two_users):
     with app_client.session_transaction() as sess:
         sess["user_id"] = u1
 
+    # Time-independent: see test_api_returns_mapped_error_not_generic.
     with patch.object(config, "SMS_PROVIDER", "twilio"), \
          patch.object(config, "TWILIO_ACCOUNT_SID", "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), \
          patch.object(config, "TWILIO_AUTH_TOKEN", "token"), \
          patch.object(config, "TWILIO_PHONE_NUMBER", "+15551234567"), \
+         patch("sms_authorization.in_quiet_hours", return_value=False), \
          patch("sms_outbound.get_sms_provider") as mock_get:
         mock_provider = MagicMock()
         mock_provider.is_configured.return_value = True

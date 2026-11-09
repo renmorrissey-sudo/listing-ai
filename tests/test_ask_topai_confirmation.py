@@ -1,19 +1,25 @@
-"""Ask TopAI confirmation-token design + future-tool classification pins.
+"""Ask TopAI confirmation-token removal pins + future-tool classification.
 
-Documented (not removed) — see ask_topai/parser.py module docstring:
+Removed in Phase I hardening (2026-11-08) — see
+``ask_topai/parser.py`` module docstring for the full reasoning:
 
 * ``service.interpret()`` executes routine Phase 1 commands
-  immediately and always returns ``confirmation_token: None``. The
-  ``confirmation_token`` field stays in the API response shape for
-  forward compatibility; it is not a bug that it is None.
-* ``audit.issue_confirmation_token()`` mints a token for a FUTURE
-  confirmation flow. It has zero callers in non-test code today, by
-  design: no path creates a ``pending_confirmation`` row. It is kept
-  because ``service.confirm()`` + ``/api/ask-topai/confirm`` are
-  already wired to token lookup. Removing it (or the None field)
-  would break that future flow and the API shape.
-* The harness human-approval flow (``harness.approvals``) is separate
-  and unaffected by this token flow.
+  immediately and returns NO ``confirmation_token`` field at all.
+* The confirmation-token flow could never succeed and was removed:
+  no path ever issued or stored a token (no ``pending_confirmation``
+  row was ever created), so ``service.confirm()`` could only ever
+  return 400; nothing outside tests called ``issue_confirmation_token``,
+  ``/api/ask-topai/confirm``, or ``/api/ask-topai/cancel`` (the
+  cancel route returned success unconditionally while cancelling
+  nothing); the widget never read the field. Removed:
+  ``service.confirm()``, both routes, ``audit.issue_confirmation_token``,
+  ``audit.get_by_token``, ``audit.get_pending_by_token``, and the
+  ``confirmation_token`` / ``expires_at`` parameters of
+  ``audit.record_command()``.
+* The harness human-approval flow (``harness.approvals``) is the
+  approval flow that actually executes, and is unaffected by this
+  removal. Any future Ask TopAI confirmation step must be built on
+  it, not by resurrecting this token flow.
 
 Also pins the future-tool classification in ask_topai/registry.py:
 ``create_cma`` and ``generate_listing_content`` CREATE content, so
@@ -21,8 +27,6 @@ they are future WRITES — never routine reads — even though
 ``harness/tools.py`` still classifies them read/routine today (live
 fix belongs there; see the registry.py note).
 """
-
-from datetime import datetime, timedelta, timezone
 
 from ask_topai import audit, registry, service
 from tests.test_ask_topai import _as_complete, _login
@@ -55,7 +59,8 @@ def test_interpret_executes_immediately_with_no_confirmation_token(
         json={"text": "Create Confirm Pin at 303-555-0199 as a buyer."},
     ).get_json()
     assert data["status"] == "executed"
-    assert data["confirmation_token"] is None
+    # The field is gone entirely — not None, not present.
+    assert "confirmation_token" not in data
     # The write really happened immediately — no confirmation step.
     import db
 
@@ -65,65 +70,27 @@ def test_interpret_executes_immediately_with_no_confirmation_token(
     assert len(leads) == 1
 
 
-def test_issue_confirmation_token_is_never_called_by_interpret(
-    app_client, two_users, monkeypatch
-):
+def test_confirmation_token_flow_is_removed(app_client, two_users):
     u1, _ = two_users
     _login(app_client, u1)
-    calls = []
-
-    def spy_issue():
-        calls.append(True)
-        raise AssertionError(
-            "issue_confirmation_token must not be called by interpret()"
-        )
-
-    # Spy on the issuer through the audit module attribute interpret
-    # would have to call; the real issuer is exercised separately below.
-    monkeypatch.setattr(audit, "issue_confirmation_token", spy_issue)
-
-    def fake(_text, _context):
-        return {
-            "status": "ok",
-            "commands": [
-                {
-                    "action": "create_lead",
-                    "arguments": {
-                        "name": "Spy Pin",
-                        "phone": "303-555-0188",
-                        "lead_type": "buyer",
-                    },
-                }
-            ],
-        }
-
-    monkeypatch.setattr("ask_topai.agent.complete", _as_complete(fake))
-    data = app_client.post(
-        "/api/ask-topai/interpret",
-        json={"text": "Create Spy Pin at 303-555-0188 as a buyer."},
-    ).get_json()
-    assert data["status"] == "executed"
-    assert calls == []
-
-
-def test_issue_confirmation_token_still_mints_a_usable_token():
-    token, expires = audit.issue_confirmation_token()
-    assert isinstance(token, str) and len(token) >= 32
-    assert token != audit.issue_confirmation_token()[0]
-    expiry = datetime.fromisoformat(expires.replace("Z", "+00:00"))
-    delta = expiry - datetime.now(timezone.utc)
-    assert timedelta(minutes=14) < delta <= timedelta(minutes=15, seconds=30)
-
-
-def test_confirm_with_an_unissued_token_is_rejected(two_users):
-    u1, _ = two_users
-    token, _expires = audit.issue_confirmation_token()
-    # Issued but never stored (no pending_confirmation row exists):
-    # confirm() must reject it — the token alone grants nothing.
-    assert audit.get_by_token(u1, token) is None
-    body, status = service.confirm(u1, token)
-    assert status == 400
-    assert body["ok"] is False
+    # No issuer, no token lookup, no confirm entry point.
+    assert not hasattr(audit, "issue_confirmation_token")
+    assert not hasattr(audit, "get_by_token")
+    assert not hasattr(audit, "get_pending_by_token")
+    assert not hasattr(service, "confirm")
+    # The routes are gone (404), not stubs returning 400/200.
+    assert (
+        app_client.post(
+            "/api/ask-topai/confirm", json={"confirmation_token": "anything"}
+        ).status_code
+        == 404
+    )
+    assert (
+        app_client.post(
+            "/api/ask-topai/cancel", json={"confirmation_token": "anything"}
+        ).status_code
+        == 404
+    )
 
 
 def test_create_cma_and_generate_listing_content_are_future_writes():

@@ -1,0 +1,641 @@
+== TopAI backup/restore drill — LOCAL Postgres only ==
+   source db:  topai_backup_drill_source_drill
+   restore db: topai_backup_drill_restore_drill
+   dump file:  /home/hatch/workspace/worktrees/launch-backup/drill/backup-20261109-031406.dump
+[1/8] safety check: local host, scratch db names — OK
+[2/8] creating source database
+  $ dropdb --if-exists topai_backup_drill_source_drill
+    [stderr] NOTICE:  database "topai_backup_drill_source_drill" does not exist, skipping
+  $ createdb topai_backup_drill_source_drill
+  $ dropdb --if-exists topai_backup_drill_restore_drill
+    [stderr] NOTICE:  database "topai_backup_drill_restore_drill" does not exist, skipping
+[3/8] running migrations 001..032 (python -m migrations.runner)
+  $ /home/hatch/workspace/topai-video-redo/listing-ai/.venv/bin/python -m migrations.runner
+    [stderr] Database startup check: app_env=development engine=postgres postgres_active=true host=localhost db=topai_backup_drill_source_drill
+    [stderr] 2026-11-09 03:14:09,998 INFO Applying migration 001_baseline
+    [stderr] Applying migration 001_baseline
+    [stderr] 001_baseline: CREATE TABLE schema_migrations
+    [stderr] 001_baseline: CREATE TABLE users
+    [stderr] 001_baseline: CREATE TABLE voice_personas
+    [stderr] 001_baseline: CREATE TABLE voice_calls
+    [stderr] 001_baseline: CREATE TABLE tool_usage
+    [stderr] 001_baseline: CREATE TABLE leads
+    [stderr] 001_baseline: CREATE TABLE sms_messages
+    [stderr] 001_baseline: CREATE TABLE lead_follow_ups
+    [stderr] 001_baseline: CREATE TABLE lead_insights
+    [stderr] 001_baseline: CREATE TABLE lead_activities
+    [stderr] 001_baseline: CREATE TABLE tasks
+    [stderr] 001_baseline: CREATE TABLE appointments
+    [stderr] 001_baseline: CREATE TABLE needs_attention
+    [stderr] 001_baseline: CREATE TABLE notifications
+    [stderr] 001_baseline: CREATE INDEX idx_sms_messages_user_created
+    [stderr] 001_baseline: CREATE INDEX idx_sms_messages_provider_id
+    [stderr] 001_baseline: CREATE INDEX idx_sms_messages_lead_created
+    [stderr] 001_baseline: CREATE INDEX idx_leads_user_updated
+    [stderr] 001_baseline: CREATE INDEX idx_lead_follow_ups_user_due
+    [stderr] 001_baseline: CREATE INDEX idx_lead_insights_user_status
+    [stderr] 001_baseline: CREATE INDEX idx_tool_usage_user_created
+    [stderr] 001_baseline: CREATE INDEX idx_tool_usage_user_tool
+    [stderr] 001_baseline: CREATE INDEX idx_lead_activities_lead
+    [stderr] 001_baseline: CREATE INDEX idx_tasks_user_due
+    [stderr] 001_baseline: CREATE INDEX idx_tasks_user_status
+    [stderr] 001_baseline: CREATE INDEX idx_appointments_user_start
+    [stderr] 001_baseline: CREATE INDEX idx_needs_attention_user_status
+    [stderr] 001_baseline: CREATE INDEX idx_notifications_user
+    [stderr] 001_baseline: created tables: schema_migrations, users, voice_personas, voice_calls, tool_usage, leads, sms_messages, lead_follow_ups, lead_insights, lead_activities, tasks, appointments, needs_attention, notifications
+    [stderr] 2026-11-09 03:14:10,184 INFO Applied migration 001_baseline
+    [stderr] Applied migration 001_baseline
+    [stderr] 2026-11-09 03:14:10,189 INFO Applying migration 002_safe_additive_columns
+    [stderr] Applying migration 002_safe_additive_columns
+    [stderr] 2026-11-09 03:14:10,416 INFO Applied migration 002_safe_additive_columns
+    [stderr] Applied migration 002_safe_additive_columns
+    [stderr] 2026-11-09 03:14:10,417 INFO Applying migration 003_user_business_profile
+    [stderr] Applying migration 003_user_business_profile
+    [stderr] 2026-11-09 03:14:10,419 INFO Applied migration 003_user_business_profile
+    [stderr] Applied migration 003_user_business_profile
+    [stderr] 2026-11-09 03:14:10,420 INFO Applying migration 004_voice_call_lead_link
+    [stderr] Applying migration 004_voice_call_lead_link
+    [stderr] 2026-11-09 03:14:10,481 INFO Applied migration 004_voice_call_lead_link
+    [stderr] Applied migration 004_voice_call_lead_link
+    [stderr] 2026-11-09 03:14:10,482 INFO Applying migration 005_voice_call_recording_fields
+    [stderr] Applying migration 005_voice_call_recording_fields
+    [stderr] 2026-11-09 03:14:10,485 INFO Applied migration 005_voice_call_recording_fields
+    [stderr] Applied migration 005_voice_call_recording_fields
+    [stderr] 2026-11-09 03:14:10,494 INFO Applying migration 006_cleanup_transient_voice_activities
+    [stderr] Applying migration 006_cleanup_transient_voice_activities
+    [stderr] 2026-11-09 03:14:10,499 INFO Applied migration 006_cleanup_transient_voice_activities
+    [stderr] Applied migration 006_cleanup_transient_voice_activities
+    [stderr] 2026-11-09 03:14:10,500 INFO Applying migration 007_backfill_lead_follow_through
+    [stderr] Applying migration 007_backfill_lead_follow_through
+    [stderr] 2026-11-09 03:14:10,505 INFO Applied migration 007_backfill_lead_follow_through
+    [stderr] Applied migration 007_backfill_lead_follow_through
+    [stderr] 2026-11-09 03:14:10,508 INFO Applying migration 008_follow_up_cancel_and_user_timezone
+    [stderr] Applying migration 008_follow_up_cancel_and_user_timezone
+    [stderr] 2026-11-09 03:14:10,582 INFO Applied migration 008_follow_up_cancel_and_user_timezone
+    [stderr] Applied migration 008_follow_up_cancel_and_user_timezone
+    [stderr] 2026-11-09 03:14:10,583 INFO Applying migration 009_inbound_sms_metadata
+    [stderr] Applying migration 009_inbound_sms_metadata
+    [stderr] 2026-11-09 03:14:10,586 INFO Applied migration 009_inbound_sms_metadata
+    [stderr] Applied migration 009_inbound_sms_metadata
+    [stderr] 2026-11-09 03:14:10,587 INFO Applying migration 010_sms_consent_inquiries
+    [stderr] Applying migration 010_sms_consent_inquiries
+    [stderr] 2026-11-09 03:14:10,590 INFO Applied migration 010_sms_consent_inquiries
+    [stderr] Applied migration 010_sms_consent_inquiries
+    [stderr] 2026-11-09 03:14:10,596 INFO Applying migration 011_external_leads_consent
+    [stderr] Applying migration 011_external_leads_consent
+    [stderr] 2026-11-09 03:14:10,613 INFO Applied migration 011_external_leads_consent
+    [stderr] Applied migration 011_external_leads_consent
+    [stderr] 2026-11-09 03:14:10,682 INFO Applying migration 012_simpletexting_multi_tenant_sms
+    [stderr] Applying migration 012_simpletexting_multi_tenant_sms
+    [stderr] 2026-11-09 03:14:10,794 INFO Applied migration 012_simpletexting_multi_tenant_sms
+    [stderr] Applied migration 012_simpletexting_multi_tenant_sms
+    [stderr] 2026-11-09 03:14:10,796 INFO Applying migration 013_telnyx_messaging
+    [stderr] Applying migration 013_telnyx_messaging
+    [stderr] 2026-11-09 03:14:10,875 INFO Applied migration 013_telnyx_messaging
+    [stderr] Applied migration 013_telnyx_messaging
+    [stderr] 2026-11-09 03:14:10,882 INFO Applying migration 014_sms_consent_inquiry_fields
+    [stderr] Applying migration 014_sms_consent_inquiry_fields
+    [stderr] 2026-11-09 03:14:10,885 INFO Applied migration 014_sms_consent_inquiry_fields
+    [stderr] Applied migration 014_sms_consent_inquiry_fields
+    [stderr] 2026-11-09 03:14:10,886 INFO Applying migration 015_password_reset_tokens
+    [stderr] Applying migration 015_password_reset_tokens
+    [stderr] 2026-11-09 03:14:10,892 INFO Applied migration 015_password_reset_tokens
+    [stderr] Applied migration 015_password_reset_tokens
+    [stderr] 2026-11-09 03:14:10,893 INFO Applying migration 016_sms_worker_heartbeats
+    [stderr] Applying migration 016_sms_worker_heartbeats
+    [stderr] 2026-11-09 03:14:10,895 INFO Applied migration 016_sms_worker_heartbeats
+    [stderr] Applied migration 016_sms_worker_heartbeats
+    [stderr] 2026-11-09 03:14:10,896 INFO Applying migration 017_stripe_webhook_events
+    [stderr] Applying migration 017_stripe_webhook_events
+    [stderr] 2026-11-09 03:14:10,898 INFO Applied migration 017_stripe_webhook_events
+    [stderr] Applied migration 017_stripe_webhook_events
+    [stderr] 2026-11-09 03:14:10,899 INFO Applying migration 018_sms_ai_reply
+    [stderr] Applying migration 018_sms_ai_reply
+    [stderr] 2026-11-09 03:14:10,903 INFO Applied migration 018_sms_ai_reply
+    [stderr] Applied migration 018_sms_ai_reply
+    [stderr] 2026-11-09 03:14:10,906 INFO Applying migration 019_listing_generations_and_social
+    [stderr] Applying migration 019_listing_generations_and_social
+    [stderr] 2026-11-09 03:14:10,917 INFO Applied migration 019_listing_generations_and_social
+    [stderr] Applied migration 019_listing_generations_and_social
+    [stderr] 2026-11-09 03:14:10,918 INFO Applying migration 020_listing_email_campaigns
+    [stderr] Applying migration 020_listing_email_campaigns
+    [stderr] 2026-11-09 03:14:10,979 INFO Applied migration 020_listing_email_campaigns
+    [stderr] Applied migration 020_listing_email_campaigns
+    [stderr] 2026-11-09 03:14:10,981 INFO Applying migration 021_billing_subscription_fields
+    [stderr] Applying migration 021_billing_subscription_fields
+    [stderr] 2026-11-09 03:14:10,987 INFO Applied migration 021_billing_subscription_fields
+    [stderr] Applied migration 021_billing_subscription_fields
+    [stderr] 2026-11-09 03:14:10,991 INFO Applying migration 022_sms_scheduled_send_at
+    [stderr] Applying migration 022_sms_scheduled_send_at
+    [stderr] 2026-11-09 03:14:10,999 INFO Applied migration 022_sms_scheduled_send_at
+    [stderr] Applied migration 022_sms_scheduled_send_at
+    [stderr] 2026-11-09 03:14:11,004 INFO Applying migration 023_ask_topai
+    [stderr] Applying migration 023_ask_topai
+    [stderr] 2026-11-09 03:14:11,019 INFO Applied migration 023_ask_topai
+    [stderr] Applied migration 023_ask_topai
+    [stderr] 2026-11-09 03:14:11,021 INFO Applying migration 024_ask_topai_agent
+    [stderr] Applying migration 024_ask_topai_agent
+    [stderr] 2026-11-09 03:14:11,080 INFO Applied migration 024_ask_topai_agent
+    [stderr] Applied migration 024_ask_topai_agent
+    [stderr] 2026-11-09 03:14:11,081 INFO Applying migration 025_ask_topai_send
+    [stderr] Applying migration 025_ask_topai_send
+    [stderr] 2026-11-09 03:14:11,083 INFO Applied migration 025_ask_topai_send
+    [stderr] Applied migration 025_ask_topai_send
+    [stderr] 2026-11-09 03:14:11,084 INFO Applying migration 026_ask_topai_live
+    [stderr] Applying migration 026_ask_topai_live
+    [stderr] 2026-11-09 03:14:11,088 INFO Applied migration 026_ask_topai_live
+    [stderr] Applied migration 026_ask_topai_live
+    [stderr] 2026-11-09 03:14:11,089 INFO Applying migration 027_scheduling_settings
+    [stderr] Applying migration 027_scheduling_settings
+    [stderr] 2026-11-09 03:14:11,092 INFO Applied migration 027_scheduling_settings
+    [stderr] Applied migration 027_scheduling_settings
+    [stderr] 2026-11-09 03:14:11,093 INFO Applying migration 028_user_profile_phone
+    [stderr] Applying migration 028_user_profile_phone
+    [stderr] 2026-11-09 03:14:11,094 INFO Applied migration 028_user_profile_phone
+    [stderr] Applied migration 028_user_profile_phone
+    [stderr] 2026-11-09 03:14:11,098 INFO Applying migration 029_harness_foundation
+    [stderr] Applying migration 029_harness_foundation
+    [stderr] 2026-11-09 03:14:11,118 INFO Applied migration 029_harness_foundation
+    [stderr] Applied migration 029_harness_foundation
+    [stderr] 2026-11-09 03:14:11,175 INFO Applying migration 030_harness_scoped_idempotency
+    [stderr] Applying migration 030_harness_scoped_idempotency
+    [stderr] 2026-11-09 03:14:11,179 INFO Applied migration 030_harness_scoped_idempotency
+    [stderr] Applied migration 030_harness_scoped_idempotency
+    [stderr] 2026-11-09 03:14:11,180 INFO Applying migration 031_harness_job_correlation
+    [stderr] Applying migration 031_harness_job_correlation
+    [stderr] 2026-11-09 03:14:11,181 INFO Applied migration 031_harness_job_correlation
+    [stderr] Applied migration 031_harness_job_correlation
+    [stderr] 2026-11-09 03:14:11,194 INFO Applying migration 032_tenant_sms_senders_scoped_unique
+    [stderr] Applying migration 032_tenant_sms_senders_scoped_unique
+    [stderr] 2026-11-09 03:14:11,196 INFO 032_tenant_sms_senders_scoped_unique: tenant_sms_senders rows=0 shared_numbers=0 duplicate_pairs=0
+    [stderr] 2026-11-09 03:14:11,213 INFO Applied migration 032_tenant_sms_senders_scoped_unique
+    [stderr] Applied migration 032_tenant_sms_senders_scoped_unique
+    [stderr] 2026-11-09 03:14:11,220 INFO Migration state: app_env=development engine=postgres postgres_active=true latest=032_tenant_sms_senders_scoped_unique applied=001_baseline,002_safe_additive_columns,003_user_business_profile,004_voice_call_lead_link,005_voice_call_recording_fields,006_cleanup_transient_voice_activities,007_backfill_lead_follow_through,008_follow_up_cancel_and_user_timezone,009_inbound_sms_metadata,010_sms_consent_inquiries,011_external_leads_consent,012_simpletexting_multi_tenant_sms,013_telnyx_messaging,014_sms_consent_inquiry_fields,015_password_reset_tokens,016_sms_worker_heartbeats,017_stripe_webhook_events,018_sms_ai_reply,019_listing_generations_and_social,020_listing_email_campaigns,021_billing_subscription_fields,022_sms_scheduled_send_at,023_ask_topai,024_ask_topai_agent,025_ask_topai_send,026_ask_topai_live,027_scheduling_settings,028_user_profile_phone,029_harness_foundation,030_harness_scoped_idempotency,031_harness_job_correlation,032_tenant_sms_senders_scoped_unique pending=none
+    [stderr] Migration state: app_env=development engine=postgres postgres_active=true latest=032_tenant_sms_senders_scoped_unique applied=001_baseline,002_safe_additive_columns,003_user_business_profile,004_voice_call_lead_link,005_voice_call_recording_fields,006_cleanup_transient_voice_activities,007_backfill_lead_follow_through,008_follow_up_cancel_and_user_timezone,009_inbound_sms_metadata,010_sms_consent_inquiries,011_external_leads_consent,012_simpletexting_multi_tenant_sms,013_telnyx_messaging,014_sms_consent_inquiry_fields,015_password_reset_tokens,016_sms_worker_heartbeats,017_stripe_webhook_events,018_sms_ai_reply,019_listing_generations_and_social,020_listing_email_campaigns,021_billing_subscription_fields,022_sms_scheduled_send_at,023_ask_topai,024_ask_topai_agent,025_ask_topai_send,026_ask_topai_live,027_scheduling_settings,028_user_profile_phone,029_harness_foundation,030_harness_scoped_idempotency,031_harness_job_correlation,032_tenant_sms_senders_scoped_unique pending=none
+    [stderr] Migrations complete.
+    migrations took 3.1s
+[4/8] seeding synthetic data + snapshotting source
+    source: 49 tables, 32 migration stamps, 72 rows in tracked tables
+[5/8] pg_dump (custom format, --no-owner)
+  $ pg_dump postgresql://postgres@localhost:5432/topai_backup_drill_source_drill --format=custom --no-owner --file=/home/hatch/workspace/worktrees/launch-backup/drill/backup-20261109-031406.dump
+    dump: 150765 bytes, sha256 19f87b95de54e3d2c94bd27d72b42e4bcb9a6b127e468ab328fa87188bf5b929, took 0.5s
+  $ pg_restore --list /home/hatch/workspace/worktrees/launch-backup/drill/backup-20261109-031406.dump
+    ;
+    ; Archive created at 2026-11-09 03:14:11 UTC
+    ;     dbname: topai_backup_drill_source_drill
+    ;     TOC Entries: 412
+    ;     Compression: gzip
+    ;     Dump Version: 1.15-0
+    ;     Format: CUSTOM
+    ;     Integer: 4 bytes
+    ;     Offset: 8 bytes
+    ;     Dumped from database version: 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
+    ;     Dumped by pg_dump version: 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
+    ;
+    ;
+    ; Selected TOC Entries:
+    ;
+    237; 1259 18429 TABLE public appointments postgres
+    236; 1259 18428 SEQUENCE public appointments_id_seq postgres
+    4060; 0 0 SEQUENCE OWNED BY public appointments_id_seq postgres
+    291; 1259 18811 TABLE public ask_topai_commands postgres
+    290; 1259 18810 SEQUENCE public ask_topai_commands_id_seq postgres
+    4061; 0 0 SEQUENCE OWNED BY public ask_topai_commands_id_seq postgres
+    293; 1259 18823 TABLE public ask_topai_sessions postgres
+    292; 1259 18822 SEQUENCE public ask_topai_sessions_id_seq postgres
+    4062; 0 0 SEQUENCE OWNED BY public ask_topai_sessions_id_seq postgres
+    295; 1259 18835 TABLE public ask_topai_tool_invocations postgres
+    294; 1259 18834 SEQUENCE public ask_topai_tool_invocations_id_seq postgres
+    4063; 0 0 SEQUENCE OWNED BY public ask_topai_tool_invocations_id_seq postgres
+    251; 1259 18544 TABLE public consent_audit_events postgres
+    250; 1259 18543 SEQUENCE public consent_audit_events_id_seq postgres
+    4064; 0 0 SEQUENCE OWNED BY public consent_audit_events_id_seq postgres
+    287; 1259 18780 TABLE public email_marketing_connections postgres
+    286; 1259 18779 SEQUENCE public email_marketing_connections_id_seq postgres
+    4065; 0 0 SEQUENCE OWNED BY public email_marketing_connections_id_seq postgres
+    247; 1259 18516 TABLE public external_lead_import_batches postgres
+    246; 1259 18515 SEQUENCE public external_lead_import_batches_id_seq postgres
+    4066; 0 0 SEQUENCE OWNED BY public external_lead_import_batches_id_seq postgres
+    245; 1259 18497 TABLE public external_lead_sources postgres
+    244; 1259 18496 SEQUENCE public external_lead_sources_id_seq postgres
+    4067; 0 0 SEQUENCE OWNED BY public external_lead_sources_id_seq postgres
+    308; 1259 18918 TABLE public harness_approvals postgres
+    307; 1259 18917 SEQUENCE public harness_approvals_id_seq postgres
+    4068; 0 0 SEQUENCE OWNED BY public harness_approvals_id_seq postgres
+    302; 1259 18887 TABLE public harness_audit postgres
+    301; 1259 18886 SEQUENCE public harness_audit_id_seq postgres
+    4069; 0 0 SEQUENCE OWNED BY public harness_audit_id_seq postgres
+    304; 1259 18897 TABLE public harness_costs postgres
+    303; 1259 18896 SEQUENCE public harness_costs_id_seq postgres
+    4070; 0 0 SEQUENCE OWNED BY public harness_costs_id_seq postgres
+    300; 1259 18874 TABLE public harness_jobs postgres
+    299; 1259 18873 SEQUENCE public harness_jobs_id_seq postgres
+    4071; 0 0 SEQUENCE OWNED BY public harness_jobs_id_seq postgres
+    306; 1259 18907 TABLE public harness_memory postgres
+    305; 1259 18906 SEQUENCE public harness_memory_id_seq postgres
+    4072; 0 0 SEQUENCE OWNED BY public harness_memory_id_seq postgres
+    298; 1259 18860 TABLE public harness_settings postgres
+    297; 1259 18859 SEQUENCE public harness_settings_id_seq postgres
+    4073; 0 0 SEQUENCE OWNED BY public harness_settings_id_seq postgres
+    233; 1259 18408 TABLE public lead_activities postgres
+    232; 1259 18407 SEQUENCE public lead_activities_id_seq postgres
+    4074; 0 0 SEQUENCE OWNED BY public lead_activities_id_seq postgres
+    229; 1259 18386 TABLE public lead_follow_ups postgres
+    228; 1259 18385 SEQUENCE public lead_follow_ups_id_seq postgres
+    4075; 0 0 SEQUENCE OWNED BY public lead_follow_ups_id_seq postgres
+    231; 1259 18397 TABLE public lead_insights postgres
+    230; 1259 18396 SEQUENCE public lead_insights_id_seq postgres
+    4076; 0 0 SEQUENCE OWNED BY public lead_insights_id_seq postgres
+    225; 1259 18355 TABLE public leads postgres
+    224; 1259 18354 SEQUENCE public leads_id_seq postgres
+    4077; 0 0 SEQUENCE OWNED BY public leads_id_seq postgres
+    289; 1259 18793 TABLE public listing_email_campaigns postgres
+    288; 1259 18792 SEQUENCE public listing_email_campaigns_id_seq postgres
+    4078; 0 0 SEQUENCE OWNED BY public listing_email_campaigns_id_seq postgres
+    279; 1259 18727 TABLE public listing_generations postgres
+    278; 1259 18726 SEQUENCE public listing_generations_id_seq postgres
+    4079; 0 0 SEQUENCE OWNED BY public listing_generations_id_seq postgres
+    239; 1259 18440 TABLE public needs_attention postgres
+    238; 1259 18439 SEQUENCE public needs_attention_id_seq postgres
+    4080; 0 0 SEQUENCE OWNED BY public needs_attention_id_seq postgres
+    241; 1259 18451 TABLE public notifications postgres
+    240; 1259 18450 SEQUENCE public notifications_id_seq postgres
+    4081; 0 0 SEQUENCE OWNED BY public notifications_id_seq postgres
+    275; 1259 18690 TABLE public password_reset_tokens postgres
+    274; 1259 18689 SEQUENCE public password_reset_tokens_id_seq postgres
+    4082; 0 0 SEQUENCE OWNED BY public password_reset_tokens_id_seq postgres
+    215; 1259 18301 TABLE public schema_migrations postgres
+    271; 1259 18657 TABLE public sms_audit_events postgres
+    270; 1259 18656 SEQUENCE public sms_audit_events_id_seq postgres
+    4083; 0 0 SEQUENCE OWNED BY public sms_audit_events_id_seq postgres
+    257; 1259 18580 TABLE public sms_campaign_attestations postgres
+    256; 1259 18579 SEQUENCE public sms_campaign_attestations_id_seq postgres
+    4084; 0 0 SEQUENCE OWNED BY public sms_campaign_attestations_id_seq postgres
+    265; 1259 18623 TABLE public sms_campaign_jobs postgres
+    264; 1259 18622 SEQUENCE public sms_campaign_jobs_id_seq postgres
+    4085; 0 0 SEQUENCE OWNED BY public sms_campaign_jobs_id_seq postgres
+    263; 1259 18613 TABLE public sms_campaign_recipients postgres
+    262; 1259 18612 SEQUENCE public sms_campaign_recipients_id_seq postgres
+    4086; 0 0 SEQUENCE OWNED BY public sms_campaign_recipients_id_seq postgres
+    261; 1259 18602 TABLE public sms_campaigns postgres
+    260; 1259 18601 SEQUENCE public sms_campaigns_id_seq postgres
+    4087; 0 0 SEQUENCE OWNED BY public sms_campaigns_id_seq postgres
+    249; 1259 18531 TABLE public sms_consent_evidence postgres
+    248; 1259 18530 SEQUENCE public sms_consent_evidence_id_seq postgres
+    4088; 0 0 SEQUENCE OWNED BY public sms_consent_evidence_id_seq postgres
+    243; 1259 18482 TABLE public sms_consent_inquiries postgres
+    242; 1259 18481 SEQUENCE public sms_consent_inquiries_id_seq postgres
+    4089; 0 0 SEQUENCE OWNED BY public sms_consent_inquiries_id_seq postgres
+    267; 1259 18636 TABLE public sms_link_clicks postgres
+    266; 1259 18635 SEQUENCE public sms_link_clicks_id_seq postgres
+    4090; 0 0 SEQUENCE OWNED BY public sms_link_clicks_id_seq postgres
+    227; 1259 18372 TABLE public sms_messages postgres
+    226; 1259 18371 SEQUENCE public sms_messages_id_seq postgres
+    4091; 0 0 SEQUENCE OWNED BY public sms_messages_id_seq postgres
+    255; 1259 18571 TABLE public sms_subscriber_attestations postgres
+    254; 1259 18570 SEQUENCE public sms_subscriber_attestations_id_seq postgres
+    4092; 0 0 SEQUENCE OWNED BY public sms_subscriber_attestations_id_seq postgres
+    259; 1259 18591 TABLE public sms_suppression_list postgres
+    258; 1259 18590 SEQUENCE public sms_suppression_list_id_seq postgres
+    4093; 0 0 SEQUENCE OWNED BY public sms_suppression_list_id_seq postgres
+    269; 1259 18648 TABLE public sms_terms_acceptances postgres
+    268; 1259 18647 SEQUENCE public sms_terms_acceptances_id_seq postgres
+    4094; 0 0 SEQUENCE OWNED BY public sms_terms_acceptances_id_seq postgres
+    273; 1259 18674 TABLE public sms_webhook_events postgres
+    272; 1259 18673 SEQUENCE public sms_webhook_events_id_seq postgres
+    4095; 0 0 SEQUENCE OWNED BY public sms_webhook_events_id_seq postgres
+    276; 1259 18707 TABLE public sms_worker_heartbeats postgres
+    281; 1259 18737 TABLE public social_connections postgres
+    280; 1259 18736 SEQUENCE public social_connections_id_seq postgres
+    4096; 0 0 SEQUENCE OWNED BY public social_connections_id_seq postgres
+    283; 1259 18750 TABLE public social_oauth_states postgres
+    282; 1259 18749 SEQUENCE public social_oauth_states_id_seq postgres
+    4097; 0 0 SEQUENCE OWNED BY public social_oauth_states_id_seq postgres
+    285; 1259 18761 TABLE public social_publications postgres
+    284; 1259 18760 SEQUENCE public social_publications_id_seq postgres
+    4098; 0 0 SEQUENCE OWNED BY public social_publications_id_seq postgres
+    277; 1259 18715 TABLE public stripe_webhook_events postgres
+    235; 1259 18417 TABLE public tasks postgres
+    234; 1259 18416 SEQUENCE public tasks_id_seq postgres
+    4099; 0 0 SEQUENCE OWNED BY public tasks_id_seq postgres
+    253; 1259 18557 TABLE public tenant_sms_senders postgres
+    252; 1259 18556 SEQUENCE public tenant_sms_senders_id_seq postgres
+    4100; 0 0 SEQUENCE OWNED BY public tenant_sms_senders_id_seq postgres
+    223; 1259 18345 TABLE public tool_usage postgres
+    222; 1259 18344 SEQUENCE public tool_usage_id_seq postgres
+    4101; 0 0 SEQUENCE OWNED BY public tool_usage_id_seq postgres
+    296; 1259 18846 TABLE public user_scheduling_settings postgres
+    217; 1259 18309 TABLE public users postgres
+    216; 1259 18308 SEQUENCE public users_id_seq postgres
+    4102; 0 0 SEQUENCE OWNED BY public users_id_seq postgres
+    221; 1259 18334 TABLE public voice_calls postgres
+    220; 1259 18333 SEQUENCE public voice_calls_id_seq postgres
+    4103; 0 0 SEQUENCE OWNED BY public voice_calls_id_seq postgres
+    219; 1259 18322 TABLE public voice_personas postgres
+    218; 1259 18321 SEQUENCE public voice_personas_id_seq postgres
+    4104; 0 0 SEQUENCE OWNED BY public voice_personas_id_seq postgres
+    3527; 2604 18432 DEFAULT public appointments id postgres
+    3599; 2604 18814 DEFAULT public ask_topai_commands id postgres
+    3601; 2604 18826 DEFAULT public ask_topai_sessions id postgres
+    3602; 2604 18838 DEFAULT public ask_topai_tool_invocations id postgres
+    3558; 2604 18547 DEFAULT public consent_audit_events id postgres
+    3593; 2604 18783 DEFAULT public email_marketing_connections id postgres
+    3546; 2604 18519 DEFAULT public external_lead_import_batches id postgres
+    3537; 2604 18500 DEFAULT public external_lead_sources id postgres
+    3621; 2604 18921 DEFAULT public harness_approvals id postgres
+    3616; 2604 18890 DEFAULT public harness_audit id postgres
+    3618; 2604 18900 DEFAULT public harness_costs id postgres
+    3613; 2604 18877 DEFAULT public harness_jobs id postgres
+    3620; 2604 18910 DEFAULT public harness_memory id postgres
+    3609; 2604 18863 DEFAULT public harness_settings id postgres
+    3522; 2604 18411 DEFAULT public lead_activities id postgres
+    3516; 2604 18389 DEFAULT public lead_follow_ups id postgres
+    3519; 2604 18400 DEFAULT public lead_insights id postgres
+    3498; 2604 18358 DEFAULT public leads id postgres
+    3596; 2604 18796 DEFAULT public listing_email_campaigns id postgres
+    3585; 2604 18730 DEFAULT public listing_generations id postgres
+    3530; 2604 18443 DEFAULT public needs_attention id postgres
+    3533; 2604 18454 DEFAULT public notifications id postgres
+    3584; 2604 18693 DEFAULT public password_reset_tokens id postgres
+    3581; 2604 18660 DEFAULT public sms_audit_events id postgres
+    3566; 2604 18583 DEFAULT public sms_campaign_attestations id postgres
+    3575; 2604 18626 DEFAULT public sms_campaign_jobs id postgres
+    3573; 2604 18616 DEFAULT public sms_campaign_recipients id postgres
+    3570; 2604 18605 DEFAULT public sms_campaigns id postgres
+    3553; 2604 18534 DEFAULT public sms_consent_evidence id postgres
+    3534; 2604 18485 DEFAULT public sms_consent_inquiries id postgres
+    3578; 2604 18639 DEFAULT public sms_link_clicks id postgres
+    3508; 2604 18375 DEFAULT public sms_messages id postgres
+    3565; 2604 18574 DEFAULT public sms_subscriber_attestations id postgres
+    3569; 2604 18594 DEFAULT public sms_suppression_list id postgres
+    3580; 2604 18651 DEFAULT public sms_terms_acceptances id postgres
+    3582; 2604 18677 DEFAULT public sms_webhook_events id postgres
+    3587; 2604 18740 DEFAULT public social_connections id postgres
+    3590; 2604 18753 DEFAULT public social_oauth_states id postgres
+    3591; 2604 18764 DEFAULT public social_publications id postgres
+    3523; 2604 18420 DEFAULT public tasks id postgres
+    3560; 2604 18560 DEFAULT public tenant_sms_senders id postgres
+    3496; 2604 18348 DEFAULT public tool_usage id postgres
+    3483; 2604 18312 DEFAULT public users id postgres
+    3493; 2604 18337 DEFAULT public voice_calls id postgres
+    3489; 2604 18325 DEFAULT public voice_personas id postgres
+    3982; 0 18429 TABLE DATA public appointments postgres
+    4036; 0 18811 TABLE DATA public ask_topai_commands postgres
+    4038; 0 18823 TABLE DATA public ask_topai_sessions postgres
+    4040; 0 18835 TABLE DATA public ask_topai_tool_invocations postgres
+    3996; 0 18544 TABLE DATA public consent_audit_events postgres
+    4032; 0 18780 TABLE DATA public email_marketing_connections postgres
+    3992; 0 18516 TABLE DATA public external_lead_import_batches postgres
+    3990; 0 18497 TABLE DATA public external_lead_sources postgres
+    4053; 0 18918 TABLE DATA public harness_approvals postgres
+    4047; 0 18887 TABLE DATA public harness_audit postgres
+    4049; 0 18897 TABLE DATA public harness_costs postgres
+    4045; 0 18874 TABLE DATA public harness_jobs postgres
+    4051; 0 18907 TABLE DATA public harness_memory postgres
+    4043; 0 18860 TABLE DATA public harness_settings postgres
+    3978; 0 18408 TABLE DATA public lead_activities postgres
+    3974; 0 18386 TABLE DATA public lead_follow_ups postgres
+    3976; 0 18397 TABLE DATA public lead_insights postgres
+    3970; 0 18355 TABLE DATA public leads postgres
+    4034; 0 18793 TABLE DATA public listing_email_campaigns postgres
+    4024; 0 18727 TABLE DATA public listing_generations postgres
+    3984; 0 18440 TABLE DATA public needs_attention postgres
+    3986; 0 18451 TABLE DATA public notifications postgres
+    4020; 0 18690 TABLE DATA public password_reset_tokens postgres
+    3960; 0 18301 TABLE DATA public schema_migrations postgres
+    4016; 0 18657 TABLE DATA public sms_audit_events postgres
+    4002; 0 18580 TABLE DATA public sms_campaign_attestations postgres
+    4010; 0 18623 TABLE DATA public sms_campaign_jobs postgres
+    4008; 0 18613 TABLE DATA public sms_campaign_recipients postgres
+    4006; 0 18602 TABLE DATA public sms_campaigns postgres
+    3994; 0 18531 TABLE DATA public sms_consent_evidence postgres
+    3988; 0 18482 TABLE DATA public sms_consent_inquiries postgres
+    4012; 0 18636 TABLE DATA public sms_link_clicks postgres
+    3972; 0 18372 TABLE DATA public sms_messages postgres
+    4000; 0 18571 TABLE DATA public sms_subscriber_attestations postgres
+    4004; 0 18591 TABLE DATA public sms_suppression_list postgres
+    4014; 0 18648 TABLE DATA public sms_terms_acceptances postgres
+    4018; 0 18674 TABLE DATA public sms_webhook_events postgres
+    4021; 0 18707 TABLE DATA public sms_worker_heartbeats postgres
+    4026; 0 18737 TABLE DATA public social_connections postgres
+    4028; 0 18750 TABLE DATA public social_oauth_states postgres
+    4030; 0 18761 TABLE DATA public social_publications postgres
+    4022; 0 18715 TABLE DATA public stripe_webhook_events postgres
+    3980; 0 18417 TABLE DATA public tasks postgres
+    3998; 0 18557 TABLE DATA public tenant_sms_senders postgres
+    3968; 0 18345 TABLE DATA public tool_usage postgres
+    4041; 0 18846 TABLE DATA public user_scheduling_settings postgres
+    3962; 0 18309 TABLE DATA public users postgres
+    3966; 0 18334 TABLE DATA public voice_calls postgres
+    3964; 0 18322 TABLE DATA public voice_personas postgres
+    4105; 0 0 SEQUENCE SET public appointments_id_seq postgres
+    4106; 0 0 SEQUENCE SET public ask_topai_commands_id_seq postgres
+    4107; 0 0 SEQUENCE SET public ask_topai_sessions_id_seq postgres
+    4108; 0 0 SEQUENCE SET public ask_topai_tool_invocations_id_seq postgres
+    4109; 0 0 SEQUENCE SET public consent_audit_events_id_seq postgres
+    4110; 0 0 SEQUENCE SET public email_marketing_connections_id_seq postgres
+    4111; 0 0 SEQUENCE SET public external_lead_import_batches_id_seq postgres
+    4112; 0 0 SEQUENCE SET public external_lead_sources_id_seq postgres
+    4113; 0 0 SEQUENCE SET public harness_approvals_id_seq postgres
+    4114; 0 0 SEQUENCE SET public harness_audit_id_seq postgres
+    4115; 0 0 SEQUENCE SET public harness_costs_id_seq postgres
+    4116; 0 0 SEQUENCE SET public harness_jobs_id_seq postgres
+    4117; 0 0 SEQUENCE SET public harness_memory_id_seq postgres
+    4118; 0 0 SEQUENCE SET public harness_settings_id_seq postgres
+    4119; 0 0 SEQUENCE SET public lead_activities_id_seq postgres
+    4120; 0 0 SEQUENCE SET public lead_follow_ups_id_seq postgres
+    4121; 0 0 SEQUENCE SET public lead_insights_id_seq postgres
+    4122; 0 0 SEQUENCE SET public leads_id_seq postgres
+    4123; 0 0 SEQUENCE SET public listing_email_campaigns_id_seq postgres
+    4124; 0 0 SEQUENCE SET public listing_generations_id_seq postgres
+    4125; 0 0 SEQUENCE SET public needs_attention_id_seq postgres
+    4126; 0 0 SEQUENCE SET public notifications_id_seq postgres
+    4127; 0 0 SEQUENCE SET public password_reset_tokens_id_seq postgres
+    4128; 0 0 SEQUENCE SET public sms_audit_events_id_seq postgres
+    4129; 0 0 SEQUENCE SET public sms_campaign_attestations_id_seq postgres
+    4130; 0 0 SEQUENCE SET public sms_campaign_jobs_id_seq postgres
+    4131; 0 0 SEQUENCE SET public sms_campaign_recipients_id_seq postgres
+    4132; 0 0 SEQUENCE SET public sms_campaigns_id_seq postgres
+    4133; 0 0 SEQUENCE SET public sms_consent_evidence_id_seq postgres
+    4134; 0 0 SEQUENCE SET public sms_consent_inquiries_id_seq postgres
+    4135; 0 0 SEQUENCE SET public sms_link_clicks_id_seq postgres
+    4136; 0 0 SEQUENCE SET public sms_messages_id_seq postgres
+    4137; 0 0 SEQUENCE SET public sms_subscriber_attestations_id_seq postgres
+    4138; 0 0 SEQUENCE SET public sms_suppression_list_id_seq postgres
+    4139; 0 0 SEQUENCE SET public sms_terms_acceptances_id_seq postgres
+    4140; 0 0 SEQUENCE SET public sms_webhook_events_id_seq postgres
+    4141; 0 0 SEQUENCE SET public social_connections_id_seq postgres
+    4142; 0 0 SEQUENCE SET public social_oauth_states_id_seq postgres
+    4143; 0 0 SEQUENCE SET public social_publications_id_seq postgres
+    4144; 0 0 SEQUENCE SET public tasks_id_seq postgres
+    4145; 0 0 SEQUENCE SET public tenant_sms_senders_id_seq postgres
+    4146; 0 0 SEQUENCE SET public tool_usage_id_seq postgres
+    4147; 0 0 SEQUENCE SET public users_id_seq postgres
+    4148; 0 0 SEQUENCE SET public voice_calls_id_seq postgres
+    4149; 0 0 SEQUENCE SET public voice_personas_id_seq postgres
+    3668; 2606 18438 CONSTRAINT public appointments appointments_pkey postgres
+    3775; 2606 18819 CONSTRAINT public ask_topai_commands ask_topai_commands_pkey postgres
+    3780; 2606 18830 CONSTRAINT public ask_topai_sessions ask_topai_sessions_pkey postgres
+    3784; 2606 18842 CONSTRAINT public ask_topai_tool_invocations ask_topai_tool_invocations_pkey postgres
+    3689; 2606 18552 CONSTRAINT public consent_audit_events consent_audit_events_pkey postgres
+    3764; 2606 18789 CONSTRAINT public email_marketing_connections email_marketing_connections_pkey postgres
+    3766; 2606 18791 CONSTRAINT public email_marketing_connections email_marketing_connections_user_id_provider_key postgres
+    3684; 2606 18529 CONSTRAINT public external_lead_import_batches external_lead_import_batches_pkey postgres
+    3680; 2606 18512 CONSTRAINT public external_lead_sources external_lead_sources_pkey postgres
+    3682; 2606 18514 CONSTRAINT public external_lead_sources external_lead_sources_user_id_provider_key_key postgres
+    3812; 2606 18926 CONSTRAINT public harness_approvals harness_approvals_pkey postgres
+    3801; 2606 18895 CONSTRAINT public harness_audit harness_audit_pkey postgres
+    3804; 2606 18905 CONSTRAINT public harness_costs harness_costs_pkey postgres
+    3796; 2606 18883 CONSTRAINT public harness_jobs harness_jobs_pkey postgres
+    3807; 2606 18914 CONSTRAINT public harness_memory harness_memory_pkey postgres
+    3809; 2606 18916 CONSTRAINT public harness_memory harness_memory_user_id_key_key postgres
+    3791; 2606 18870 CONSTRAINT public harness_settings harness_settings_pkey postgres
+    3793; 2606 18872 CONSTRAINT public harness_settings harness_settings_user_id_key postgres
+    3662; 2606 18415 CONSTRAINT public lead_activities lead_activities_pkey postgres
+    3656; 2606 18395 CONSTRAINT public lead_follow_ups lead_follow_ups_pkey postgres
+    3659; 2606 18406 CONSTRAINT public lead_insights lead_insights_pkey postgres
+    3643; 2606 18368 CONSTRAINT public leads leads_pkey postgres
+    3645; 2606 18370 CONSTRAINT public leads leads_user_id_phone_number_key postgres
+    3771; 2606 18804 CONSTRAINT public listing_email_campaigns listing_email_campaigns_idempotency_key_key postgres
+    3773; 2606 18802 CONSTRAINT public listing_email_campaigns listing_email_campaigns_pkey postgres
+    3746; 2606 18735 CONSTRAINT public listing_generations listing_generations_pkey postgres
+    3672; 2606 18449 CONSTRAINT public needs_attention needs_attention_pkey postgres
+    3675; 2606 18458 CONSTRAINT public notifications notifications_pkey postgres
+    3733; 2606 18697 CONSTRAINT public password_reset_tokens password_reset_tokens_pkey postgres
+    3735; 2606 18699 CONSTRAINT public password_reset_tokens password_reset_tokens_token_hash_key postgres
+    3624; 2606 18307 CONSTRAINT public schema_migrations schema_migrations_pkey postgres
+    3724; 2606 18664 CONSTRAINT public sms_audit_events sms_audit_events_pkey postgres
+    3699; 2606 18589 CONSTRAINT public sms_campaign_attestations sms_campaign_attestations_pkey postgres
+    3713; 2606 18634 CONSTRAINT public sms_campaign_jobs sms_campaign_jobs_idempotency_key_key postgres
+    3715; 2606 18632 CONSTRAINT public sms_campaign_jobs sms_campaign_jobs_pkey postgres
+    3709; 2606 18621 CONSTRAINT public sms_campaign_recipients sms_campaign_recipients_pkey postgres
+    3706; 2606 18611 CONSTRAINT public sms_campaigns sms_campaigns_pkey postgres
+    3687; 2606 18542 CONSTRAINT public sms_consent_evidence sms_consent_evidence_pkey postgres
+    3678; 2606 18491 CONSTRAINT public sms_consent_inquiries sms_consent_inquiries_pkey postgres
+    3718; 2606 18644 CONSTRAINT public sms_link_clicks sms_link_clicks_pkey postgres
+    3720; 2606 18646 CONSTRAINT public sms_link_clicks sms_link_clicks_tracking_token_key postgres
+    3652; 2606 18384 CONSTRAINT public sms_messages sms_messages_pkey postgres
+    3697; 2606 18578 CONSTRAINT public sms_subscriber_attestations sms_subscriber_attestations_pkey postgres
+    3702; 2606 18598 CONSTRAINT public sms_suppression_list sms_suppression_list_pkey postgres
+    3704; 2606 18600 CONSTRAINT public sms_suppression_list sms_suppression_list_user_id_phone_number_key postgres
+    3722; 2606 18655 CONSTRAINT public sms_terms_acceptances sms_terms_acceptances_pkey postgres
+    3727; 2606 18682 CONSTRAINT public sms_webhook_events sms_webhook_events_pkey postgres
+    3729; 2606 18684 CONSTRAINT public sms_webhook_events sms_webhook_events_provider_provider_event_id_key postgres
+    3738; 2606 18713 CONSTRAINT public sms_worker_heartbeats sms_worker_heartbeats_pkey postgres
+    3749; 2606 18746 CONSTRAINT public social_connections social_connections_pkey postgres
+    3751; 2606 18748 CONSTRAINT public social_connections social_connections_user_id_provider_external_account_id_key postgres
+    3754; 2606 18757 CONSTRAINT public social_oauth_states social_oauth_states_pkey postgres
+    3756; 2606 18759 CONSTRAINT public social_oauth_states social_oauth_states_state_key postgres
+    3760; 2606 18771 CONSTRAINT public social_publications social_publications_idempotency_key_key postgres
+    3762; 2606 18769 CONSTRAINT public social_publications social_publications_pkey postgres
+    3741; 2606 18721 CONSTRAINT public stripe_webhook_events stripe_webhook_events_pkey postgres
+    3666; 2606 18427 CONSTRAINT public tasks tasks_pkey postgres
+    3694; 2606 18567 CONSTRAINT public tenant_sms_senders tenant_sms_senders_pkey postgres
+    3638; 2606 18353 CONSTRAINT public tool_usage tool_usage_pkey postgres
+    3789; 2606 18858 CONSTRAINT public user_scheduling_settings user_scheduling_settings_pkey postgres
+    3626; 2606 18320 CONSTRAINT public users users_email_key postgres
+    3628; 2606 18318 CONSTRAINT public users users_pkey postgres
+    3634; 2606 18343 CONSTRAINT public voice_calls voice_calls_pkey postgres
+    3630; 2606 18332 CONSTRAINT public voice_personas voice_personas_pkey postgres
+    3669; 1259 18470 INDEX public idx_appointments_user_start postgres
+    3776; 1259 18833 INDEX public idx_ask_topai_commands_request postgres
+    3777; 1259 18821 INDEX public idx_ask_topai_commands_token postgres
+    3778; 1259 18820 INDEX public idx_ask_topai_commands_user postgres
+    3781; 1259 18832 INDEX public idx_ask_topai_sessions_user postgres
+    3782; 1259 18831 INDEX public idx_ask_topai_sessions_user_key postgres
+    3785; 1259 18844 INDEX public idx_ask_topai_tool_action postgres
+    3786; 1259 18843 INDEX public idx_ask_topai_tool_call postgres
+    3787; 1259 18845 INDEX public idx_ask_topai_tool_session postgres
+    3685; 1259 18555 INDEX public idx_consent_evidence_lead postgres
+    3767; 1259 18805 INDEX public idx_email_marketing_connections_user postgres
+    3813; 1259 18933 INDEX public idx_harness_approvals_user postgres
+    3814; 1259 18934 INDEX public idx_harness_approvals_user_status postgres
+    3802; 1259 18930 INDEX public idx_harness_audit_user postgres
+    3805; 1259 18931 INDEX public idx_harness_costs_user postgres
+    3797; 1259 18928 INDEX public idx_harness_jobs_user postgres
+    3798; 1259 18935 INDEX public idx_harness_jobs_user_idempotency postgres
+    3799; 1259 18929 INDEX public idx_harness_jobs_user_status postgres
+    3810; 1259 18932 INDEX public idx_harness_memory_user postgres
+    3794; 1259 18927 INDEX public idx_harness_settings_user postgres
+    3660; 1259 18467 INDEX public idx_lead_activities_lead postgres
+    3654; 1259 18463 INDEX public idx_lead_follow_ups_user_due postgres
+    3657; 1259 18464 INDEX public idx_lead_insights_user_status postgres
+    3639; 1259 18553 INDEX public idx_leads_external_record postgres
+    3640; 1259 18554 INDEX public idx_leads_sms_consent postgres
+    3641; 1259 18462 INDEX public idx_leads_user_updated postgres
+    3768; 1259 18806 INDEX public idx_listing_email_campaigns_generation postgres
+    3769; 1259 18807 INDEX public idx_listing_email_campaigns_provider_id postgres
+    3742; 1259 18774 INDEX public idx_listing_generations_expires postgres
+    3743; 1259 18773 INDEX public idx_listing_generations_user_address postgres
+    3744; 1259 18772 INDEX public idx_listing_generations_user_created postgres
+    3670; 1259 18471 INDEX public idx_needs_attention_user_status postgres
+    3673; 1259 18472 INDEX public idx_notifications_user postgres
+    3730; 1259 18705 INDEX public idx_password_reset_email postgres
+    3731; 1259 18706 INDEX public idx_password_reset_expires postgres
+    3695; 1259 18671 INDEX public idx_sms_attestations_lead postgres
+    3710; 1259 18669 INDEX public idx_sms_campaign_jobs_campaign postgres
+    3711; 1259 18668 INDEX public idx_sms_campaign_jobs_pending postgres
+    3707; 1259 18670 INDEX public idx_sms_campaign_recipients_campaign postgres
+    3676; 1259 18492 INDEX public idx_sms_consent_inquiries_phone postgres
+    3716; 1259 18672 INDEX public idx_sms_link_token postgres
+    3646; 1259 18461 INDEX public idx_sms_messages_lead_created postgres
+    3647; 1259 18460 INDEX public idx_sms_messages_provider_id postgres
+    3648; 1259 18725 INDEX public idx_sms_messages_provider_message_id postgres
+    3649; 1259 18809 INDEX public idx_sms_messages_scheduled_due postgres
+    3650; 1259 18459 INDEX public idx_sms_messages_user_created postgres
+    3700; 1259 18667 INDEX public idx_sms_suppression_user_phone postgres
+    3725; 1259 18686 INDEX public idx_sms_webhook_events_provider postgres
+    3736; 1259 18714 INDEX public idx_sms_worker_heartbeats_seen postgres
+    3747; 1259 18775 INDEX public idx_social_connections_user postgres
+    3752; 1259 18776 INDEX public idx_social_oauth_states_expires postgres
+    3757; 1259 18777 INDEX public idx_social_publications_generation postgres
+    3758; 1259 18778 INDEX public idx_social_publications_user postgres
+    3739; 1259 18722 INDEX public idx_stripe_webhook_events_type postgres
+    3663; 1259 18468 INDEX public idx_tasks_user_due postgres
+    3664; 1259 18469 INDEX public idx_tasks_user_status postgres
+    3690; 1259 18666 INDEX public idx_tenant_sms_senders_number postgres
+    3691; 1259 18665 INDEX public idx_tenant_sms_senders_user postgres
+    3692; 1259 18936 INDEX public idx_tenant_sms_senders_user_number postgres
+    3635; 1259 18465 INDEX public idx_tool_usage_user_created postgres
+    3636; 1259 18466 INDEX public idx_tool_usage_user_tool postgres
+    3631; 1259 18473 INDEX public idx_voice_calls_lead_id postgres
+    3632; 1259 18474 INDEX public idx_voice_calls_user_phone postgres
+    3653; 1259 18724 INDEX public uq_sms_messages_reply_to postgres
+    3815; 2606 18475 FK CONSTRAINT public voice_calls fk_voice_calls_lead_id postgres
+    3816; 2606 18700 FK CONSTRAINT public password_reset_tokens password_reset_tokens_user_id_fkey postgres
+    pg_restore --list: 98 TABLE entries
+[6/8] restoring into a fresh database
+  $ createdb topai_backup_drill_restore_drill
+  $ pg_restore --no-owner --exit-on-error --dbname=postgresql://postgres@localhost:5432/topai_backup_drill_restore_drill /home/hatch/workspace/worktrees/launch-backup/drill/backup-20261109-031406.dump
+    restore took 0.8s
+[7/8] comparing restored database against source snapshot
+[8/8] re-running migration runner against restored DB (must be a no-op)
+  $ /home/hatch/workspace/topai-video-redo/listing-ai/.venv/bin/python -m migrations.runner
+    [stderr] Database startup check: app_env=development engine=postgres postgres_active=true host=localhost db=topai_backup_drill_restore_drill
+    [stderr] 2026-11-09 03:14:15,122 INFO Migration state: app_env=development engine=postgres postgres_active=true latest=032_tenant_sms_senders_scoped_unique applied=001_baseline,002_safe_additive_columns,003_user_business_profile,004_voice_call_lead_link,005_voice_call_recording_fields,006_cleanup_transient_voice_activities,007_backfill_lead_follow_through,008_follow_up_cancel_and_user_timezone,009_inbound_sms_metadata,010_sms_consent_inquiries,011_external_leads_consent,012_simpletexting_multi_tenant_sms,013_telnyx_messaging,014_sms_consent_inquiry_fields,015_password_reset_tokens,016_sms_worker_heartbeats,017_stripe_webhook_events,018_sms_ai_reply,019_listing_generations_and_social,020_listing_email_campaigns,021_billing_subscription_fields,022_sms_scheduled_send_at,023_ask_topai,024_ask_topai_agent,025_ask_topai_send,026_ask_topai_live,027_scheduling_settings,028_user_profile_phone,029_harness_foundation,030_harness_scoped_idempotency,031_harness_job_correlation,032_tenant_sms_senders_scoped_unique pending=none
+    [stderr] Migration state: app_env=development engine=postgres postgres_active=true latest=032_tenant_sms_senders_scoped_unique applied=001_baseline,002_safe_additive_columns,003_user_business_profile,004_voice_call_lead_link,005_voice_call_recording_fields,006_cleanup_transient_voice_activities,007_backfill_lead_follow_through,008_follow_up_cancel_and_user_timezone,009_inbound_sms_metadata,010_sms_consent_inquiries,011_external_leads_consent,012_simpletexting_multi_tenant_sms,013_telnyx_messaging,014_sms_consent_inquiry_fields,015_password_reset_tokens,016_sms_worker_heartbeats,017_stripe_webhook_events,018_sms_ai_reply,019_listing_generations_and_social,020_listing_email_campaigns,021_billing_subscription_fields,022_sms_scheduled_send_at,023_ask_topai,024_ask_topai_agent,025_ask_topai_send,026_ask_topai_live,027_scheduling_settings,028_user_profile_phone,029_harness_foundation,030_harness_scoped_idempotency,031_harness_job_correlation,032_tenant_sms_senders_scoped_unique pending=none
+    [stderr] Migrations complete.
+
+== DRILL RESULT ==
+   dump file:     /home/hatch/workspace/worktrees/launch-backup/drill/backup-20261109-031406.dump
+   dump size:     150765 bytes (sha256 19f87b95de54e3d2...)
+   dump time:     0.5s   restore time: 0.8s   total: 7.8s
+   tables:        49 (source) / 49 (restored)
+   migrations:    32/32 stamps (source) / 32/32 (restored)
+   rows tracked:  72 (source) / 72 (restored)
+   per-table counts (source -> restored):
+     users: 2 -> 2
+     harness_settings: 2 -> 2
+     harness_jobs: 8 -> 8
+     harness_audit: 8 -> 8
+     harness_costs: 2 -> 2
+     harness_memory: 1 -> 1
+     harness_approvals: 2 -> 2
+     tenant_sms_senders: 3 -> 3
+     leads: 4 -> 4
+     tasks: 4 -> 4
+     sms_messages: 4 -> 4
+   RESULT: PASS — restore is row-for-row identical, stamps match, tenant isolation intact
+  $ dropdb --if-exists topai_backup_drill_source_drill
+  $ dropdb --if-exists topai_backup_drill_restore_drill
+   drill databases dropped (--keep to retain them)

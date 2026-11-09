@@ -1,5 +1,30 @@
 # Railway multi-service config. Web uses Dockerfile/Nixpacks start from Procfile web.
-# Create a second service named "worker" with start command from Procfile worker.
+#
+# Railway services are defined in the Railway dashboard, NOT in this file:
+# this repo cannot create a Railway service by itself. The project
+# (gracious-expression) needs THREE services, each with the start command
+# from the matching Procfile process:
+#
+#   web             -> Procfile `web`             (gunicorn app)
+#   worker          -> Procfile `worker`          (python -m workers.sms_campaign_worker)
+#   harness-worker  -> Procfile `harness-worker`  (python -m workers.harness_worker)
+#
+# The `harness-worker` service is REQUIRED for harness jobs to run at all:
+# nothing in app.py/config.py starts the harness worker, and the SMS
+# campaign worker (Procfile `worker`) contains zero harness references and
+# claims from a different queue (sms_campaign_jobs, not harness_jobs).
+# If the harness-worker service does not exist in the dashboard, harness
+# jobs sit in `pending` forever. See docs/harness-worker-architecture.md
+# for the full service spec, env vars, and how to confirm it is running.
+# The [deploy] restart policy below applies per service (Railway restarts
+# a crashed service up to 10 times).
+#
+# Staging (docs/harness-staging.md §1): create two MORE services in the same
+# project, "staging" (Procfile web start command) and "staging-worker"
+# (start command: python -m workers.harness_worker), plus a separate
+# staging Postgres. Staging services get APP_ENV=staging and the staging
+# variables in docs/harness-staging.md §2/§9 — never production secrets.
+# This file defines no services; service definitions live in the dashboard.
 [build]
 builder = "NIXPACKS"
 

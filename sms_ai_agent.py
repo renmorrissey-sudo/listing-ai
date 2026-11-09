@@ -24,6 +24,13 @@ import tenant_sms_db as tdb
 
 logger = logging.getLogger(__name__)
 
+
+class _SendSpendCapReached(Exception):
+    """Internal control-flow marker: the send spend reservation was
+    refused (the tenant's cap would be exceeded), so no provider send
+    is made."""
+
+
 # Escalation topics never get an automated reply; the agent follows up personally.
 _NO_AUTO_REPLY_TOPICS = {"legal", "financing", "fair_housing", "complaint"}
 
@@ -127,18 +134,69 @@ def schedule_inbound_ai(app, user_id, lead_id, inbound_id, body, receiving_numbe
     )
 
 
-def process_inbound_ai(user_id, lead_id, inbound_id, inbound_body, receiving_number):
+def process_inbound_ai(
+    user_id, lead_id, inbound_id, inbound_body, receiving_number, *, approved=False,
+    approved_draft=None,
+):
     """
     Analyze the inbound SMS and send at most ONE automated reply.
     Returns a result dict for tests/observability.
+
+    ``approved`` marks a human-approved send (an approval the tenant
+    reviewed and approved). It relaxes ONLY the escalation-topic check
+    in :func:`_auto_reply_allowed` for routine verification topics
+    (uncertain property facts, negotiation, financing): the human has
+    already reviewed the draft that answers them. Hard escalation
+    topics (legal, fair housing, complaint) still block, and every
+    other control — consent, opt-out, suppression, toll-free/trial,
+    rate limit, quiet hours, spend cap — applies in full.
+
+    ``approved_draft`` is the stored human-approved draft (the
+    approval's ``draft_json``, as returned by
+    ``harness.validation.validate_sms_reply_draft``). When it is
+    provided with ``approved=True``, the coach is NOT re-run and the
+    stored text is sent EXACTLY as approved — no model-generated
+    change can occur between human approval and actual execution
+    (approved-draft fidelity). The stored escalation topics are used
+    for the gate, the scheduling handler is skipped (its side effect
+    already ran when the draft was created, and re-running it could
+    modify the approved text), and the stored text is not truncated.
+    If any check requires the text to change, the send is blocked
+    (never silently modified) and the approval is returned to the
+    approval workflow via the caller's blocked handling.
     """
     from sms_inbound import analyze_inbound_and_coach
 
     logger.info(
         "SMS_AI_STARTED inbound_id=%s lead_id=%s tenant=%s", inbound_id, lead_id, user_id
     )
-    coach = analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body) or {}
-    analysis = coach.get("analysis")
+    if approved and approved_draft is not None:
+        # Approved-draft fidelity: use the stored draft, do not re-run
+        # the coach (a fresh model call could generate a different
+        # draft, different escalation topics, and duplicate side
+        # effects). The analysis is built from the stored fields only.
+        stored_topics = list(approved_draft.get("escalation_topics") or [])
+        analysis = {
+            "draft_reply": approved_draft.get("draft_reply"),
+            "suggested_reply": approved_draft.get("draft_reply"),
+            "escalation_topics": stored_topics,
+            "sensitive_topic": bool(stored_topics),
+            "requires_manual_review": True,
+            "intent": approved_draft.get("intent"),
+            "summary": approved_draft.get("summary"),
+            "suggested_lead_status": approved_draft.get("suggested_lead_status"),
+            "appointment_details": {},
+        }
+        coach = {
+            "analysis": analysis,
+            "insight_id": approved_draft.get("insight_id"),
+            "suggested_id": None,
+            "auto_execute": False,
+            "error": None,
+        }
+    else:
+        coach = analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body) or {}
+        analysis = coach.get("analysis")
     if coach.get("error") == "coach_failed":
         # Inbound message is already persisted; flag for manual follow-up.
         logger.error(
@@ -167,23 +225,31 @@ def process_inbound_ai(user_id, lead_id, inbound_id, inbound_body, receiving_num
     if not lead:
         return {"replied": False, "reason": "lead_missing"}
 
-    import scheduling
+    if approved and approved_draft is not None:
+        # Approved-draft fidelity: the scheduling side effect already
+        # ran when the draft was created, and re-running the handler
+        # could rewrite the approved text. Send the stored text as-is.
+        pass
+    else:
+        import scheduling
 
-    details = analysis.get("appointment_details") if isinstance(analysis.get("appointment_details"), dict) else {}
-    if inbound_body:
-        details = dict(details)
-        details.setdefault("text", inbound_body)
-        analysis["appointment_details"] = details
-    sched = scheduling.handle_inbound_scheduling(user_id, lead, analysis)
-    if sched.get("action") in {"scheduled", "rescheduled"}:
-        analysis["draft_reply"] = sched.get("message") or analysis.get("draft_reply")
-        analysis["suggested_reply"] = analysis["draft_reply"]
-        analysis["suggested_lead_status"] = "appointment_scheduled"
-    elif sched.get("action") == "offer" and sched.get("message"):
-        analysis["draft_reply"] = sched.get("message")
-        analysis["suggested_reply"] = analysis["draft_reply"]
+        details = analysis.get("appointment_details") if isinstance(analysis.get("appointment_details"), dict) else {}
+        if inbound_body:
+            details = dict(details)
+            details.setdefault("text", inbound_body)
+            analysis["appointment_details"] = details
+        sched = scheduling.handle_inbound_scheduling(user_id, lead, analysis)
+        if sched.get("action") in {"scheduled", "rescheduled"}:
+            analysis["draft_reply"] = sched.get("message") or analysis.get("draft_reply")
+            analysis["suggested_reply"] = analysis["draft_reply"]
+            analysis["suggested_lead_status"] = "appointment_scheduled"
+        elif sched.get("action") == "offer" and sched.get("message"):
+            analysis["draft_reply"] = sched.get("message")
+            analysis["suggested_reply"] = analysis["draft_reply"]
 
-    allowed, reason = _auto_reply_allowed(user_id, lead, analysis)
+    allowed, reason = _auto_reply_allowed(
+        user_id, lead, analysis, approved=approved
+    )
     if not allowed:
         logger.info(
             "SMS_AI_REPLY_SKIPPED inbound_id=%s lead_id=%s tenant=%s reason=%s",
@@ -194,7 +260,13 @@ def process_inbound_ai(user_id, lead_id, inbound_id, inbound_body, receiving_num
         )
         return {"replied": False, "reason": reason}
 
-    draft = str(analysis.get("draft_reply") or "").strip()[:480]
+    if approved and approved_draft is not None:
+        # Approved-draft fidelity: the human approved the full text;
+        # do not truncate it (the auto path truncates fresh drafts to
+        # 480 chars). The spend cap and reservation bound the cost.
+        draft = str(analysis.get("draft_reply") or "").strip()
+    else:
+        draft = str(analysis.get("draft_reply") or "").strip()[:480]
     if not draft:
         return {"replied": False, "reason": "empty_draft"}
 
@@ -255,99 +327,196 @@ def process_inbound_ai(user_id, lead_id, inbound_id, inbound_body, receiving_num
 
     provider = get_sms_provider()
     from_number = receiving_number or None
-    logger.info(
-        "SMS_OUTBOUND_REQUEST message_id=%s inbound_id=%s lead_id=%s tenant=%s ai=1",
-        message_id,
-        inbound_id,
-        lead_id,
-        user_id,
-    )
+    # Universal spend cap (launch blocker 5) + atomic reservation
+    # (defect 2, requirement 5): the AI reply send itself is billable
+    # (Telnyx/Twilio/SimpleTexting). The coach call was already gated
+    # upstream in analyze_inbound_and_coach; re-check here because the
+    # coach spend may have tripped the cap since. A plain recheck of
+    # committed totals is not safe under concurrency, so the cap is
+    # enforced by RESERVING the estimated send cost before the provider
+    # call: the check (committed + reserved + estimate <= cap) and the
+    # reservation insert run in one locked transaction. The send cost
+    # is known exactly (segments * per-segment rate; mock sends cost
+    # 0), so the estimate is the actual cost. The reservation is
+    # released after the send (and its cost recording) in the finally
+    # below. Fail safe: no send, the claimed reply slot stays un-sent
+    # and the inbound remains visible for manual follow-up.
+    _send_reservation_made = False
+    _send_reservation_corr = f"ai-reply:{inbound_id}"
     try:
-        result = provider.send_sms(
-            to_number,
-            draft,
-            status_callback=sms_status_callback_url(),
-            from_number=from_number,
+        import math
+
+        from harness.costs import (
+            MICROS_PER_CENT,
+            get_sms_price_cents_per_unit,
+            reserve_spend,
         )
-    except SmsProviderError as exc:
-        db.update_sms_message_send_result(
-            message_id, status="failed", error_message=str(exc)[:500]
+
+        _segments_est = max(1, math.ceil(len(draft or "") / 153))
+        _est_micros = (
+            _segments_est
+            * get_sms_price_cents_per_unit(config.SMS_PROVIDER)
+            * MICROS_PER_CENT
         )
-        logger.error(
-            "SMS_PROCESSING_ERROR stage=ai_outbound message_id=%s lead_id=%s tenant=%s",
-            message_id,
-            lead_id,
+        if _est_micros > 0 and not reserve_spend(
+            user_id, _est_micros, _send_reservation_corr
+        ):
+            raise _SendSpendCapReached()
+        _send_reservation_made = True
+    except _SendSpendCapReached:
+        logger.info(
+            "SMS_AI_REPLY_BLOCKED_SPEND_CAP inbound_id=%s tenant=%s",
+            inbound_id,
             user_id,
         )
-        _needs_attention(user_id, lead_id, inbound_id, "ai_reply_failed")
-        return {"replied": False, "reason": "send_failed", "message_id": message_id}
+        _needs_attention(user_id, lead_id, inbound_id, "ai_reply_blocked")
+        return {
+            "replied": False,
+            "reason": "spend_cap_reached",
+            "message_id": message_id,
+        }
     except Exception:
-        db.update_sms_message_send_result(
+        _send_reservation_made = False  # fail open on reservation errors
+    try:
+        logger.info(
+            "SMS_OUTBOUND_REQUEST message_id=%s inbound_id=%s lead_id=%s tenant=%s ai=1",
             message_id,
-            status="failed",
-            error_message="AI reply could not be sent due to an internal error.",
-        )
-        logger.exception(
-            "SMS_PROCESSING_ERROR stage=ai_outbound message_id=%s lead_id=%s tenant=%s",
-            message_id,
+            inbound_id,
             lead_id,
             user_id,
         )
-        _needs_attention(user_id, lead_id, inbound_id, "ai_reply_failed")
-        return {"replied": False, "reason": "send_failed", "message_id": message_id}
+        try:
+            result = provider.send_sms(
+                to_number,
+                draft,
+                status_callback=sms_status_callback_url(),
+                from_number=from_number,
+            )
+        except SmsProviderError as exc:
+            db.update_sms_message_send_result(
+                message_id, status="failed", error_message=str(exc)[:500]
+            )
+            logger.error(
+                "SMS_PROCESSING_ERROR stage=ai_outbound message_id=%s lead_id=%s tenant=%s",
+                message_id,
+                lead_id,
+                user_id,
+            )
+            _needs_attention(user_id, lead_id, inbound_id, "ai_reply_failed")
+            return {"replied": False, "reason": "send_failed", "message_id": message_id}
+        except Exception:
+            db.update_sms_message_send_result(
+                message_id,
+                status="failed",
+                error_message="AI reply could not be sent due to an internal error.",
+            )
+            logger.exception(
+                "SMS_PROCESSING_ERROR stage=ai_outbound message_id=%s lead_id=%s tenant=%s",
+                message_id,
+                lead_id,
+                user_id,
+            )
+            _needs_attention(user_id, lead_id, inbound_id, "ai_reply_failed")
+            return {"replied": False, "reason": "send_failed", "message_id": message_id}
 
-    provider_message_id = result.get("provider_message_id")
-    db.update_sms_message_send_result(
-        message_id,
-        provider_message_id=str(provider_message_id) if provider_message_id else None,
-        status=result.get("status") or "queued",
-    )
-    db.touch_lead_outbound(lead_id, user_id)
-    crm_db.add_lead_activity(
-        lead_id,
-        user_id,
-        "sms_ai_reply",
-        "AI SMS — Reply sent",
-        {
+        provider_message_id = result.get("provider_message_id")
+        # Universal cost recording: the provider accepted the AI reply, so
+        # the send is billable — record it (Telnyx-reported amount when
+        # supplied, else the per-segment placeholder rate). Best-effort.
+        try:
+            from harness.costs import record_sms_send
+
+            record_sms_send(
+                user_id,
+                provider=config.SMS_PROVIDER,
+                tool="sms_ai_reply",
+                result=result,
+                correlation_id=f"ai-reply:{inbound_id}",
+            )
+        except Exception:
+            logger.warning("sms ai-reply cost recording failed tenant=%s", user_id)
+        db.update_sms_message_send_result(
+            message_id,
+            provider_message_id=str(provider_message_id) if provider_message_id else None,
+            status=result.get("status") or "queued",
+        )
+        db.touch_lead_outbound(lead_id, user_id)
+        crm_db.add_lead_activity(
+            lead_id,
+            user_id,
+            "sms_ai_reply",
+            "AI SMS — Reply sent",
+            {
+                "message_id": message_id,
+                "reply_to_message_id": inbound_id,
+                "provider_message_id": provider_message_id,
+            },
+        )
+        tdb.append_sms_audit(
+            user_id,
+            "ai_reply_sent",
+            lead_id=lead_id,
+            metadata={
+                "message_id": message_id,
+                "reply_to_message_id": inbound_id,
+                "provider_message_id": provider_message_id,
+            },
+        )
+        logger.info(
+            "SMS_OUTBOUND_ACCEPTED message_id=%s telnyx_message_id=%s lead_id=%s tenant=%s ai=1",
+            message_id,
+            provider_message_id,
+            lead_id,
+            user_id,
+        )
+        db.consume_pending_suggestion_after_auto_reply(
+            user_id,
+            coach.get("insight_id"),
+            coach.get("suggested_id"),
+        )
+        return {
+            "replied": True,
             "message_id": message_id,
-            "reply_to_message_id": inbound_id,
             "provider_message_id": provider_message_id,
-        },
-    )
-    tdb.append_sms_audit(
-        user_id,
-        "ai_reply_sent",
-        lead_id=lead_id,
-        metadata={
-            "message_id": message_id,
-            "reply_to_message_id": inbound_id,
-            "provider_message_id": provider_message_id,
-        },
-    )
-    logger.info(
-        "SMS_OUTBOUND_ACCEPTED message_id=%s telnyx_message_id=%s lead_id=%s tenant=%s ai=1",
-        message_id,
-        provider_message_id,
-        lead_id,
-        user_id,
-    )
-    db.consume_pending_suggestion_after_auto_reply(
-        user_id,
-        coach.get("insight_id"),
-        coach.get("suggested_id"),
-    )
-    return {
-        "replied": True,
-        "message_id": message_id,
-        "provider_message_id": provider_message_id,
-    }
+        }
+    finally:
+        if _send_reservation_made:
+            try:
+                from harness.costs import release_reservation
+
+                release_reservation(user_id, _send_reservation_corr)
+            except Exception:
+                pass
 
 
-def _auto_reply_allowed(user_id, lead, analysis):
+# Escalation topics that block even a human-approved send. These are
+# genuinely sensitive — a legal threat, a fair-housing issue, or a
+# complaint needs a human to handle it directly, not an approved AI
+# draft. Every other escalation topic (uncertain property facts,
+# negotiation, financing) is a routine verification matter: the safe
+# draft defers to the agent, and a human approval covers it.
+HARD_ESCALATION_TOPICS = frozenset({"legal", "fair_housing", "complaint"})
+ROUTINE_ESCALATION_TOPICS = frozenset(
+    {"uncertain_property_fact", "negotiation", "financing"}
+)
+ALL_ESCALATION_TOPICS = HARD_ESCALATION_TOPICS | ROUTINE_ESCALATION_TOPICS
+
+
+def _auto_reply_allowed(user_id, lead, analysis, *, approved=False):
     """
     Consent, compliance, and safety gates for automated replies.
     Mirrors can_send_sms consent semantics (the reply answers a consumer-initiated
     inbound message, so no per-message attestation applies) plus AI-specific guards.
+
+    ``approved`` marks a human-approved send. It relaxes ONLY the
+    escalation-topic check, and only for routine verification topics:
+    a human has already reviewed the draft that answers them. Hard
+    escalation topics (legal, fair housing, complaint) still block an
+    approved send. ``sensitive_topic`` is NOT consulted on the
+    approved path — the validator sets it whenever ANY topic is
+    present, so it cannot distinguish hard from routine. Every other
+    check (opt-out, consent, suppression, toll-free/trial, rate limit)
+    applies in full on both paths.
     """
     from sms_authorization import (
         check_telnyx_toll_free_send_allowed,
@@ -367,22 +536,30 @@ def _auto_reply_allowed(user_id, lead, analysis):
         return False, "inquiry_blocked"
 
     topics = set(analysis.get("escalation_topics") or [])
-    if analysis.get("sensitive_topic") or topics & {
-        "legal",
-        "financing",
-        "fair_housing",
-        "complaint",
-        "negotiation",
-        "uncertain_property_fact",
-    }:
+    if approved:
+        # Human approval overrides routine verification topics only.
+        # Hard escalation topics still block, and the approval never
+        # overrides the consent/suppression checks above.
+        if topics & HARD_ESCALATION_TOPICS:
+            return False, "escalation_topic"
+    elif analysis.get("sensitive_topic") or topics & ALL_ESCALATION_TOPICS:
         return False, "escalation_topic"
 
-    toll_ok, _err = check_telnyx_toll_free_send_allowed()
-    if not toll_ok:
-        return False, "toll_free_not_verified"
-    trial_ok, _err = check_telnyx_trial_destination(phone)
-    if not trial_ok:
-        return False, "trial_destination_blocked"
+    # Staging mock: the mock provider records the send in memory and
+    # never delivers, so Telnyx delivery restrictions (toll-free
+    # verification, trial destination) are meaningless here — enforcing
+    # them would make an approved mock send unreachable in staging,
+    # where the toll-free status is deliberately unset. Consent,
+    # suppression, quiet-hours, rate-limit and escalation checks above
+    # still apply in full, and the mock intercepts every send path, so
+    # skipping these two checks cannot produce a real delivery.
+    if not config.HARNESS_MOCK_PROVIDERS:
+        toll_ok, _err = check_telnyx_toll_free_send_allowed()
+        if not toll_ok:
+            return False, "toll_free_not_verified"
+        trial_ok, _err = check_telnyx_trial_destination(phone)
+        if not trial_ok:
+            return False, "trial_destination_blocked"
 
     since = (
         datetime.now(timezone.utc) - timedelta(days=1)

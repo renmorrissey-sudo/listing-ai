@@ -43,9 +43,36 @@ def _prepare_session(user_id, raw_context: dict | None, session_id: str | None =
 
 
 def start_session(user_id, raw_context: dict | None, session_id: str | None = None):
-    """Mint an ephemeral Realtime client secret. Permanent OPENAI_API_KEY stays here."""
+    """Mint an ephemeral Realtime client secret. Permanent OPENAI_API_KEY stays here.
+
+    Universal spend cap (launch blocker 5): a capped tenant gets no
+    session minted. The mint itself is recorded to the cost ledger as
+    one session at the 1-minute-minimum placeholder rate (ESTIMATE) —
+    OpenAI never reports the session's real audio/token usage back to
+    the server, so a long session costs more than the recorded row;
+    see docs/ai-cost-coverage.md.
+    """
+    # Cap gate BEFORE minting: minting is what enables billable usage.
+    try:
+        from harness.costs import check_spend_cap
+
+        allowed, reason = check_spend_cap(user_id)
+    except Exception:
+        allowed, reason = True, None  # fail open on unreadable ledger
+    if not allowed:
+        return {"ok": False, "error": reason, "code": "spend_cap_reached"}
     key, context, session_obj, prompt = _prepare_session(user_id, raw_context, session_id)
     secret = openai_client.mint_ephemeral_secret(session_obj, user_id=user_id)
+    try:
+        from harness.costs import record_realtime_session
+
+        record_realtime_session(
+            user_id,
+            model=settings.realtime_model(),
+            correlation_id=secret.get("ref"),
+        )
+    except Exception:
+        pass  # recording must never break a minted session
     public = settings.public_client_config()
     return {
         "ok": True,
@@ -142,6 +169,20 @@ def diagnostics(*, user_id, probe_secret: bool = False) -> dict:
         body["message"] = openai_client.USER_NOT_CONFIGURED
         return body
     if probe_secret and body["openai_authenticated"]:
+        # Universal spend cap (launch blocker 5): a diagnostic mint
+        # still enables billable Realtime usage, so a capped tenant
+        # gets no secret minted. A successful mint is recorded like a
+        # session start (1-minute-minimum placeholder rate).
+        try:
+            from harness.costs import check_spend_cap, record_realtime_session
+
+            _allowed, _reason = check_spend_cap(user_id)
+        except Exception:
+            _allowed, _reason = True, None  # fail open on unreadable ledger
+        if not _allowed:
+            body["ok"] = False
+            body["message"] = _reason
+            return body
         try:
             minted = openai_client.mint_ephemeral_secret(
                 settings.slim_session_config(),
@@ -154,6 +195,15 @@ def diagnostics(*, user_id, probe_secret: bool = False) -> dict:
             body["openai_status"] = minted.get("openai_status") or body["openai_status"]
             body["ok"] = body["client_secret_created"]
             body["message"] = None if body["ok"] else openai_client.USER_CONNECT
+            if body["client_secret_created"]:
+                try:
+                    record_realtime_session(
+                        user_id,
+                        model=model,
+                        correlation_id=ref,
+                    )
+                except Exception:
+                    pass
         except openai_client.RealtimeSessionError as exc:
             body["client_secret_created"] = False
             body["openai_status"] = exc.openai_status

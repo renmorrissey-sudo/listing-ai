@@ -17,6 +17,19 @@ Job kinds: ``sms_auto_reply``, ``scheduled_follow_up`` and
 ``execute_approval``. Unknown kinds fail with ``retryable=False`` so
 they land in ``dead_letter`` -- never silently dropped.
 
+Liveness: the worker writes a durable heartbeat row (``sms_worker_heartbeats``,
+worker_id ``harness-<hostname>-<pid>``) at boot, every loop iteration,
+and ``stopped`` on clean shutdown -- plus a background thread that
+heartbeats every 10 s so a long dispatch cannot let the row go stale --
+so a running/stale worker is detectable by a DB query and surfaced in
+``GET /api/harness/status`` (``worker`` key) -- not just by grepping
+Railway logs. The SMS campaign worker writes the same table with
+unprefixed ``<hostname>-<pid>`` ids, so the two workers' rows never
+collide. Stale-claim recovery skips jobs claimed by a worker whose
+heartbeat is still fresh (see ``harness.jobs.reclaim_stale_jobs``), so
+a live worker running a long job can never have its job reclaimed and
+double-executed.
+
 ``harness.jobs`` is owned by the core harness package and may not exist
 yet; it is imported lazily and defensively, so this worker still starts
 (and logs + sleeps/retries) when the tables/module are missing.
@@ -29,10 +42,18 @@ import logging
 import os
 import signal
 import socket
+import threading
 import time
 from datetime import datetime, timezone
 
 import db
+
+# Staging safety: the boot guard (live Stripe key, production Telnyx
+# number, real provider keys without mock/trial, email/voice/realtime
+# keys in staging) must run in the worker too, not just the web
+# process — the worker is the process that executes approved sends.
+# validate_config() exits(1) on a bad config, before any DB work.
+import config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("harness_worker")
@@ -40,6 +61,11 @@ logger = logging.getLogger("harness_worker")
 _RUNNING = True
 CLAIM_LIMIT = 10
 HEARTBEAT_EVERY_LOOPS = 30
+# Background-heartbeat interval. The main loop heartbeats between batches,
+# but a long dispatch blocks the loop, so without this a job running
+# longer than the 120 s status freshness window would make a live worker
+# look dead. 10 s keeps the heartbeat far inside that window.
+HEARTBEAT_THREAD_INTERVAL_SECONDS = 10
 
 _jobs_module = None
 _jobs_missing_logged = False
@@ -79,20 +105,74 @@ def _alert_provider_failure(reason, kind, job):
             reason,
             kind=kind,
             user_id=(job or {}).get("user_id"),
+            correlation_id=(job or {}).get("correlation_id"),
         )
     except Exception:
         logger.exception("provider-failure alert failed kind=%s", kind)
 
 
-def _alert_worker_failure(error, context=None):
+def _alert_worker_failure(error, context=None, correlation_id=None):
     """M4: notify once per error signature per hour when the worker
     itself fails. Never raises."""
     try:
         from harness import alerts
 
-        alerts.alert_worker_failure(error, context=context)
+        alerts.alert_worker_failure(
+            error, context=context, correlation_id=correlation_id
+        )
     except Exception:
         logger.exception("worker-failure alert failed")
+
+
+def _touch_heartbeat(worker_id, status, metadata=None):
+    """Durable liveness signal for the harness worker. Never raises.
+
+    Writes one upserted row in ``sms_worker_heartbeats`` (migration 016,
+    shared with the SMS campaign worker) so a running worker is
+    detectable by a DB query -- not just by grepping Railway logs:
+
+        SELECT worker_id, status, last_seen_at
+          FROM sms_worker_heartbeats WHERE worker_id LIKE 'harness-%';
+
+    Worker ids are ``harness-<hostname>-<pid>`` (see main()), so harness
+    rows never collide with the SMS campaign worker's
+    ``<hostname>-<pid>`` rows. ``harness.routes.get_harness_status``
+    reads the freshest running row back into the ``worker`` status key.
+    """
+    try:
+        import tenant_sms_db as tdb
+
+        meta = {"service": "harness_worker"}
+        if metadata:
+            meta.update(metadata)
+        tdb.touch_worker_heartbeat(worker_id, status=status, metadata=meta)
+    except Exception:
+        logger.exception("harness worker heartbeat failed id=%s", worker_id)
+
+
+def _start_heartbeat_thread(worker_id, interval_seconds=HEARTBEAT_THREAD_INTERVAL_SECONDS):
+    """Start a daemon thread that heartbeats every ``interval_seconds``.
+
+    The main loop heartbeats between batches, but a single long dispatch
+    (a slow AI call) blocks the loop for the whole dispatch. This thread
+    keeps the durable liveness row fresh during long jobs, so
+    ``GET /api/harness/status`` keeps reporting ``worker.running=true``
+    while the worker is actually working. Returns ``(stop_event,
+    thread)``; call ``stop_event.set()`` and join the thread on shutdown.
+    The heartbeat write itself never raises (see _touch_heartbeat), so
+    this thread can never break job processing.
+    """
+    stop_event = threading.Event()
+
+    def _beat():
+        while not stop_event.wait(interval_seconds):
+            _touch_heartbeat(worker_id, "running")
+
+    thread = threading.Thread(
+        target=_beat, name=f"harness-heartbeat-{worker_id}", daemon=True
+    )
+    thread.start()
+    return stop_event, thread
 
 
 def _load_jobs_module():
@@ -307,8 +387,34 @@ def process_one_batch(worker_id: str, limit: int = CLAIM_LIMIT) -> bool:
     if not claimed:
         return False
     worked = False
+    max_attempts = int(getattr(jobs, "MAX_ATTEMPTS", 5) or 5)
     for job in claimed:
         worked = True
+        # Budget-exhaustion escape: attempts are counted at claim time,
+        # so a job that was repeatedly reclaimed after crashes can arrive
+        # here already over budget without ever having been dispatched
+        # (fail_job only runs after a dispatch). The claim that spends
+        # the 5th attempt is still a legitimate dispatch — a retryable
+        # failure there dead-letters via fail_job — so the guard fires
+        # only strictly over budget (a 6th+ claim). Dead-lettering here
+        # fires the M4 alert, so a crash-looping job is visible rather
+        # than silently re-queued.
+        if int(job.get("attempts") or 0) > max_attempts:
+            logger.warning(
+                "Harness worker dead-lettering budget-exhausted job=%s attempts=%s",
+                job.get("id"),
+                job.get("attempts"),
+            )
+            try:
+                _fail_job(
+                    jobs,
+                    job,
+                    "attempts_exhausted",
+                    retryable=False,
+                )
+            except Exception:
+                pass
+            continue
         try:
             dispatch_job(job)
         except Exception as exc:
@@ -316,6 +422,7 @@ def process_one_batch(worker_id: str, limit: int = CLAIM_LIMIT) -> bool:
             _alert_worker_failure(
                 f"dispatch_error job={job.get('id')}: {exc}"[:500],
                 context={"job_id": job.get("id"), "kind": job.get("kind")},
+                correlation_id=job.get("correlation_id"),
             )
             try:
                 _fail_job(jobs, job, "dispatch_error", retryable=True)
@@ -330,6 +437,9 @@ def run_once(worker_id: str = "harness-worker-test", limit: int = CLAIM_LIMIT) -
 
 
 def main():
+    # Fail closed on a bad staging/production config before touching
+    # the queue (see config.validate_staging_safety).
+    config.validate_config()
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
     worker_id = f"harness-{socket.gethostname()}-{os.getpid()}"
@@ -341,11 +451,14 @@ def main():
         logger.exception(
             "Harness worker db.init_db failed; continuing (jobs module may be absent)"
         )
+    _touch_heartbeat(worker_id, "running", {"boot": True})
+    hb_stop, hb_thread = _start_heartbeat_thread(worker_id)
     idle_sleep = 2
     loops = 0
     while _RUNNING:
         try:
             loops += 1
+            _touch_heartbeat(worker_id, "running")
             if loops % HEARTBEAT_EVERY_LOOPS == 1:
                 logger.info(
                     "Harness worker heartbeat loop=%s id=%s running=%s",
@@ -363,6 +476,9 @@ def main():
             logger.exception("Harness worker loop error")
             _alert_worker_failure(f"worker_loop_error: {exc}"[:500])
             time.sleep(5)
+    hb_stop.set()
+    hb_thread.join(timeout=5)
+    _touch_heartbeat(worker_id, "stopped")
     logger.info("Harness worker stopped cleanly id=%s", worker_id)
 
 

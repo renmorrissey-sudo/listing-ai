@@ -123,8 +123,9 @@ Railway access. All file paths are relative to the repo root on branch
 - Wiring verified: `workers/harness_worker.py` calls
   `alert_dead_letter` / `alert_provider_failure` / `alert_worker_failure`
   on the matching transitions; `harness/policy.py` calls
-  `record_spend_alert` (audit + log only, no webhook — spend alerts are
-  deliberately not external).
+  `record_spend_alert` (audit + log, and fans out to the alert webhook
+  when `HARNESS_ALERT_WEBHOOK_URL` is set — verified by the alerting
+  E2E test, 2026-11-08; the earlier "audit + log only" note was stale).
 - Tests: `tests/test_harness_alerts.py`, **14 passed** (run 2026-11-08
   on this branch, including webhook-env on/off behaviour).
 - **NOT VERIFIED:** no webhook URL is set anywhere in the repo (and none
@@ -165,12 +166,24 @@ Railway access. All file paths are relative to the repo root on branch
   2. The scope note and §1 said the worker is a "later Phase 1 build"
      and "do not assume it exists yet". It now exists
      (`workers/harness_worker.py`), so that condition is met.
-- **`HARNESS_MOCK_PROVIDERS=true` does NOT exist in code.** A repo-wide
-  grep on this branch returns zero hits in any `.py` file. The staging
-  doc §2 already says this ("This flag does not exist in code yet").
-  Until it is implemented, the staging demo must run in **Telnyx trial
-  mode only** (sends restricted to `TELNYX_VERIFIED_TEST_NUMBER` and no
-  other number). Do not assume mock providers are available.
+- **`HARNESS_MOCK_PROVIDERS=true` now EXISTS in code (2026-11-08,
+  branch `topai-harness-hardening-staging`, commit `5eb2f04`).**
+  Implemented in `config.py` (defaults ON in staging),
+  `sms_providers/mock.py` (new in-memory provider — records sends,
+  never touches the network) and `sms_providers/factory.py` (returns
+  the mock when the flag is on). Every SMS send path funnels through
+  that factory, so the mock intercepts all of them. The staging demo
+  therefore runs against the mock (see `docs/harness-staging.md` §2a
+  G1), with Telnyx trial mode as the fallback only if the mock is
+  deliberately switched off. Tests:
+  `tests/test_harness_staging_safety.py` (21 passed). Two further
+  staging guards landed on the same branch: a `drafts_only` lock in
+  staging (`harness/policy.py`, `harness/sms_handler.py` — the only
+  carve-out is a human approval executing) and a boot-time staging
+  safety check (`config.validate_staging_safety()` — refuses live
+  Stripe keys, the production Telnyx number, and a real Telnyx key
+  with neither mock nor trial mode). Full guard table:
+  `docs/harness-staging.md` §2a.
 - **NOT VERIFIED:** no staging service, staging database, or staging env
   var exists (spec only, per the doc itself).
 
@@ -225,9 +238,10 @@ production services or data.
    | `SMS_PROVIDER` | `telnyx` |
    | `TELNYX_TRIAL_MODE` | `true` |
    | `TELNYX_VERIFIED_TEST_NUMBER` | One real mobile number owned by the tester, E.164 (e.g. Ren's). The only number staging may text. |
-   | `SMS_AI_AUTO_REPLY_ENABLED` | `false` |
-   | `HARNESS_MOCK_PROVIDERS` | **Do NOT set — the flag does not exist in code** (see §2). Trial mode above is the only send control. |
-   | `STRIPE_SECRET_KEY` / `STRIPE_PRICE_ID` | Leave **unset** (staging login then works without billing). |
+   | `SMS_AI_AUTO_REPLY_ENABLED` | Leave **unset** (default `true`) — corrected 2026-11-08 (re-verification hole W5, `docs/harness-staging.md` §2): the old value `false` made an approved execution refuse with `auto_reply_disabled`, so the §4 demo's mock send could never happen. The harness drafts_only lock, not this flag, stops unapproved sends. |
+   | `HARNESS_MOCK_PROVIDERS` | `true` — implemented 2026-11-08 (mock SMS provider; see §2). Also the staging default, so this is belt-and-braces. |
+   | `HARNESS_MONTHLY_SPEND_CAP_CENTS` | `500` ($5 staging cap; production default is 5000/$50) |
+   | `STRIPE_SECRET_KEY` / `STRIPE_PRICE_ID` | Leave **unset** (a live key is refused at boot). Note: with Stripe unset, staging does **not** get the dev/test `SUBSCRIPTION_REQUIRED=False` shortcut, so signup stays gated — create the demo tenant directly in the staging DB (see `docs/harness-staging.md` §4). |
    | `REGISTRATION_ENABLED` | `false` (default; keep staging closed). |
    | `HARNESS_ALERT_WEBHOOK_URL` | A **test** webhook URL (different channel/endpoint from production), or leave unset for the first run and add it in step F. |
 
@@ -398,9 +412,13 @@ demo) in staging, with these corrections applied:
 
 - Demo job kind is **`sms_auto_reply`**, not `inbound_sms` (§4 step 1
   as corrected).
-- **No mock providers**: `HARNESS_MOCK_PROVIDERS` does not exist in
-  code. The demo runs in Telnyx trial mode only; every send goes to
-  `TELNYX_VERIFIED_TEST_NUMBER` and no other number.
+- **Mock providers are implemented** (`HARNESS_MOCK_PROVIDERS`, see
+  §2): the demo runs against the mock — assert on
+  `sms_providers.mock.sent_messages()` (exactly one mock send per
+  approved draft, zero without approval). Telnyx trial mode is the
+  fallback only if the mock is deliberately switched off; in that
+  case every send goes to `TELNYX_VERIFIED_TEST_NUMBER` and no other
+  number.
 - The harness worker exists, so `staging-worker` runs
   `python -m workers.harness_worker` as specified.
 - Approval step (§4 step 4): approve in the staging UI at `/harness`
@@ -491,4 +509,9 @@ paused tenant producing draft only.
 
 | Date | Step | Observed result | Verified by |
 |---|---|---|---|
-| — | — | _Nothing recorded yet. No Railway-dashboard item has been observed._ | — |
+| 2026-11-08 | Code guards (H6 code side) | Staging safety guards implemented on branch `topai-harness-hardening-staging`, commits `5eb2f04` (code) + `5fabeaa` (docs) (not yet merged/deployed): mock SMS provider (`sms_providers/mock.py`, factory wiring, `HARNESS_MOCK_PROVIDERS` default-on in staging), staging `drafts_only` lock (`harness/policy.py`, `harness/sms_handler.py`), boot-time staging safety (`config.validate_staging_safety()`). `tests/test_harness_staging_safety.py`: 21 passed. Affected files: 186 passed. Full suite: **1125 passed, 6 skipped, 0 failed** (seed 1234, 14m27s). No Railway-dashboard item has been observed. | Muse (subagent) |
+| — | — | _No Railway-dashboard item has been observed yet._ | — |
+| 2026-11-08 | H5 — local restore drill (method proof) | **PASS.** `scripts/backup_restore_drill.py` on isolated local Postgres 16.15: migrations 001..032 applied (3.4 s), synthetic 2-tenant seed, `pg_dump --format=custom --no-owner` → 150,764-byte dump (SHA-256 `871b01edea5d9733…0d28`, 0.8 s), `pg_restore --no-owner --exit-on-error` into a fresh DB (1.4 s, exit 0, zero errors/warnings). Restored DB row-for-row identical: 49 tables, 32/32 migration stamps, 72 tracked rows, content hashes identical on all 11 key tables, tenant isolation intact (shared `+18888210810` × 2 tenants; duplicate `(user_id, sender_number)` rejected; same `idempotency_key` × 2 tenants; 0 NULL `correlation_id`); migration runner re-run on restored DB is a no-op (`pending=none`). Full results: `docs/backup-and-restore.md` §6. **This proves the loop on synthetic data only — it does NOT close R5/R6, which need a dump of the real production DB restored into a scratch DB.** | Backup/restore hardening work, branch `topai-harness-hardening-backup` |
+| 2026-11-08 | H5 — Railway backup capabilities (docs) | Documented from Railway's public docs in `docs/backup-and-restore.md` §1 (volume backups: daily 6d / weekly 1mo / monthly 3mo retention; PITR: pgBackRest WAL archiving, weekly full + daily incremental, last 4 fulls ≈ 4-week window, restores to a new sibling service; `pg_dump` as the only offsite layer; what Railway does NOT provide — no backups by default, no offsite copy, no retroactive PITR, no restore drill). **NOT observed in the live `gracious-expression` dashboard — production items R4/R5/R6 stay BLOCKED pending Ren's Railway access** (see `docs/backup-and-restore.md` §7). | Backup/restore hardening work, branch `topai-harness-hardening-backup` |
+| 2026-11-08 | H5 — backup tooling | `scripts/backup_postgres.sh` (pg_dump wrapper: `--dry-run` with redacted URL, SQLite refusal, `pg_restore --list` verification, SHA-256) + `tests/test_backup_script.py` (6 passed). Pre-deploy backup policy + retention (90-day weekly dumps, 30-day pre-deploy dumps) written in `docs/backup-and-restore.md` §2. Cron-service automation (§4) is a proposal only — needs Ren's approval, not built. | Backup/restore hardening work, branch `topai-harness-hardening-backup` |
+| 2026-11-08 | H5 — backup re-verification (launch readiness) | **Tooling re-verified + hardened on branch `launch-backup-verify`.** Production fail-safe added to `scripts/backup_postgres.sh`: refuses a production-looking `DATABASE_URL` (non-localhost host, or database named `railway` — including over a localhost tunnel) unless `--confirm-production` / `BACKUP_CONFIRM_PRODUCTION=1` is given; refusal never prints the credential. Opt-in retention pruning added (`--retain-days` / `BACKUP_RETAIN_DAYS`, newest dump never pruned, no pruning by default); `--out-dir`/`--retain-days` now validate their arguments. `.gitignore` now covers `backups/` and `*.dump` (dumps can no longer be committed by accident). `tests/test_backup_script.py`: **16 passed** (was 6). Real (non-stubbed) script path exercised against a scratch local DB: 1,333-byte dump, SHA-256 `76177c67…ee3afe`, retention ran, 0 pruned. **Fresh restore drill PASS** (isolated local Postgres 16.15, exit 0, 7.8 s; full numbers in `docs/backup-and-restore.md` §6): migrations 001..032 in 3.1 s, dump 150,765 bytes / SHA-256 `19f87b95…5b929` in 0.5 s, restore 0.8 s exit 0 with zero errors/warnings, 49/49 tables, 32/32 stamps, 72/72 rows, content hashes identical on all 11 key tables, tenant isolation intact; log `drill/drill-2026-11-08.log`, dump `drill/backup-20261109-031406.dump` (synthetic data; dump gitignored, SHA recorded). Doc §7 now has 8 items (item 8 added: restore-to-scratch procedure + scratch cleanup; item 4 extended with dump storage-location + retention). **Production backup state still BLOCKED — no Railway dashboard item observed; §7 items 1–8 need Ren.** | Muse (subagent), branch `launch-backup-verify` |

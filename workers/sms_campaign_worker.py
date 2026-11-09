@@ -38,6 +38,33 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+def _spend_cap_tripped(user_id) -> bool:
+    """Universal spend-cap gate (launch blocker 5). Fail open on an
+    unreadable ledger so a DB outage never stalls the worker."""
+    try:
+        from harness.costs import is_spend_cap_tripped
+
+        return bool(is_spend_cap_tripped(user_id))
+    except Exception:
+        return False
+
+
+def _record_sms_cost(user_id, result, *, tool, correlation_id):
+    """Record one worker SMS send to the harness cost ledger (best-effort)."""
+    try:
+        from harness.costs import record_sms_send
+
+        record_sms_send(
+            user_id,
+            provider=config.SMS_PROVIDER,
+            tool=tool,
+            result=result,
+            correlation_id=correlation_id,
+        )
+    except Exception:
+        logger.warning("sms cost recording failed user_id=%s tool=%s", user_id, tool)
+
+
 def _maybe_cleanup_expired_listings():
     global _LAST_LISTING_CLEANUP
     now = _now()
@@ -108,7 +135,7 @@ def _send_scheduled_ai_reply(row):
     """Deliver a quiet-hours-deferred AI auto-reply using the same gates as live auto-reply."""
     from sms_consent import outbound_sms_blocked_for_phone
     from sms_provider import sms_status_callback_url
-    from sms_providers import SmsProviderError, get_sms_provider
+    from sms_providers import SmsProviderError
     from sms_quiet_hours import in_quiet_hours
 
     user_id = row.get("user_id")
@@ -128,6 +155,16 @@ def _send_scheduled_ai_reply(row):
         return
     if in_quiet_hours(user_id, phone=phone, lead=lead):
         _reschedule_quiet_hours(row)
+        return
+    # Universal spend cap (launch blocker 5): a deferred AI reply is
+    # still a billable provider send. Fail safe — mark failed, do not
+    # reschedule into a retry loop for the rest of the month.
+    if _spend_cap_tripped(user_id):
+        db.update_sms_message_send_result(
+            row["id"],
+            status="failed",
+            error_message="Monthly AI spend limit reached; reply not sent.",
+        )
         return
     provider = get_sms_provider()
     from_number = None
@@ -154,6 +191,10 @@ def _send_scheduled_ai_reply(row):
             error_message="AI reply could not be sent due to an internal error.",
         )
         return
+    _record_sms_cost(
+        user_id, result, tool="sms_ai_reply",
+        correlation_id=f"scheduled-ai-reply:{row.get('id')}",
+    )
     db.update_sms_message_send_result(
         row["id"],
         provider_message_id=str(result.get("provider_message_id") or "") or None,
@@ -315,12 +356,27 @@ def process_one(worker_id: str) -> bool:
         return True
 
     tdb.update_job(job["id"], status="sending")
+    # Universal spend cap (launch blocker 5): a bulk campaign send is a
+    # billable provider send. Fail safe — fail the job permanently
+    # (retrying all month would spin the queue) instead of sending.
+    if _spend_cap_tripped(job["user_id"]):
+        tdb.update_job(
+            job["id"],
+            status="failed_permanent",
+            failure_message="Monthly AI spend limit reached; send blocked.",
+            failed_at=_now().isoformat(),
+        )
+        return True
     provider = get_sms_provider()
     try:
         result = provider.send_sms(
             job["phone_number"],
             message_body,
             from_number=sender.get("sender_number"),
+        )
+        _record_sms_cost(
+            job["user_id"], result, tool="sms_campaign",
+            correlation_id=f"campaign-job:{job.get('id')}",
         )
         sms_id = db.create_sms_message(
             user_id=job["user_id"],
@@ -426,6 +482,10 @@ def _maybe_complete_campaign(campaign_id, user_id):
 
 
 def main():
+    # Fail closed on a bad staging/production config before touching
+    # the queue (see config.validate_staging_safety). Staging does not
+    # run this worker, but the guard must hold wherever it does run.
+    config.validate_config()
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
     worker_id = f"{socket.gethostname()}-{os.getpid()}"

@@ -27,6 +27,12 @@
         <li>AI enabled: <strong>{{ 'yes' if ai_enabled else 'no' }}</strong></li>
         <li>Pending approvals: <strong>{{ pending_approvals }}</strong></li>
         <li>Pending jobs: <strong>{{ pending_jobs }}</strong></li>
+        {% if worker is defined %}
+        <li>Harness worker: <strong>{{ 'running' if worker.running else 'not running' }}</strong>{% if worker.last_seen_at %} <span class="muted">(last heartbeat {{ worker.last_seen_at }}{% if worker.worker_id %}, {{ worker.worker_id }}{% endif %})</span>{% else %} <span class="muted">(no heartbeat recorded — the harness-worker service may not exist, so jobs will sit pending)</span>{% endif %}</li>
+        {% endif %}
+        {% if worker_health is defined %}
+        <li>Worker health: <strong>{{ 'healthy' if worker_health.healthy else 'needs attention' }}</strong>{% if worker_health.worker.stale %} <span class="muted">(heartbeat stale{% if worker_health.worker.last_seen_at %} — last seen {{ worker_health.worker.last_seen_at }}{% else %} — never seen{% endif %}; a dead worker cannot alert itself, so this page and the /api/harness/health endpoint raise the alert)</span>{% endif %}{% if worker_health.stuck_jobs %} <span class="muted">({{ worker_health.stuck_jobs }} stuck job(s) on a dead worker)</span>{% endif %}{% if worker_health.overdue_jobs %} <span class="muted">({{ worker_health.overdue_jobs }} overdue job(s) no worker picked up)</span>{% endif %}</li>
+        {% endif %}
         {% if job_counts is defined %}
         <li>Jobs pending: <strong>{{ job_counts.pending }}</strong></li>
         <li>Jobs failed (awaiting retry): <strong>{{ job_counts.failed }}</strong></li>
@@ -81,10 +87,13 @@
     <div class="card">
       <ul>
         {% if outbound_activity is defined %}
-        <li>AI SMS sent (last 60 days): <strong>{{ outbound_activity.sms_sent_60d }}</strong> <span class="muted">(harness audit records; SMS messages actually marked sent: {{ outbound_activity.sms_messages_sent_60d }})</span></li>
+        <li>AI SMS sent (last 60 days): <strong>{{ outbound_activity.sms_sent_60d }}</strong> <span class="muted">(harness audit records; SMS messages actually marked sent: {{ outbound_activity.sms_messages_sent_60d }}; confirmed deliveries: {{ outbound_activity.sms_delivered_60d }})</span></li>
         <li>AI SMS sends failed (last 60 days): <strong>{{ outbound_activity.sms_send_failed_60d }}</strong></li>
         <li>Sends blocked by the policy gate (last 60 days): <strong>{{ outbound_activity.sms_blocked_60d }}</strong></li>
         <li>SMS replies drafted for review (last 60 days): <strong>{{ outbound_activity.sms_drafted_60d }}</strong></li>
+        <li>Approvals executed (last 60 days): <strong>{{ outbound_activity.approvals_executed_60d }}</strong> <span class="muted">(human-approved sends that ran, mock or real)</span></li>
+        <li>Approvals blocked at execution (last 60 days): <strong>{{ outbound_activity.approvals_blocked_60d }}</strong> <span class="muted">(deterministic declines that settled as blocked, never sent)</span></li>
+        <li>Mock SMS sends — test only, never a real customer message (last 60 days): <strong>{{ outbound_activity.sms_mock_sent_60d }}</strong></li>
         <li>AI calls placed (last 60 days): <strong>{{ outbound_activity.calls_placed_60d }}</strong></li>
         {% endif %}
       </ul>

@@ -1,0 +1,334 @@
+{
+  "scenarios": {
+    "A1 worker dead-letters unknown kind": {
+      "pass": true,
+      "detail": "status=dead_letter"
+    },
+    "A2 exactly 1 dead_letter POST, HTTP 200": {
+      "pass": true,
+      "detail": "posts=1"
+    },
+    "A3 correlation_id verbatim (uuid4 hex, not [REDACTED])": {
+      "pass": true,
+      "detail": "corr=8ef194602a85462e9123b196b5d3ec11"
+    },
+    "A4 payload keys only, no values": {
+      "pass": true,
+      "detail": "keys=['x']"
+    },
+    "B1 no POST before threshold (2 failures)": {
+      "pass": true,
+      "detail": ""
+    },
+    "B2 exactly 1 provider_failure POST after 3rd failure": {
+      "pass": true,
+      "detail": "posts=1"
+    },
+    "B3 provider=telnyx, consecutive_failures=3": {
+      "pass": true,
+      "detail": ""
+    },
+    "C1 job reaches dead_letter after exhaustion": {
+      "pass": true,
+      "detail": "status=dead_letter"
+    },
+    "C2 exactly 1 dead_letter POST for exhausted job": {
+      "pass": true,
+      "detail": ""
+    },
+    "D1 warning + limit each POST once (2 POSTs)": {
+      "pass": true,
+      "detail": "posts=2"
+    },
+    "D2 levels/spend/cap correct": {
+      "pass": true,
+      "detail": ""
+    },
+    "D3 repeat limit in same month deduped (no new POST)": {
+      "pass": true,
+      "detail": ""
+    },
+    "E1 exactly 1 worker_failure POST": {
+      "pass": true,
+      "detail": "posts=1"
+    },
+    "E2 crash text + job context carried": {
+      "pass": true,
+      "detail": ""
+    },
+    "F1 no forbidden value verbatim in payload": {
+      "pass": true,
+      "detail": ""
+    },
+    "F2 [REDACTED] present in payload": {
+      "pass": true,
+      "detail": ""
+    },
+    "F3 correlation_id (32-hex) passes through verbatim": {
+      "pass": true,
+      "detail": "corr=da07776ec3244f758eb1f29896e5cac5"
+    },
+    "F4 payload values dropped to key names only": {
+      "pass": true,
+      "detail": "keys=['address', 'api_key', 'body', 'lead_email', 'note']"
+    },
+    "F5 error field redacted, no address/phone/key": {
+      "pass": true,
+      "detail": ""
+    },
+    "G1 same dead-letter twice -> 1 POST": {
+      "pass": true,
+      "detail": ""
+    },
+    "G2 after simulated restart still 1 POST (durable audit row)": {
+      "pass": true,
+      "detail": ""
+    },
+    "G3 exactly 1 ops_alert audit row for the key": {
+      "pass": true,
+      "detail": ""
+    },
+    "G4 genuinely new failure still delivers after restart": {
+      "pass": true,
+      "detail": ""
+    },
+    "H1 500 delivery returns False": {
+      "pass": true,
+      "detail": ""
+    },
+    "H2 no ops_alert row after failed delivery (not marked sent)": {
+      "pass": true,
+      "detail": ""
+    },
+    "H3 exactly 1 durable ops_alert_failed row": {
+      "pass": true,
+      "detail": ""
+    },
+    "H4 retry after recovery delivers (HTTP 200)": {
+      "pass": true,
+      "detail": ""
+    },
+    "H5 exactly 1 ops_alert row after successful retry": {
+      "pass": true,
+      "detail": ""
+    },
+    "ALL no leaks in any captured payload": {
+      "pass": true,
+      "detail": ""
+    },
+    "ALL every POST returned 200 except the deliberate 500": {
+      "pass": true,
+      "detail": "statuses=[200, 200, 200, 200, 200, 200, 200, 200, 200, 500, 200]"
+    },
+    "ALL every payload carries text + content": {
+      "pass": true,
+      "detail": ""
+    }
+  },
+  "payloads": [
+    {
+      "event": "dead_letter",
+      "key": "dead_letter:1",
+      "title": "Harness job 1 dead-lettered (definitely_not_a_kind)",
+      "detail": {
+        "job_id": 1,
+        "user_id": 1,
+        "correlation_id": "8ef194602a85462e9123b196b5d3ec11",
+        "kind": "definitely_not_a_kind",
+        "attempts": 1,
+        "error": "unknown_kind: definitely_not_a_kind",
+        "payload_keys": [
+          "x"
+        ]
+      },
+      "timestamp": "2026-11-09T03:13:57.999543+00:00",
+      "text": "[TopAI Harness] Harness job 1 dead-lettered (definitely_not_a_kind) (event=dead_letter key=dead_letter:1)",
+      "content": "[TopAI Harness] Harness job 1 dead-lettered (definitely_not_a_kind) (event=dead_letter key=dead_letter:1)"
+    },
+    {
+      "event": "provider_failure",
+      "key": "provider_failure:telnyx:telnyx-upstream-504-verify-9c04d5b8|hour=2026-11-09T03",
+      "title": "Harness provider telnyx failed 3x in a row (sms_auto_reply)",
+      "detail": {
+        "provider": "telnyx",
+        "kind": "sms_auto_reply",
+        "user_id": 1,
+        "correlation_id": "b94242399706443eaf9590fc3fd552fa",
+        "error": "Telnyx upstream 504 verify-9c04d5b8",
+        "consecutive_failures": 3
+      },
+      "timestamp": "2026-11-09T03:13:58.048160+00:00",
+      "text": "[TopAI Harness] Harness provider telnyx failed 3x in a row (sms_auto_reply) (event=provider_failure key=provider_failure:telnyx:telnyx-upstream-504-verify-9c04d5b8|hour=2026-11-09T03)",
+      "content": "[TopAI Harness] Harness provider telnyx failed 3x in a row (sms_auto_reply) (event=provider_failure key=provider_failure:telnyx:telnyx-upstream-504-verify-9c04d5b8|hour=2026-11-09T03)"
+    },
+    {
+      "event": "dead_letter",
+      "key": "dead_letter:3",
+      "title": "Harness job 3 dead-lettered (sms_auto_reply)",
+      "detail": {
+        "job_id": 3,
+        "user_id": 1,
+        "correlation_id": "dd031e66880a41109fdca51ce880de81",
+        "kind": "sms_auto_reply",
+        "attempts": 5,
+        "error": "Telnyx upstream 504 verify-9c04d5b8",
+        "payload_keys": [
+          "lead_id"
+        ]
+      },
+      "timestamp": "2026-11-09T03:13:58.095197+00:00",
+      "text": "[TopAI Harness] Harness job 3 dead-lettered (sms_auto_reply) (event=dead_letter key=dead_letter:3)",
+      "content": "[TopAI Harness] Harness job 3 dead-lettered (sms_auto_reply) (event=dead_letter key=dead_letter:3)"
+    },
+    {
+      "event": "spend_alert",
+      "key": "spend_alert:1:warning:2026-11",
+      "title": "Harness spend warning for tenant 1",
+      "detail": {
+        "user_id": 1,
+        "level": "warning",
+        "period": "2026-11",
+        "spend_cents": 4000,
+        "cap_cents": 5000
+      },
+      "timestamp": "2026-11-09T03:13:58.104110+00:00",
+      "text": "[TopAI Harness] Harness spend warning for tenant 1 (event=spend_alert key=spend_alert:1:warning:2026-11)",
+      "content": "[TopAI Harness] Harness spend warning for tenant 1 (event=spend_alert key=spend_alert:1:warning:2026-11)"
+    },
+    {
+      "event": "spend_alert",
+      "key": "spend_alert:1:limit:2026-11",
+      "title": "Harness spend limit for tenant 1",
+      "detail": {
+        "user_id": 1,
+        "level": "limit",
+        "period": "2026-11",
+        "spend_cents": 5000,
+        "cap_cents": 5000
+      },
+      "timestamp": "2026-11-09T03:13:58.112235+00:00",
+      "text": "[TopAI Harness] Harness spend limit for tenant 1 (event=spend_alert key=spend_alert:1:limit:2026-11)",
+      "content": "[TopAI Harness] Harness spend limit for tenant 1 (event=spend_alert key=spend_alert:1:limit:2026-11)"
+    },
+    {
+      "event": "worker_failure",
+      "key": "worker_failure:dispatch-error-job-4-boom-verify-dispatch-crash|hour=2026-11-09T03",
+      "title": "Harness worker failure: dispatch_error job=4: boom-verify-dispatch-crash",
+      "detail": {
+        "worker_id": null,
+        "correlation_id": "3974cd7d56fc4b25a1e072993b9a5ed3",
+        "error": "dispatch_error job=4: boom-verify-dispatch-crash",
+        "context": {
+          "job_id": 4,
+          "kind": "sms_auto_reply"
+        }
+      },
+      "timestamp": "2026-11-09T03:13:58.170670+00:00",
+      "text": "[TopAI Harness] Harness worker failure: dispatch_error job=4: boom-verify-dispatch-crash (event=worker_failure key=worker_failure:dispatch-error-job-4-boom-verify-dispatch-crash|hour=2026-11-09T03)",
+      "content": "[TopAI Harness] Harness worker failure: dispatch_error job=4: boom-verify-dispatch-crash (event=worker_failure key=worker_failure:dispatch-error-job-4-boom-verify-dispatch-crash|hour=2026-11-09T03)"
+    },
+    {
+      "event": "dead_letter",
+      "key": "dead_letter:424991",
+      "title": "Harness job 424991 dead-lettered (sms_auto_reply)",
+      "detail": {
+        "job_id": 424991,
+        "user_id": 1,
+        "correlation_id": "da07776ec3244f758eb1f29896e5cac5",
+        "kind": "sms_auto_reply",
+        "attempts": 5,
+        "error": "send failed for [REDACTED] at [REDACTED], key was [REDACTED], contact [REDACTED]",
+        "payload_keys": [
+          "address",
+          "api_key",
+          "body",
+          "lead_email",
+          "note"
+        ]
+      },
+      "timestamp": "2026-11-09T03:13:58.177956+00:00",
+      "text": "[TopAI Harness] Harness job 424991 dead-lettered (sms_auto_reply) (event=dead_letter key=dead_letter:424991)",
+      "content": "[TopAI Harness] Harness job 424991 dead-lettered (sms_auto_reply) (event=dead_letter key=dead_letter:424991)"
+    },
+    {
+      "event": "dead_letter",
+      "key": "dead_letter:424992",
+      "title": "Harness job 424992 dead-lettered (sms_auto_reply)",
+      "detail": {
+        "job_id": 424992,
+        "user_id": 1,
+        "correlation_id": "9fb81ce484ea44acaf345afa1b72b442",
+        "kind": "sms_auto_reply",
+        "attempts": 5,
+        "error": "permanent boom",
+        "payload_keys": []
+      },
+      "timestamp": "2026-11-09T03:13:58.182238+00:00",
+      "text": "[TopAI Harness] Harness job 424992 dead-lettered (sms_auto_reply) (event=dead_letter key=dead_letter:424992)",
+      "content": "[TopAI Harness] Harness job 424992 dead-lettered (sms_auto_reply) (event=dead_letter key=dead_letter:424992)"
+    },
+    {
+      "event": "dead_letter",
+      "key": "dead_letter:424993",
+      "title": "Harness job 424993 dead-lettered (sms_auto_reply)",
+      "detail": {
+        "job_id": 424993,
+        "user_id": 1,
+        "correlation_id": "81d74d2f000545febf5b9f44cf90be94",
+        "kind": "sms_auto_reply",
+        "attempts": 5,
+        "error": "permanent boom",
+        "payload_keys": []
+      },
+      "timestamp": "2026-11-09T03:13:58.188979+00:00",
+      "text": "[TopAI Harness] Harness job 424993 dead-lettered (sms_auto_reply) (event=dead_letter key=dead_letter:424993)",
+      "content": "[TopAI Harness] Harness job 424993 dead-lettered (sms_auto_reply) (event=dead_letter key=dead_letter:424993)"
+    },
+    {
+      "event": "dead_letter",
+      "key": "dead_letter:424994",
+      "title": "Harness job 424994 dead-lettered (sms_auto_reply)",
+      "detail": {
+        "job_id": 424994,
+        "user_id": 1,
+        "correlation_id": "7f253ee8a4824da79930bd413c3e8253",
+        "kind": "sms_auto_reply",
+        "attempts": 5,
+        "error": "boom",
+        "payload_keys": []
+      },
+      "timestamp": "2026-11-09T03:13:58.192779+00:00",
+      "text": "[TopAI Harness] Harness job 424994 dead-lettered (sms_auto_reply) (event=dead_letter key=dead_letter:424994)",
+      "content": "[TopAI Harness] Harness job 424994 dead-lettered (sms_auto_reply) (event=dead_letter key=dead_letter:424994)"
+    },
+    {
+      "event": "dead_letter",
+      "key": "dead_letter:424994",
+      "title": "Harness job 424994 dead-lettered (sms_auto_reply)",
+      "detail": {
+        "job_id": 424994,
+        "user_id": 1,
+        "correlation_id": "7f253ee8a4824da79930bd413c3e8253",
+        "kind": "sms_auto_reply",
+        "attempts": 5,
+        "error": "boom",
+        "payload_keys": []
+      },
+      "timestamp": "2026-11-09T03:13:58.198908+00:00",
+      "text": "[TopAI Harness] Harness job 424994 dead-lettered (sms_auto_reply) (event=dead_letter key=dead_letter:424994)",
+      "content": "[TopAI Harness] Harness job 424994 dead-lettered (sms_auto_reply) (event=dead_letter key=dead_letter:424994)"
+    }
+  ],
+  "summary": {
+    "total_posts": 11,
+    "http_200": 10,
+    "http_500_deliberate": 1,
+    "events": {
+      "dead_letter": 7,
+      "provider_failure": 1,
+      "worker_failure": 1,
+      "spend_alert": 2
+    },
+    "failures": []
+  }
+}

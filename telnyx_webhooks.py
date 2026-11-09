@@ -486,7 +486,15 @@ def _handle_delivery(payload):
 
 
 def _send_help_reply(provider, user_id, lead_id, contact_phone, from_number):
-    """Compliance HELP auto-reply for the Telnyx messaging program."""
+    """Compliance HELP auto-reply for the Telnyx messaging program.
+
+    Universal cost recording (launch blocker 5): the reply is a
+    billable Telnyx send, so it is recorded. It is deliberately NOT
+    spend-cap gated: a HELP reply is a carrier-compliance obligation
+    (a consumer who texts HELP must get the program info), so blocking
+    it on spend would violate the messaging program's compliance
+    rules. The cost still counts toward the tenant's monthly total.
+    """
     import sms_consent
 
     body = sms_consent.SMS_HELP_RESPONSE
@@ -496,6 +504,18 @@ def _send_help_reply(provider, user_id, lead_id, contact_phone, from_number):
             body=body,
             from_number=from_number or None,
         )
+        try:
+            from harness.costs import record_sms_send
+
+            record_sms_send(
+                user_id,
+                provider="telnyx",
+                tool="sms_help_reply",
+                result=result,
+                correlation_id=f"help-reply:{lead_id}:{contact_phone}",
+            )
+        except Exception:
+            pass  # recording must never break a compliance reply
         out_id = db.create_sms_message(
             user_id=user_id,
             persona_id=None,

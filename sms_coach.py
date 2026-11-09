@@ -27,8 +27,16 @@ def is_configured():
     return bool((config.ANTHROPIC_API_KEY or "").strip())
 
 
-def analyze_inbound_reply(prompt_text):
-    """Use Claude to analyze an inbound lead SMS. API key stays server-side only."""
+def analyze_inbound_reply(prompt_text, user_id=None, correlation_id=None):
+    """Use Claude to analyze an inbound lead SMS. API key stays server-side only.
+
+    ``user_id`` scopes the cost-ledger row for this call (the harness
+    SMS handler and the direct inbound path both pass the tenant); when
+    it is None the usage cannot be attributed and is not recorded.
+    ``correlation_id`` traces the row back to the inbound event. This
+    is the SINGLE recording point for a coach call — callers must not
+    record the same usage again (see harness/sms_handler.py).
+    """
     if not is_configured():
         raise SmsCoachError("Claude analysis is not configured.")
 
@@ -70,6 +78,24 @@ def analyze_inbound_reply(prompt_text):
             "output_tokens": getattr(usage, "output_tokens", 0) or 0,
             "model": config.CLAUDE_MODEL,
         }
+    # Universal cost recording (launch blocker 5): the coach call is
+    # billable, so record it here — the single recording point for this
+    # path. Best-effort: a recording failure never fails the reply.
+    # Without a user_id there is no tenant to attribute the spend to,
+    # so nothing is recorded.
+    if user_id is not None:
+        try:
+            from harness.costs import record_anthropic_usage
+
+            record_anthropic_usage(
+                user_id,
+                "sms_coach",
+                validated.get("usage") or {},
+                model=config.CLAUDE_MODEL,
+                correlation_id=correlation_id,
+            )
+        except Exception:
+            pass
     return validated
 
 

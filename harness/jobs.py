@@ -37,14 +37,24 @@ Tenant-scoping contract (M5/M6):
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import db
 
+logger = logging.getLogger(__name__)
+
 MAX_ATTEMPTS = 5
 MAX_BACKOFF_MINUTES = 120
+# A claimed job is only reclaimable when its worker looks dead: the
+# heartbeat freshness window matches the status API's 120 s window
+# (harness.routes._harness_worker_heartbeat). A claim whose worker still
+# has a fresh ``running`` heartbeat is left alone, even past the stale
+# timeout -- otherwise a live worker running a job longer than the
+# timeout would have its job reclaimed and double-executed.
+HEARTBEAT_FRESH_SECONDS = 120
 
 # --- Secret / PII redaction (H3) -------------------------------------------
 # Durable harness rows must never hold verbatim secrets. Payloads are
@@ -444,25 +454,64 @@ def reclaim_stale_jobs(timeout_seconds=300):
     are never silently lost — this is the recovery the SMS campaign worker
     lacks.
 
+    Exactly-once guard: a stale claim is NOT reclaimed while its worker
+    is demonstrably alive — i.e. ``claimed_by`` matches a
+    ``sms_worker_heartbeats`` row with ``status='running'`` and a
+    ``last_seen_at`` within the last ``HEARTBEAT_FRESH_SECONDS`` (120 s,
+    the same window the status API uses). Without this, a live worker
+    running a job longer than ``timeout_seconds`` would have its job
+    reclaimed mid-execution and the job would run twice. A dead worker's
+    heartbeat goes stale within 120 s, so its jobs are still reclaimed
+    once the claim itself is past the timeout. Claims with no heartbeat
+    row at all (crashed before the first heartbeat, test fixtures) are
+    reclaimed as before. If the heartbeat table is missing (migration
+    016 not applied), the guard is skipped and the plain reclaim runs.
+
     Worker-authority by design (see module docstring): takes no tenant
     input and must never be exposed to a tenant-facing route.
     """
     cutoff = (
         datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
     ).isoformat()
+    fresh_cutoff = (
+        datetime.now(timezone.utc) - timedelta(seconds=HEARTBEAT_FRESH_SECONDS)
+    ).isoformat()
     now = _now()
-    with db.get_db() as conn:
-        cur = conn.execute(
-            """
-            UPDATE harness_jobs
-            SET status = 'pending', claimed_at = NULL, claimed_by = NULL,
-                next_attempt_at = NULL, updated_at = ?
-            WHERE status IN ('claimed', 'running')
-              AND claimed_at IS NOT NULL
-              AND claimed_at <= ?
-            """,
-            (now, cutoff),
+    guarded_sql = """
+        UPDATE harness_jobs
+        SET status = 'pending', claimed_at = NULL, claimed_by = NULL,
+            next_attempt_at = NULL, updated_at = ?
+        WHERE status IN ('claimed', 'running')
+          AND claimed_at IS NOT NULL
+          AND claimed_at <= ?
+          AND NOT EXISTS (
+              SELECT 1 FROM sms_worker_heartbeats h
+              WHERE h.worker_id = harness_jobs.claimed_by
+                AND h.status = 'running'
+                AND h.last_seen_at >= ?
+          )
+    """
+    plain_sql = """
+        UPDATE harness_jobs
+        SET status = 'pending', claimed_at = NULL, claimed_by = NULL,
+            next_attempt_at = NULL, updated_at = ?
+        WHERE status IN ('claimed', 'running')
+          AND claimed_at IS NOT NULL
+          AND claimed_at <= ?
+    """
+    try:
+        with db.get_db() as conn:
+            cur = conn.execute(guarded_sql, (now, cutoff, fresh_cutoff))
+            return int(cur.rowcount or 0)
+    except Exception:
+        # Heartbeat table missing (or any guard failure): fall back to
+        # the plain reclaim rather than leaving crashed jobs stranded.
+        logger.warning(
+            "reclaim_stale_jobs: live-worker guard unavailable; "
+            "falling back to unguarded reclaim"
         )
+    with db.get_db() as conn:
+        cur = conn.execute(plain_sql, (now, cutoff))
         return int(cur.rowcount or 0)
 
 

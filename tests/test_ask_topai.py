@@ -124,7 +124,7 @@ def test_text_fallback_reaches_interpret_endpoint(app_client, two_users, monkeyp
     assert res.status_code == 200
     data = res.get_json()
     assert data["status"] == "executed"
-    assert data["confirmation_token"] is None
+    assert "confirmation_token" not in data
     assert "Ada Lopez" in (data.get("message") or "")
     leads = [lead for lead in db.list_leads(u1, limit=100) if lead.get("name") == "Ada Lopez"]
     assert len(leads) == 1
@@ -166,7 +166,7 @@ def test_create_lead_executes_on_send(app_client, two_users, monkeypatch):
     assert interpreted.status_code == 200
     data = interpreted.get_json()
     assert data["status"] == "executed"
-    assert data["confirmation_token"] is None
+    assert "confirmation_token" not in data
     assert "Lead created: John Smith" in data["message"]
     leads = [lead for lead in db.list_leads(u1, limit=100) if lead["phone_number"] == "+13035551212"]
     assert len(leads) == 1
@@ -199,7 +199,7 @@ def test_duplicate_phone_does_not_overwrite(app_client, two_users, monkeypatch):
     data = res.get_json()
     assert data["status"] == "clarification_required"
     assert "Sarah Johnson" in data["message"]
-    assert data["confirmation_token"] is None
+    assert "confirmation_token" not in data
     sarah = db.get_lead(sarah_id, u1)
     assert sarah["name"] == "Sarah Johnson"
     assert "Open house visitor" in (sarah.get("notes") or "")
@@ -252,7 +252,7 @@ def test_ambiguous_lead_name_does_not_guess(app_client, two_users, monkeypatch):
     data = res.get_json()
     assert data["status"] == "clarification_required"
     assert "multiple leads named John" in data["message"]
-    assert data["confirmation_token"] is None
+    assert "confirmation_token" not in data
     assert "Call back" not in (db.get_lead(john1, u1).get("notes") or "")
     assert "Call back" not in (db.get_lead(john2, u1).get("notes") or "")
 
@@ -349,7 +349,7 @@ def test_missing_phone_asks_instead_of_inventing(app_client, two_users, monkeypa
     data = res.get_json()
     assert data["status"] == "clarification_required"
     assert "phone" in data["message"].lower()
-    assert data["confirmation_token"] is None
+    assert "confirmation_token" not in data
     assert db.list_leads(u1, limit=20) == []
 
 
@@ -363,7 +363,7 @@ def test_unsupported_and_arbitrary_actions_rejected(app_client, two_users, monke
     monkeypatch.setattr("ask_topai.agent.complete", _as_complete(send_sms))
     unsupported = app_client.post("/api/ask-topai/interpret", json={"text": "Text Sarah that I am running late"})
     assert unsupported.get_json()["status"] == "unsupported_action"
-    assert unsupported.get_json()["confirmation_token"] is None
+    assert "confirmation_token" not in unsupported.get_json()
 
     def drop_table(_text, _context):
         return {"status": "ok", "commands": [{"action": "drop_table", "arguments": {"name": "leads"}}]}

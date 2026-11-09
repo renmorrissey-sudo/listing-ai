@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import crm_db
 from db import get_db
 
 SOURCE = "ask_topai"
-TOKEN_TTL_MINUTES = 15
 
 
 def _now():
@@ -30,15 +28,12 @@ def record_command(
     status,
     lead_id=None,
     result=None,
-    confirmation_token=None,
-    expires_at=None,
     model=None,
     input_source=None,
     tools_invoked=None,
     session_key=None,
     request_id=None,
 ):
-    token_hash = hash_token(confirmation_token) if confirmation_token else None
     request_hash = hash_token(f"{user_id}:{request_id}") if request_id else None
     created = _now().isoformat()
     tools_json = json.dumps(tools_invoked or [])[:2000] if tools_invoked is not None else None
@@ -46,22 +41,20 @@ def record_command(
         cur = conn.execute(
             """
             INSERT INTO ask_topai_commands
-                (user_id, source, transcript, interpreted_json, confirmation_token_hash,
-                 status, lead_id, result_json, created_at, expires_at,
+                (user_id, source, transcript, interpreted_json,
+                 status, lead_id, result_json, created_at,
                  model, input_source, tools_invoked_json, session_key, request_id_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
                 SOURCE,
                 str(transcript or "")[:4000],
                 json.dumps(interpreted or {})[:4000],
-                token_hash,
                 status,
                 lead_id,
                 json.dumps(result or {})[:4000] if result is not None else None,
                 created,
-                expires_at,
                 (str(model)[:80] if model else None),
                 (str(input_source)[:20] if input_source else None),
                 tools_json,
@@ -70,23 +63,6 @@ def record_command(
             ),
         )
         return cur.lastrowid
-
-
-def get_by_token(user_id, token: str):
-    if not token:
-        return None
-    token_hash = hash_token(token)
-    with get_db() as conn:
-        row = conn.execute(
-            """
-            SELECT * FROM ask_topai_commands
-            WHERE user_id = ? AND confirmation_token_hash = ?
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (user_id, token_hash),
-        ).fetchone()
-    return dict(row) if row else None
 
 
 def get_by_request_id(user_id, request_id: str):
@@ -104,30 +80,6 @@ def get_by_request_id(user_id, request_id: str):
             (user_id, request_hash),
         ).fetchone()
     return dict(row) if row else None
-
-
-def get_pending_by_token(user_id, token: str):
-    if not token:
-        return None
-    token_hash = hash_token(token)
-    now = _now().isoformat()
-    with get_db() as conn:
-        row = conn.execute(
-            """
-            SELECT * FROM ask_topai_commands
-            WHERE user_id = ? AND confirmation_token_hash = ?
-              AND status = 'pending_confirmation'
-            """,
-            (user_id, token_hash),
-        ).fetchone()
-    if not row:
-        return None
-    data = dict(row)
-    expires = data.get("expires_at") or ""
-    if expires and expires < now:
-        mark_status(data["id"], user_id, "expired")
-        return None
-    return data
 
 
 def mark_status(command_id, user_id, status, *, result=None, executed=False):
@@ -152,12 +104,6 @@ def mark_status(command_id, user_id, status, *, result=None, executed=False):
                 user_id,
             ),
         )
-
-
-def issue_confirmation_token() -> tuple[str, str]:
-    token = secrets.token_urlsafe(32)
-    expires = (_now() + timedelta(minutes=TOKEN_TTL_MINUTES)).isoformat()
-    return token, expires
 
 
 def add_lead_audit(user_id, lead_id, summary, payload):

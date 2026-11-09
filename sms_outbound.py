@@ -31,6 +31,28 @@ def _correlation_id():
     return uuid.uuid4().hex[:12]
 
 
+def _record_sms_cost(user_id, provider_name, result, correlation_id):
+    """Record one outbound SMS send to the harness cost ledger.
+
+    Best-effort wrapper around ``harness.costs.record_sms_send`` —
+    never raises, so a recording failure cannot fail a send the
+    provider already accepted. Cost is the provider-reported amount
+    when Telnyx supplied one, else the per-segment placeholder rate.
+    """
+    try:
+        from harness.costs import record_sms_send
+
+        record_sms_send(
+            user_id,
+            provider=provider_name,
+            tool="sms_send",
+            result=result,
+            correlation_id=correlation_id,
+        )
+    except Exception:
+        logger.warning("sms cost recording failed user_id=%s", user_id)
+
+
 def _safe_audit(user_id, action, *, actor_user_id=None, lead_id=None, metadata=None):
     try:
         tdb.append_sms_audit(
@@ -407,6 +429,28 @@ def send_authorized_sms(
         )
         return payload, payload["error"], status
 
+    # Universal spend cap (launch blocker 5): the SMS send itself is
+    # billable (Telnyx/Twilio/SimpleTexting), so a capped tenant sends
+    # nothing — fail safe before the provider call. The coach/AI cost
+    # for a generated message is gated separately at generation time.
+    try:
+        from harness.costs import check_spend_cap
+
+        _cap_allowed, _cap_reason = check_spend_cap(user_id)
+    except Exception:
+        _cap_allowed, _cap_reason = True, None  # fail open on unreadable ledger
+    if not _cap_allowed:
+        payload, status = _error_payload(
+            error=_cap_reason,
+            stage=STAGE_VALIDATION,
+            correlation_id=correlation_id,
+            category="spend_cap_reached",
+            http_status=402,
+            lead_id=lead_id,
+            provider=provider_name,
+        )
+        return payload, payload["error"], status
+
     _safe_audit(
         user_id,
         "message_send_attempt",
@@ -487,6 +531,10 @@ def send_authorized_sms(
 
     send_status = result.get("status") or "queued"
     provider_message_id = result.get("provider_message_id")
+    # Universal cost recording: the provider accepted the message, so
+    # the send is billable — record it (Telnyx-reported amount when
+    # supplied, else the per-segment placeholder rate).
+    _record_sms_cost(user_id, provider_name, result, correlation_id)
     try:
         db.update_sms_message_send_result(
             message_id,

@@ -160,7 +160,6 @@ def _replay_request(row: dict, session_id=None) -> dict:
             "message": "Ask TopAI is working...",
             "duplicate": True,
             "preview": None,
-            "confirmation_token": None,
             "choices": [],
             "session_id": session_id or row.get("session_key"),
         }
@@ -172,7 +171,6 @@ def _replay_request(row: dict, session_id=None) -> dict:
         "failures": previous.get("failures") or [],
         "duplicate": True,
         "preview": None,
-        "confirmation_token": None,
         "choices": [],
         "session_id": session_id or row.get("session_key"),
         "refresh": previous.get("refresh") or _refresh_hints(previous.get("results") or []),
@@ -243,7 +241,6 @@ def interpret(
             "code": raw.get("code"),
             "message": raw.get("message") or "Ask TopAI could not process that.",
             "preview": None,
-            "confirmation_token": None,
             "choices": [],
             "session_id": session_id,
         }
@@ -275,7 +272,6 @@ def interpret(
             "status": _api_status(status),
             "message": parsed.get("message"),
             "preview": None,
-            "confirmation_token": None,
             "choices": choices,
             "session_id": session_id,
         }
@@ -296,7 +292,6 @@ def interpret(
             "status": "clarification_required",
             "message": err,
             "preview": None,
-            "confirmation_token": None,
             "choices": resolve_choices,
             "session_id": session_id,
         }
@@ -333,7 +328,6 @@ def interpret(
             "message": message,
             "results": results,
             "preview": None,
-            "confirmation_token": None,
             "choices": [],
             "session_id": session_id,
             "refresh": refresh,
@@ -347,7 +341,6 @@ def interpret(
             "results": results,
             "failures": failures,
             "preview": None,
-            "confirmation_token": None,
             "choices": [],
             "session_id": session_id,
             "refresh": refresh,
@@ -361,7 +354,6 @@ def interpret(
         "choices": first.get("choices") or [],
         "results": results,
         "session_id": session_id,
-        "confirmation_token": None,
         "preview": None,
     }
 
@@ -444,69 +436,3 @@ def _friendly_summary(results, failures):
         return failures[0].get("error") or "I couldn't complete that."
     return "Nothing was changed."
 
-
-def confirm(user_id, token: str, raw_context: dict | None = None):
-    row = audit.get_by_token(user_id, token)
-    if not row:
-        pending = audit.get_pending_by_token(user_id, token)
-        row = pending
-    if not row:
-        return {"ok": False, "error": "This confirmation is missing or has expired."}, 400
-    if row.get("status") in {"executed", "partial"}:
-        try:
-            previous = json.loads(row.get("result_json") or "{}")
-        except json.JSONDecodeError:
-            previous = {}
-        return {
-            "ok": True,
-            "status": row.get("status"),
-            "message": previous.get("message") or "This request was already completed.",
-            "results": previous.get("results") or [],
-            "failures": previous.get("failures") or [],
-            "duplicate": True,
-        }, 200
-    if row.get("status") != "pending_confirmation":
-        return {"ok": False, "error": "This confirmation is missing or has expired."}, 400
-    expires = row.get("expires_at") or ""
-    from datetime import datetime, timezone
-
-    if expires and expires < datetime.now(timezone.utc).isoformat():
-        audit.mark_status(row["id"], user_id, "expired")
-        return {"ok": False, "error": "This confirmation is missing or has expired."}, 400
-
-    context = sanitize_context(user_id, raw_context)
-    try:
-        interpreted = json.loads(row.get("interpreted_json") or "{}")
-    except json.JSONDecodeError:
-        return {"ok": False, "error": "Stored command is invalid."}, 400
-    commands = interpreted.get("commands") or []
-    grounding = interpreted.get("grounding_transcript") or row.get("transcript") or ""
-    if not commands:
-        audit.mark_status(row["id"], user_id, "failed", result={"error": "No commands"})
-        return {"ok": False, "error": "Nothing to execute."}, 400
-
-    results, failures, message = _run_commands(user_id, commands, grounding, context)
-    payload = {"results": results, "failures": failures, "message": message, "refresh": _refresh_hints(results)}
-    if results and not failures:
-        audit.mark_status(row["id"], user_id, "executed", result=payload, executed=True)
-        return {"ok": True, "status": "executed", "results": results, "message": message, "refresh": payload["refresh"]}, 200
-    if results and failures:
-        audit.mark_status(row["id"], user_id, "partial", result=payload, executed=True)
-        return {
-            "ok": False,
-            "status": "partial",
-            "results": results,
-            "failures": failures,
-            "message": message,
-            "refresh": payload["refresh"],
-        }, 200
-    audit.mark_status(
-        row["id"],
-        user_id,
-        "failed",
-        result=payload,
-        executed=True,
-    )
-    first = failures[0] if failures else {}
-    body = {"ok": False, "error": first.get("error") or "Could not complete that action.", "choices": first.get("choices") or [], "completed": results}
-    return body, 409 if first.get("choices") else 400
