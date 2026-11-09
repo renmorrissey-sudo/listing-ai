@@ -278,6 +278,13 @@ def test_campaign_import_certify_and_queue(two_users, monkeypatch):
         mock_provider.send_sms.assert_called()
         call_kwargs = mock_provider.send_sms.call_args.kwargs
         assert call_kwargs.get("from_number") == sender["sender_number"]
+        # Drain the second job too: claim_next_job() is global (oldest pending
+        # job across all campaigns), so a leftover pending job here would be
+        # claimed by a later test's process_one() instead of its own job
+        # (this leaked job broke test_campaign_quiet_hours_defers_to_next_window).
+        assert process_one("worker-test") is True
+        assert mock_provider.send_sms.call_count == 2
+        assert process_one("worker-test") is False
 
 
 def test_tenant_isolation_on_jobs(two_users):

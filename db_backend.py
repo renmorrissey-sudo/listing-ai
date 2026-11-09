@@ -58,12 +58,24 @@ class CompatConnection:
                 cur = self._raw.execute(sql)
             lastrowid = None
             if params and self._postgres_insert_has_id_sequence(sql):
-                try:
-                    row = self._raw.execute("SELECT lastval() AS id").fetchone()
-                    if row is not None:
-                        lastrowid = row["id"] if isinstance(row, dict) else row[0]
-                except Exception:
-                    lastrowid = None
+                # Only ask lastval() when the INSERT actually inserted a row.
+                # INSERT ... SELECT (e.g. migration 029's harness_settings
+                # seed) can insert zero rows when its source table is empty;
+                # lastval() then errors ("lastval is not yet defined in this
+                # session") and aborts the whole transaction — even though
+                # the error is swallowed below, so the failure only surfaces
+                # later at _stamp as InFailedSqlTransaction. psycopg reports
+                # the inserted-row count in cur.rowcount (0 for a zero-row
+                # INSERT ... SELECT / ON CONFLICT DO NOTHING). Skipping
+                # lastval() leaves lastrowid None, exactly as a zero-row
+                # insert reports on the SQLite path.
+                if cur.rowcount and cur.rowcount > 0:
+                    try:
+                        row = self._raw.execute("SELECT lastval() AS id").fetchone()
+                        if row is not None:
+                            lastrowid = row["id"] if isinstance(row, dict) else row[0]
+                    except Exception:
+                        lastrowid = None
             return CompatCursor(cur, lastrowid=lastrowid)
 
         if params is None:

@@ -118,6 +118,15 @@ _IDEMPOTENCY_CONSENT = (
     "sha256(user_id + tool + lead_id + new_consent_status) — "
     "consent changes require an approval row, not just a key"
 )
+# Blocked-only tools never execute in any mode, so no idempotency key is
+# ever derived for them. (L1: the previous code assigned the consent
+# derivation to delete/sql/subscription tools and the send derivation
+# logic by name only — e.g. delete_lead and execute_sql carried a
+# consent-change derivation that describes nothing they do.)
+_IDEMPOTENCY_BLOCKED = (
+    "none — blocked in all modes; the tool never executes, so no "
+    "idempotency key is derived"
+)
 
 
 def _entry(name, surfaces, kind, risk, idempotency, cost_weight):
@@ -178,9 +187,19 @@ def _build_registry() -> dict:
                 _IDEMPOTENCY_DRAFT, 2,
             )
         else:
-            tools[name] = _entry(
-                name, ("claude",), "read", "routine", _IDEMPOTENCY_READ, 2
-            )
+            # Future tools: classify from ask_topai.registry's source of
+            # truth. Anything the registry cannot classify as a read is a
+            # write (fail safe) — never assume read for a tool that may
+            # create content (create_cma / generate_listing_content).
+            future_kind = _ask_registry.future_tool_kind(name)
+            if future_kind == "read":
+                tools[name] = _entry(
+                    name, ("claude",), "read", "routine", _IDEMPOTENCY_READ, 2
+                )
+            else:
+                tools[name] = _entry(
+                    name, ("claude",), "write", "sensitive", _IDEMPOTENCY_DRAFT, 2
+                )
 
     # Vapi tools. Names are taken verbatim from voice_tools.py.
     # list_open_leads / update_lead_status already exist from the Claude
@@ -225,21 +244,31 @@ def _build_registry() -> dict:
             continue
 
     # Blocked-only tools (autonomy.BLOCK_TOOLS with no registry entry).
-    # Generic sends are mode-gated ("sensitive", H2); every other name
-    # here stays "restricted". send_lead_email is the one send that
-    # stays restricted in all surfaces.
+    # Generic sends are mode-gated ("sensitive", H2) and keep the send
+    # derivation — they execute in authorized mode, so a per-message key
+    # derivation is meaningful for them. Every other name here is
+    # blocked in ALL modes and never executes, so no idempotency key is
+    # ever derived for it (L1: these used to carry the consent-change
+    # derivation, which describes nothing a delete / SQL / subscription
+    # tool does).
     for name in BLOCKED_ONLY_TOOLS:
         risk = (
             "sensitive"
             if (name in SEND_TOOLS and name != "send_lead_email")
             else "restricted"
         )
+        idempotency = (
+            _IDEMPOTENCY_SEND
+            if (name in SEND_TOOLS and name != "send_lead_email")
+            else _IDEMPOTENCY_BLOCKED
+        )
         if name in tools:
             tools[name]["risk_class"] = risk
+            tools[name]["idempotency_key"] = idempotency
             continue
         tools[name] = _entry(
             name, ("claude",), "write", risk,
-            _IDEMPOTENCY_SEND if name in SEND_TOOLS else _IDEMPOTENCY_CONSENT,
+            idempotency,
             5,
         )
 

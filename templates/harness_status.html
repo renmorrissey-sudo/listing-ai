@@ -21,6 +21,12 @@
         <li>AI enabled: <strong>{{ 'yes' if ai_enabled else 'no' }}</strong></li>
         <li>Pending approvals: <strong>{{ pending_approvals }}</strong></li>
         <li>Pending jobs: <strong>{{ pending_jobs }}</strong></li>
+        {% if job_counts is defined %}
+        <li>Jobs pending: <strong>{{ job_counts.pending }}</strong></li>
+        <li>Jobs failed (awaiting retry): <strong>{{ job_counts.failed }}</strong></li>
+        <li>Jobs retried: <strong>{{ job_counts.retried }}</strong></li>
+        <li>Jobs dead-lettered: <strong>{{ job_counts.dead_letter }}</strong></li>
+        {% endif %}
         {% if jobs_24h is defined %}
         <li>Jobs in the last 24 hours: <strong>{{ jobs_24h }}</strong></li>
         {% endif %}

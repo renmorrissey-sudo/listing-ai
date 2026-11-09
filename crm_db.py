@@ -278,7 +278,14 @@ def update_lead_activity(user_id, activity_id, summary=None, payload=None, event
 
 
 def set_lead_status(user_id, lead_id, new_status, actor_user_id=None, from_automation=False):
-    new_status = normalize_lead_status(new_status)
+    # D5: never silently coerce an invalid status to "new" on a write.
+    # Legacy aliases still resolve, but an unrecognized status is rejected.
+    from crm_constants import LEGACY_STATUS_MAP, LEAD_STATUS_SET
+
+    raw_status = (new_status or "").strip().lower().replace(" ", "_")
+    new_status = LEGACY_STATUS_MAP.get(raw_status, raw_status)
+    if new_status not in LEAD_STATUS_SET:
+        return None, "Invalid lead status."
     with get_db() as conn:
         lead = conn.execute(
             "SELECT * FROM leads WHERE id = ? AND user_id = ?",

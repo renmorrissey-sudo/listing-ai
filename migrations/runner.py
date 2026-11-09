@@ -54,6 +54,9 @@ MIGRATION_MODULES = [
     "migrations.versions.027_scheduling_settings",
     "migrations.versions.028_user_profile_phone",
     "migrations.versions.029_harness_foundation",
+    "migrations.versions.030_harness_scoped_idempotency",
+    "migrations.versions.031_harness_job_correlation",
+    "migrations.versions.032_tenant_sms_senders_scoped_unique",
 ]
 
 # Required after 001_baseline. App has no separate accounts/tenants/subscriptions

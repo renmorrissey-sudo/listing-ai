@@ -25,8 +25,9 @@ from db_backend import CompatConnection
 class _PgFormatValidatingCursor:
     """Mimic psycopg: pyformat SQL with an unescaped literal % raises ValueError."""
 
-    def __init__(self):
+    def __init__(self, rowcount=0):
         self._rows = []
+        self._rowcount = rowcount
 
     def execute(self, sql, params=None):
         if params:
@@ -42,7 +43,8 @@ class _PgFormatValidatingCursor:
 
     @property
     def rowcount(self):
-        return 0
+        # psycopg: number of rows affected by the last INSERT/UPDATE/DELETE.
+        return self._rowcount
 
 
 class _PgFormatValidatingRaw:
@@ -62,11 +64,27 @@ class _PgFormatValidatingRaw:
 
 
 class _PgLastrowidRaw:
-    def __init__(self, id_defaults=None):
+    """Fake psycopg connection modelling lastval() session semantics.
+
+    Real Postgres: SELECT lastval() errors ("lastval is not yet defined in
+    this session") when no sequence value has been generated yet in the
+    session, and that error aborts the transaction — every later statement
+    then fails with InFailedSqlTransaction until rollback.
+    """
+
+    def __init__(self, id_defaults=None, insert_rowcount=1):
         self.id_defaults = id_defaults or {}
+        self.insert_rowcount = insert_rowcount
         self.statements = []
+        self._lastval_defined = False
+        self._aborted = False
 
     def execute(self, sql, params=None):
+        if self._aborted:
+            raise Exception(
+                "current transaction is aborted, commands ignored until "
+                "end of transaction block"
+            )
         self.statements.append((sql, params))
         cur = _PgFormatValidatingCursor()
         if "information_schema.columns" in sql:
@@ -74,7 +92,14 @@ class _PgLastrowidRaw:
             if table in self.id_defaults:
                 cur._rows = [{"default_value": self.id_defaults[table]}]
         elif sql.startswith("SELECT lastval()"):
+            if not self._lastval_defined:
+                self._aborted = True
+                raise Exception("lastval is not yet defined in this session")
             cur._rows = [{"id": 42}]
+        elif sql.strip().upper().startswith("INSERT"):
+            cur._rowcount = self.insert_rowcount
+            if self.insert_rowcount > 0:
+                self._lastval_defined = True
         return cur
 
     def commit(self):
@@ -145,6 +170,56 @@ def test_postgres_insert_with_id_sequence_still_sets_lastrowid():
 
     assert cur.lastrowid == 42
     assert any(sql.startswith("SELECT lastval()") for sql, _ in raw.statements)
+
+
+def test_postgres_insert_select_zero_rows_does_not_call_lastval():
+    """029 regression: seed INSERT ... SELECT inserts zero rows on an empty DB.
+
+    lastval() errors when no sequence value was generated yet in the
+    session ("lastval is not yet defined in this session") and aborts the
+    transaction; the error is swallowed in CompatConnection.execute, so the
+    failure only surfaces later at _stamp as InFailedSqlTransaction.
+    CompatConnection must not call lastval() when nothing was inserted,
+    and the transaction must stay usable afterwards.
+    """
+    raw = _PgLastrowidRaw(
+        id_defaults={"harness_settings": "nextval('harness_settings_id_seq'::regclass)"},
+        insert_rowcount=0,
+    )
+    conn = CompatConnection(raw, "postgres")
+
+    cur = conn.execute(
+        """
+        INSERT INTO harness_settings
+            (user_id, mode, paused, ai_enabled, created_at, updated_at)
+        SELECT id, 'drafts_only', 0, 1, ?, ?
+        FROM users
+        WHERE NOT EXISTS (
+            SELECT 1 FROM harness_settings hs WHERE hs.user_id = users.id
+        )
+        ON CONFLICT (user_id) DO NOTHING
+        """,
+        ("2026-11-08T00:00:00+00:00", "2026-11-08T00:00:00+00:00"),
+    )
+
+    assert cur.lastrowid is None
+    assert cur.rowcount == 0
+    assert not any(sql.startswith("SELECT lastval()") for sql, _ in raw.statements)
+    # Transaction not poisoned: the runner's follow-up _stamp INSERT still runs.
+    conn.execute(
+        "INSERT INTO schema_migrations (version) VALUES (?)",
+        ("029_harness_foundation",),
+    )
+
+
+def test_fake_postgres_lastval_without_insert_aborts_transaction():
+    """Harness fidelity: lastval() with no prior insert errors and poisons
+    the transaction, as real Postgres does (InFailedSqlTransaction)."""
+    raw = _PgLastrowidRaw(insert_rowcount=0)
+    with pytest.raises(Exception, match="lastval is not yet defined"):
+        raw.execute("SELECT lastval() AS id")
+    with pytest.raises(Exception, match="current transaction is aborted"):
+        raw.execute("SELECT 1")
 
 
 def test_find_lead_owner_by_phone_like_binding_is_postgres_safe(two_users):

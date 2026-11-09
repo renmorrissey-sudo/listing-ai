@@ -46,6 +46,39 @@ FUTURE_TOOLS = (
     "generate_listing_content",
 )
 
+# Classification of the future tools, for the day any of them is enabled.
+# Two of them CREATE content and must never be treated as reads:
+# ``create_cma`` produces a comparative market analysis document and
+# ``generate_listing_content`` produces listing copy — both are writes,
+# and when enabled they must be ``sensitive`` (draft in Drafts Only),
+# never ``routine`` reads. ``find_matching_listings`` only searches, so
+# it is the one future read. (``draft_*`` are writes and ``send_*`` /
+# ``initiate_ai_call`` are mode-gated sends; they are classified by
+# name in the harness registry.)
+#
+# NOTE — known misclassification, not yet fixed at the enforcement
+# site: ``harness/tools.py`` ``_build_registry`` currently puts every
+# non-send, non-draft future tool in the ``read`` / ``routine`` bucket,
+# so it classifies ``create_cma`` and ``generate_listing_content`` as
+# routine reads. The live fix belongs there — it must consult
+# :func:`future_tool_kind` (or these sets) when building future-tool
+# entries. Until that fix lands, do NOT enable either tool: the policy
+# gate would ALLOW them as reads in ``drafts_only`` mode. This mapping
+# is the source of truth; ``tests/test_ask_topai_confirmation.py``
+# pins it.
+FUTURE_WRITE_TOOLS = frozenset(
+    {
+        "create_cma",
+        "generate_listing_content",
+    }
+)
+
+FUTURE_READ_TOOLS = frozenset(
+    {
+        "find_matching_listings",
+    }
+)
+
 
 def _obj(properties: dict, required=None, extra=None):
     schema = {
@@ -391,3 +424,24 @@ def is_enabled(name: str) -> bool:
 
 def is_future_tool(name: str) -> bool:
     return name in FUTURE_TOOLS
+
+
+def future_tool_kind(name: str) -> str | None:
+    """``"write"`` / ``"read"`` for a future tool, else None.
+
+    The intended kind when the tool is eventually enabled:
+    ``create_cma`` / ``generate_listing_content`` create content
+    (writes); ``find_matching_listings`` only searches (read). Draft
+    and send future tools are writes by name (``draft_*`` /
+    ``send_*`` / ``initiate_ai_call``); anything else returns None so
+    the caller must classify it explicitly rather than assuming read.
+    """
+    if name in FUTURE_WRITE_TOOLS:
+        return "write"
+    if name in FUTURE_READ_TOOLS:
+        return "read"
+    if isinstance(name, str) and (
+        name.startswith("draft_") or name.startswith("send_") or name == "initiate_ai_call"
+    ):
+        return "write"
+    return None

@@ -22,6 +22,19 @@ from harness.jobs import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_job_queue():
+    """The session DB is shared by every test (tests/conftest.py), so
+    earlier tests can leave harness jobs behind. Tests in this file
+    assert on the queue as a whole (claim order, limits, emptiness), so
+    clear the queue first: the assertions below are then about this
+    test's jobs only."""
+    db.init_db()
+    with db.get_db() as conn:
+        conn.execute("DELETE FROM harness_jobs")
+    yield
+
+
 def _make_due(job_id):
     """Force a failed job's next_attempt_at into the past so it is claimable."""
     with db.get_db() as conn:
@@ -72,14 +85,19 @@ def test_enqueue_without_key_creates_distinct_jobs(two_users):
 
 
 def test_enqueue_same_key_for_different_users_returns_first_job(two_users):
-    # The idempotency key is global; a second tenant reusing it gets the
-    # original job id back and no duplicate row is created.
+    # M6: idempotency keys are scoped by (user_id, idempotency_key); a
+    # second tenant reusing the same key gets its OWN new job, never the
+    # first tenant's job id. Same-tenant reuse is still idempotent.
     u1, u2 = two_users
     first = enqueue_job(u1, "sms_auto_reply", {}, idempotency_key="key-shared-1")
     second = enqueue_job(u2, "sms_auto_reply", {}, idempotency_key="key-shared-1")
-    assert first == second
+    assert first != second
     assert get_job(first, u2) is None
-    complete_job(first)
+    assert get_job(second, u2) is not None
+    assert get_job(second, u1) is None
+    assert enqueue_job(u1, "sms_auto_reply", {}, idempotency_key="key-shared-1") == first
+    complete_job(first, user_id=u1)
+    complete_job(second, user_id=u2)
 
 
 # --- Claim / complete round-trip --------------------------------------------
@@ -164,11 +182,17 @@ def test_fail_dead_letters_after_five_attempts(two_users):
 def test_non_retryable_fail_dead_letters_immediately(two_users):
     u1, _ = two_users
     job_id = enqueue_job(u1, "sms_auto_reply", {})
-    claim_jobs(limit=1)
+    # Claim this job the way the worker would. Other tests may have left
+    # pending jobs behind in the shared session DB, so scope every
+    # assertion to this job instead of assuming the queue is globally
+    # empty: claim widely, then check only this job's state.
+    claimed = claim_jobs(limit=100)
+    assert job_id in {j["id"] for j in claimed}
     status = fail_job(job_id, "permanent: missing fields", retryable=False)
     assert status == "dead_letter"
     assert _row(job_id)["status"] == "dead_letter"
-    assert claim_jobs(limit=10) == []
+    # Dead-lettered jobs are never retried: no later claim returns it.
+    assert job_id not in {j["id"] for j in claim_jobs(limit=100)}
 
 
 # --- Stale-claim recovery -----------------------------------------------------

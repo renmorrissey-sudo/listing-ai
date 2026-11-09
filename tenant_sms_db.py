@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from db import get_db, get_lead
 from db_backend import bind_bool, sql_is_true
+
+logger = logging.getLogger(__name__)
 
 
 def _now():
@@ -149,25 +152,39 @@ def ensure_telnyx_platform_sender(user_id):
     """
     Assign the platform Telnyx From number to this subscriber without creating duplicates.
     Upserts the single tenant_sms_senders row for user_id.
+
+    Fail-closed: a database error is logged and raised, never swallowed
+    and never papered over with an in-memory sender. Callers must treat
+    the raise as "this tenant has no registered sender" (see
+    sms_authorization.require_tenant_sender).
     """
     import config
 
     phone = (config.TELNYX_PHONE_NUMBER or "").strip()
     if not phone:
         return None
-    return upsert_tenant_sender(
-        user_id,
-        sender_number=phone,
-        sms_provider="telnyx",
-        provider_number_id=(config.TELNYX_MESSAGING_PROFILE_ID or "").strip() or None,
-        provider_account_reference="platform",
-        sms_enabled=True,
-        registration_status="verified",
-        metadata={
-            "source": "telnyx_platform",
-            "messaging_profile_id": (config.TELNYX_MESSAGING_PROFILE_ID or "").strip() or None,
-        },
-    )
+    try:
+        return upsert_tenant_sender(
+            user_id,
+            sender_number=phone,
+            sms_provider="telnyx",
+            provider_number_id=(config.TELNYX_MESSAGING_PROFILE_ID or "").strip() or None,
+            provider_account_reference="platform",
+            sms_enabled=True,
+            registration_status="verified",
+            metadata={
+                "source": "telnyx_platform",
+                "messaging_profile_id": (config.TELNYX_MESSAGING_PROFILE_ID or "").strip() or None,
+            },
+        )
+    except Exception:
+        logger.exception(
+            "ensure_telnyx_platform_sender failed user_id=%s sender_number=%s; "
+            "tenant has no registered sender until this succeeds",
+            user_id,
+            phone,
+        )
+        raise
 
 
 def list_tenant_senders(user_id=None):

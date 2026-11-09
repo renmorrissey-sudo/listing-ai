@@ -14,10 +14,10 @@ def _login(client, user_id):
         sess["session_version"] = 1
 
 
-def _telnyx(monkeypatch, *, verification="pending", worker=False, trial=False):
+def _telnyx(monkeypatch, *, verification="pending", worker=False, trial=False, phone="+18888210810"):
     monkeypatch.setattr(config, "SMS_PROVIDER", "telnyx")
     monkeypatch.setattr(config, "TELNYX_API_KEY", "KEY")
-    monkeypatch.setattr(config, "TELNYX_PHONE_NUMBER", "+18888210810")
+    monkeypatch.setattr(config, "TELNYX_PHONE_NUMBER", phone)
     monkeypatch.setattr(config, "TELNYX_MESSAGING_PROFILE_ID", "profile-1")
     monkeypatch.setattr(config, "TELNYX_TOLL_FREE_VERIFICATION_STATUS", verification)
     monkeypatch.setattr(config, "TELNYX_TRIAL_MODE", trial)
@@ -43,17 +43,21 @@ def test_telnyx_configured_pending_does_not_say_not_activated(
     u1, _ = two_users
     db.update_user_subscription(u1, "active")
     _login(app_client, u1)
-    _telnyx(monkeypatch, verification="pending", worker=False, trial=False)
+    # Own platform number for this test: tenant_sms_senders.sender_number
+    # is UNIQUE per (user_id, sender_number) since migration 032, so
+    # ensure_telnyx_platform_sender() can register the configured number
+    # for this user even if another tenant already holds it.
+    _telnyx(monkeypatch, verification="pending", worker=False, trial=False, phone="+18888210811")
     res = app_client.get("/crm/sms-campaigns")
     assert res.status_code == 200
     html = res.get_data(as_text=True)
     assert "SMS is not activated" not in html
     assert "Telnyx SMS is configured. Bulk sending will become available after toll-free verification is approved." in html
-    assert "Assigned sender: +18888210810" in html
+    assert "Assigned sender: +18888210811" in html
     assert "Bulk sending enabled: no" in html
     sender = tdb.get_active_sender(u1)
     assert sender is not None
-    assert sender["sender_number"] == "+18888210810"
+    assert sender["sender_number"] == "+18888210811"
 
 
 def test_missing_assigned_sender_shows_correct_warning(two_users, monkeypatch):

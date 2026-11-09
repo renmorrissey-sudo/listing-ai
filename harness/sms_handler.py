@@ -85,8 +85,15 @@ def get_harness_mode(user_id):
 
 
 def _audit_raw(user_id, *, action, gate_decision, gate_reason, mode=None, target_type=None,
-               target_id=None, job_id=None, cost_cents=None):
-    """Raw-SQL harness_audit insert (fallback when harness.audit is absent)."""
+               target_id=None, job_id=None, cost_cents=None, correlation_id=None):
+    """Raw-SQL harness_audit insert (fallback when harness.audit is absent).
+
+    L4: ``correlation_id`` traces one inbound event end to end; when the
+    caller does not supply it, the job id is used as before.
+    """
+    correlation_id = correlation_id or (
+        str(job_id) if job_id is not None else None
+    )
     with db.get_db() as conn:
         conn.execute(
             """
@@ -106,19 +113,25 @@ def _audit_raw(user_id, *, action, gate_decision, gate_reason, mode=None, target
                 (gate_reason or "")[:500],
                 cost_cents,
                 str(job_id) if job_id is not None else None,
-                str(job_id) if job_id is not None else None,
+                correlation_id,
                 _now(),
             ),
         )
 
 
 def _audit(user_id, *, action, gate_decision, gate_reason, mode=None, target_type=None,
-           target_id=None, job_id=None, cost_cents=None):
+           target_id=None, job_id=None, cost_cents=None, correlation_id=None):
     """Append one harness_audit row. Best-effort: missing table => log only.
 
     Prefers the sibling-owned ``harness.audit.record_audit``; falls back to
     a raw-SQL insert with the same columns when that module is absent.
+
+    L4: ``correlation_id`` traces one inbound event end to end; when the
+    caller does not supply it, the job id is used as before.
     """
+    correlation_id = correlation_id or (
+        str(job_id) if job_id is not None else None
+    )
     try:
         from harness.audit import record_audit
 
@@ -134,7 +147,7 @@ def _audit(user_id, *, action, gate_decision, gate_reason, mode=None, target_typ
             gate_reason=(gate_reason or "")[:500],
             cost_cents=cost_cents or 0,
             request_id=str(job_id) if job_id is not None else None,
-            correlation_id=str(job_id) if job_id is not None else None,
+            correlation_id=correlation_id,
         )
         return
     except Exception:
@@ -149,6 +162,7 @@ def _audit(user_id, *, action, gate_decision, gate_reason, mode=None, target_typ
             target_type=target_type,
             target_id=target_id,
             job_id=job_id,
+            correlation_id=correlation_id,
             cost_cents=cost_cents,
         )
     except Exception:
@@ -282,7 +296,7 @@ def _load_inbound_body(user_id, inbound_id):
     return str(row.get("message_body") or "")
 
 
-def _decide_policy(user_id, lead, analysis, draft, mode, paused):
+def _decide_policy(user_id, lead, analysis, draft, mode, paused, correlation_id=None):
     """Ask harness.policy for the send decision.
 
     Mode/paused are decided here first (deterministic, no model input):
@@ -335,9 +349,12 @@ def _decide_policy(user_id, lead, analysis, draft, mode, paused):
         "escalation_topics": analysis.get("escalation_topics") or [],
         "analysis": analysis,
         "template_approved": False,
+        # L4: the same correlation id the job, audit rows, and provider
+        # execution log carry, so one inbound event traces end to end.
+        "correlation_id": correlation_id,
     }
     try:
-        result = decide(user_id, "send_sms", "send_sms", context)
+        result = decide(user_id, "send_sms", "send_sms", context, correlation_id=correlation_id)
     except Exception:
         logger.exception("harness.policy.decide failed tenant=%s", user_id)
         return "DRAFT", "policy_error", rate_limited
@@ -379,6 +396,10 @@ def process_sms_auto_reply_job(job):
     job = job or {}
     job_id = job.get("id")
     user_id = job.get("user_id")
+    # L4: one correlation id for the whole trace — webhook -> job ->
+    # policy -> audit -> provider execution. Jobs created before
+    # migration 031 carry None and fall back to the job id in _audit.
+    correlation_id = job.get("correlation_id")
     payload = _payload_dict(job)
     lead_id = payload.get("lead_id") or job.get("lead_id")
     inbound_id = payload.get("inbound_id") or job.get("inbound_id")
@@ -388,6 +409,11 @@ def process_sms_auto_reply_job(job):
         payload.get("body") or payload.get("inbound_body") or ""
     )
     receiving_number = payload.get("receiving_number")
+
+    # D5: strict reference validation before any work. A malformed id, a
+    # nonexistent lead, or a lead belonging to another tenant fails the
+    # job here — never silently, and never by coercing the reference.
+    from harness.validation import ValidationError, validate_lead_reference
 
     if not user_id or not lead_id or not inbound_id:
         logger.error(
@@ -405,17 +431,22 @@ def process_sms_auto_reply_job(job):
             "approval_id": None,
             "retryable": False,
         }
-
-    lead = db.get_lead(lead_id, user_id)
-    if not lead:
+    try:
+        lead = validate_lead_reference(user_id, lead_id, required=True)
+    except ValidationError as exc:
+        # lead_not_found / cross_tenant_lead / malformed_lead_id.
         logger.error(
-            "sms_auto_reply lead missing job=%s tenant=%s lead=%s", job_id, user_id, lead_id
+            "sms_auto_reply lead validation failed job=%s tenant=%s lead=%s reason=%s",
+            job_id,
+            user_id,
+            lead_id,
+            exc.code,
         )
         return {
             "ok": False,
             "sent": False,
             "decision": None,
-            "reason": "lead_missing",
+            "reason": exc.code,
             "approval_id": None,
             "retryable": False,
         }
@@ -440,6 +471,7 @@ def process_sms_auto_reply_job(job):
             target_type="lead",
             target_id=lead_id,
             job_id=job_id,
+            correlation_id=correlation_id,
         )
         _needs_attention(user_id, lead_id, inbound_id, "ai_reply_deferred")
         logger.info(
@@ -481,6 +513,7 @@ def process_sms_auto_reply_job(job):
             target_type="lead",
             target_id=lead_id,
             job_id=job_id,
+            correlation_id=correlation_id,
         )
         return {
             "ok": False,
@@ -499,7 +532,8 @@ def process_sms_auto_reply_job(job):
 
     # (3) Policy gate.
     decision, gate_reason, rate_limited = _decide_policy(
-        user_id, lead, analysis, draft, mode, paused
+        user_id, lead, analysis, draft, mode, paused,
+        correlation_id=correlation_id,
     )
 
     # Defense in depth: escalation topics can never auto-send, even if the
@@ -523,6 +557,7 @@ def process_sms_auto_reply_job(job):
                 target_type="lead",
                 target_id=lead_id,
                 job_id=job_id,
+            correlation_id=correlation_id,
             )
             _needs_attention(user_id, lead_id, inbound_id, "ai_reply_failed")
             return {
@@ -533,6 +568,27 @@ def process_sms_auto_reply_job(job):
                 "approval_id": None,
                 "retryable": False,
             }
+        # D5: validate the coach's suggested lead status before it is
+        # persisted in the approval draft. An invalid value is rejected
+        # as a parameter — stripped from the draft and recorded in the
+        # audit trail — never silently coerced to "new" by
+        # normalize_lead_status downstream.
+        from harness.validation import ValidationError, validate_status
+
+        suggested_status = analysis.get("suggested_lead_status")
+        invalid_suggested_status = None
+        if suggested_status not in (None, ""):
+            try:
+                suggested_status = validate_status(suggested_status)
+            except ValidationError:
+                invalid_suggested_status = suggested_status
+                suggested_status = None
+        draft_reason = gate_reason
+        if invalid_suggested_status is not None:
+            draft_reason = (
+                f"{gate_reason}; invalid suggested_lead_status "
+                f"{invalid_suggested_status!r} rejected, not persisted"
+            )
         approval_id = _create_approval(
             user_id,
             job_id,
@@ -543,7 +599,7 @@ def process_sms_auto_reply_job(job):
                 "inbound_id": inbound_id,
                 "intent": analysis.get("intent"),
                 "summary": analysis.get("summary"),
-                "suggested_lead_status": analysis.get("suggested_lead_status"),
+                "suggested_lead_status": suggested_status,
                 "insight_id": coach.get("insight_id"),
             },
         )
@@ -551,11 +607,12 @@ def process_sms_auto_reply_job(job):
             user_id,
             action="sms_auto_reply_drafted",
             gate_decision="DRAFT",
-            gate_reason=gate_reason,
+            gate_reason=draft_reason,
             mode=mode,
             target_type="lead",
             target_id=lead_id,
             job_id=job_id,
+            correlation_id=correlation_id,
         )
         logger.info(
             "sms_auto_reply drafted (no send) job=%s tenant=%s lead=%s approval=%s",
@@ -568,7 +625,7 @@ def process_sms_auto_reply_job(job):
             "ok": True,
             "sent": False,
             "decision": "DRAFT",
-            "reason": gate_reason,
+            "reason": draft_reason,
             "approval_id": approval_id,
             "retryable": False,
         }
@@ -580,6 +637,16 @@ def process_sms_auto_reply_job(job):
             user_id, lead_id, inbound_id, body, receiving_number
         ) or {}
         sent = bool(send_result.get("replied"))
+        # L4: provider execution carries the same correlation id as the
+        # job, policy decision, and audit rows.
+        logger.info(
+            "sms_auto_reply provider send correlation_id=%s job=%s tenant=%s lead=%s sent=%s",
+            correlation_id,
+            job_id,
+            user_id,
+            lead_id,
+            sent,
+        )
         _audit(
             user_id,
             action="sms_auto_reply_sent" if sent else "sms_auto_reply_send_failed",
@@ -589,6 +656,7 @@ def process_sms_auto_reply_job(job):
             target_type="lead",
             target_id=lead_id,
             job_id=job_id,
+            correlation_id=correlation_id,
         )
         return {
             "ok": True,
@@ -617,6 +685,7 @@ def process_sms_auto_reply_job(job):
             target_type="lead",
             target_id=lead_id,
             job_id=job_id,
+            correlation_id=correlation_id,
         )
         _needs_attention(user_id, lead_id, inbound_id, "ai_reply_deferred")
         logger.info(
@@ -642,6 +711,7 @@ def process_sms_auto_reply_job(job):
         target_type="lead",
         target_id=lead_id,
         job_id=job_id,
+            correlation_id=correlation_id,
     )
     _needs_attention(
         user_id,

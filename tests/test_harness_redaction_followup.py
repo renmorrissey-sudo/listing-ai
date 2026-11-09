@@ -15,8 +15,24 @@ import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import pytest
+
 import db
 from harness.jobs import enqueue_job, redact_payload
+
+
+@pytest.fixture(autouse=True)
+def _isolate_job_queue():
+    """The session DB is shared by every test (tests/conftest.py), so
+    earlier tests can leave harness jobs behind. Tests in this file
+    drive the worker (run_once), which claims the oldest pending job,
+    so clear the queue first: the job the worker picks up is then this
+    test's job, not a leftover."""
+    db.init_db()
+    with db.get_db() as conn:
+        conn.execute("DELETE FROM harness_jobs")
+    yield
+
 
 FAKE_KEY = "sk-test-4f8a2b9c6d1e7f0a3b5c8d9e2f4a6b8c1d3e"
 FAKE_PHONE = "303-555-0142"

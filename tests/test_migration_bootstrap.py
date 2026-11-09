@@ -253,12 +253,8 @@ def test_empty_postgres_bootstrap(monkeypatch):
     with db.get_db() as conn:
         verify_baseline_tables(conn)
         assert missing_baseline_tables(conn) == []
-    assert _applied() == {
-        "001_baseline",
-        "002_safe_additive_columns",
-        "003_user_business_profile",
-        "004_voice_call_lead_link",
-        "005_voice_call_recording_fields",
-        "006_cleanup_transient_voice_activities",
-        "007_backfill_lead_follow_through",
-    }
+    # All registered migrations must be applied (001 through latest, 032 as
+    # of this writing). Previously hardcoded to 001-007, which went stale as
+    # migrations were added; use the runner's own module list so this test
+    # cannot go stale again.
+    assert _applied() == _all_migration_versions()

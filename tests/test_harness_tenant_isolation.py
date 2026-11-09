@@ -180,10 +180,13 @@ def test_orchestrator_run_for_user_a_never_touches_user_b_leads(two_users):
     with patch("ask_topai.agent.complete", return_value=fake_result) as mock_complete:
         result = orchestrator.run(u1, "mark that lead closed won", {"lead_id": lead_b})
     assert mock_complete.called
-    # Drafts Only gates the write as DRAFT; nothing executes.
-    assert result["gate_decision"] == "DRAFT"
+    # D5: the proposed command references another tenant's lead, so the
+    # orchestrator's validation rejects it outright (BLOCK) before the
+    # policy gate — it never reaches DRAFT, and nothing executes.
+    assert result["gate_decision"] == "BLOCK"
     assert len(result["tool_calls"]) == 1
-    assert result["tool_calls"][0]["decision"] == "DRAFT"
+    assert result["tool_calls"][0]["decision"] == "BLOCK"
+    assert "cross_tenant_lead" in result["tool_calls"][0]["reason"]
     assert result["audit_id"] is not None
     after = db.get_lead(lead_b, u2)
     assert after["status"] == before["status"]

@@ -55,6 +55,46 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+def _alert_dead_letter(job, error):
+    """M4: notify once when a job lands in dead_letter. Never raises --
+    harness.alerts is itself non-blocking, and this is wrapped too, so
+    a failing notifier can never break job settlement."""
+    try:
+        from harness import alerts
+
+        alerts.alert_dead_letter(job, error)
+    except Exception:
+        logger.exception("dead-letter alert failed job=%s", (job or {}).get("id"))
+
+
+def _alert_provider_failure(reason, kind, job):
+    """M4: count a retryable handler failure toward the provider-failure
+    threshold (alerts at 3 consecutive failures per provider/signature).
+    Never raises."""
+    try:
+        from harness import alerts
+
+        alerts.alert_provider_failure(
+            alerts.detect_provider(reason),
+            reason,
+            kind=kind,
+            user_id=(job or {}).get("user_id"),
+        )
+    except Exception:
+        logger.exception("provider-failure alert failed kind=%s", kind)
+
+
+def _alert_worker_failure(error, context=None):
+    """M4: notify once per error signature per hour when the worker
+    itself fails. Never raises."""
+    try:
+        from harness import alerts
+
+        alerts.alert_worker_failure(error, context=context)
+    except Exception:
+        logger.exception("worker-failure alert failed")
+
+
 def _load_jobs_module():
     """Lazily import harness.jobs; None (with a warning) if unavailable."""
     global _jobs_module, _jobs_missing_logged
@@ -145,30 +185,40 @@ def _complete_job(jobs, job, result):
         logger.warning("harness.jobs exposes no complete_job; job=%s", job_id)
         return
     try:
-        complete(job_id, result)
+        # M5: worker mutations are ownership-checked with the claimed job's
+        # tenant (the worker is trusted, but the check must still hold).
+        complete(job_id, result, user_id=job.get("user_id"))
     except TypeError:
-        complete(job_id)
+        complete(job_id, result)
     except Exception:
         logger.exception("complete_job failed job=%s", job_id)
 
 
 def _fail_job(jobs, job, error, *, retryable):
     """Fail a job. retryable=False must land it in dead_letter (jobs module
-    contract); retryable=True re-queues it with backoff -- never terminal."""
+    contract); retryable=True re-queues it with backoff -- never terminal.
+    A dead-letter transition triggers the M4 ops alert."""
     job_id = job.get("id")
     fail = getattr(jobs, "fail_job", None)
     if fail is None:
         logger.warning("harness.jobs exposes no fail_job; job=%s", job_id)
         return
+    status = None
     try:
-        fail(job_id, error, retryable=retryable)
+        # M5: worker mutations are ownership-checked with the claimed job's
+        # tenant (the worker is trusted, but the check must still hold).
+        status = fail(job_id, error, retryable=retryable, user_id=job.get("user_id"))
     except TypeError:
         try:
-            fail(job_id, error)
+            status = fail(job_id, error, retryable=retryable)
         except Exception:
             logger.exception("fail_job failed job=%s", job_id)
+            return
     except Exception:
         logger.exception("fail_job failed job=%s", job_id)
+        return
+    if status == "dead_letter":
+        _alert_dead_letter(job, error)
 
 
 def _job_payload(job):
@@ -192,15 +242,18 @@ def _run_known_handler(jobs, job, handler, kind):
         result = handler(job) or {}
     except Exception as exc:
         logger.exception("%s handler crashed job=%s", kind, job_id)
+        _alert_provider_failure(f"handler_error: {exc}"[:500], kind, job)
         _fail_job(jobs, job, f"handler_error: {exc}"[:500], retryable=True)
         return True
     if result.get("ok"):
         _complete_job(jobs, job, result)
     elif result.get("retryable"):
+        reason = str(result.get("reason") or "handler_failed")[:500]
+        _alert_provider_failure(reason, kind, job)
         _fail_job(
             jobs,
             job,
-            str(result.get("reason") or "handler_failed")[:500],
+            reason,
             retryable=True,
         )
     else:
@@ -258,8 +311,12 @@ def process_one_batch(worker_id: str, limit: int = CLAIM_LIMIT) -> bool:
         worked = True
         try:
             dispatch_job(job)
-        except Exception:
+        except Exception as exc:
             logger.exception("dispatch_job crashed job=%s", job.get("id"))
+            _alert_worker_failure(
+                f"dispatch_error job={job.get('id')}: {exc}"[:500],
+                context={"job_id": job.get("id"), "kind": job.get("kind")},
+            )
             try:
                 _fail_job(jobs, job, "dispatch_error", retryable=True)
             except Exception:
@@ -302,8 +359,9 @@ def main():
             else:
                 time.sleep(idle_sleep)
                 idle_sleep = min(idle_sleep + 1, 10)
-        except Exception:
+        except Exception as exc:
             logger.exception("Harness worker loop error")
+            _alert_worker_failure(f"worker_loop_error: {exc}"[:500])
             time.sleep(5)
     logger.info("Harness worker stopped cleanly id=%s", worker_id)
 

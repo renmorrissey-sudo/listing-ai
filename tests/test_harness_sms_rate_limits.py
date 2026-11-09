@@ -14,9 +14,23 @@ All provider/Anthropic calls are mocked; nothing here sends a real SMS.
 from contextlib import contextmanager
 from unittest.mock import patch
 
+import pytest
+
 import db
 from harness.jobs import enqueue_job
 from harness.sms_handler import _decide_policy
+
+
+@pytest.fixture(autouse=True)
+def _isolate_job_queue():
+    """The session DB is shared by every test (tests/conftest.py), so
+    earlier tests can leave harness jobs behind. A test in this file
+    asserts the queue is empty after a DEFER, so clear the queue first:
+    the assertion is then about this test's job only."""
+    db.init_db()
+    with db.get_db() as conn:
+        conn.execute("DELETE FROM harness_jobs")
+    yield
 
 
 def _set_settings(user_id, mode="drafts_only", paused=False, ai_enabled=True):

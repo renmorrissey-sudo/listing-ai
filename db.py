@@ -992,25 +992,82 @@ def find_lead_by_phone_normalized(user_id, phone_number):
     return None
 
 
-def find_lead_owner_by_phone(phone_number):
+def list_lead_owners_by_phone(phone_number):
     """
-    user_id of the most recently active lead matching this phone across all tenants.
-    Used ONLY to route inbound SMS on the shared platform Telnyx number to the
-    subscriber that actually owns the conversation.
+    Every tenant holding a lead for this phone, most recently active
+    first: [{user_id, lead_id, updated_at}]. One entry per tenant (the
+    tenant's most recently updated matching lead). Used to route inbound
+    SMS on a shared sender number -- the number alone cannot identify
+    the tenant, so the caller must resolve among these owners
+    deterministically and never silently pick an unrelated tenant.
     """
     target = _phone_digits(phone_number)
     if len(target) < 10:
-        return None
+        return []
     target10 = target[-10:]
     with get_db() as conn:
         # Trailing digits are contiguous in every common format; prefilter with them.
         # Keep the % wildcard inside the bound value: a literal % in the SQL text
         # breaks psycopg's placeholder parsing on Postgres.
         rows = conn.execute(
-            "SELECT user_id, phone_number FROM leads "
+            "SELECT id, user_id, phone_number, updated_at FROM leads "
             "WHERE phone_number IS NOT NULL AND phone_number LIKE ? "
             "ORDER BY updated_at DESC",
             (f"%{target10[-4:]}",),
+        ).fetchall()
+    owners = []
+    seen = set()
+    for row in rows:
+        digits = _phone_digits(row["phone_number"])
+        if len(digits) >= 10 and digits[-10:] == target10:
+            user_id = row["user_id"]
+            if user_id in seen:
+                continue
+            seen.add(user_id)
+            owners.append(
+                {
+                    "user_id": user_id,
+                    "lead_id": row["id"],
+                    "updated_at": row["updated_at"],
+                }
+            )
+    return owners
+
+
+def find_lead_owner_by_phone(phone_number):
+    """
+    user_id of the most recently active lead matching this phone across all tenants.
+    Used ONLY to route inbound SMS on the shared platform Telnyx number to the
+    subscriber that actually owns the conversation.
+    """
+    owners = list_lead_owners_by_phone(phone_number)
+    return owners[0]["user_id"] if owners else None
+
+
+def most_recent_outbound_sender_by_phone(phone_number, user_ids):
+    """
+    Among the given tenants, the one whose most recent OUTBOUND sms_message
+    went to this phone (created_at DESC, id DESC tie-break), or None when
+    none of them ever messaged the contact. An outbound send is the
+    strongest signal that an inbound reply belongs to that tenant's
+    conversation -- stronger than lead updated_at, which any edit bumps.
+    """
+    user_ids = [u for u in dict.fromkeys(user_ids or [])]
+    if not user_ids:
+        return None
+    target = _phone_digits(phone_number)
+    if len(target) < 10:
+        return None
+    target10 = target[-10:]
+    placeholders = ", ".join("?" for _ in user_ids)
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT user_id, phone_number FROM sms_messages "
+            "WHERE user_id IN (" + placeholders + ") "
+            "AND direction = 'outbound' AND phone_number IS NOT NULL "
+            "AND phone_number LIKE ? "
+            "ORDER BY created_at DESC, id DESC",
+            (*user_ids, f"%{target10[-4:]}"),
         ).fetchall()
     for row in rows:
         digits = _phone_digits(row["phone_number"])

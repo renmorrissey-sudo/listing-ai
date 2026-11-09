@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 import config
@@ -10,6 +11,8 @@ import tenant_sms_db as tdb
 from sms_consent import outbound_sms_blocked_for_phone
 from sms_quiet_hours import QUIET_HOURS_MSG, in_quiet_hours
 from sms_validation import validate_e164_phone
+
+logger = logging.getLogger(__name__)
 
 BLOCKED_EXTERNAL_MSG = (
     "SMS cannot be sent because consent has not been verified for this externally sourced lead."
@@ -167,25 +170,53 @@ def require_tenant_sender(user_id):
             }, None
     # Telnyx: platform sender is available when configuration is complete.
     # Toll-free verification is enforced separately and must not look like "not activated".
+    # Fail-closed: if registering the platform sender in the database
+    # fails, the tenant has NO sender -- outbound sending is blocked with
+    # an error, never allowed on a fabricated in-memory sender dict that
+    # claims to be verified. (Previously an except-pass here returned a
+    # synthetic "verified" sender, so a tenant whose registration had
+    # failed -- e.g. the old global UNIQUE(sender_number) -- could send
+    # as if registered.)
     if (config.SMS_PROVIDER or "").lower() == "telnyx":
         if telnyx_configuration_complete() and (config.TELNYX_PHONE_NUMBER or "").strip():
             try:
                 tdb.ensure_telnyx_platform_sender(user_id)
-                sender = tdb.get_active_sender(user_id)
-                if sender:
-                    return sender, None
             except Exception:
-                pass
-            return {
-                "user_id": user_id,
-                "sender_number": config.TELNYX_PHONE_NUMBER,
-                "sms_provider": "telnyx",
-                "messaging_profile_id": config.TELNYX_MESSAGING_PROFILE_ID,
-                "sms_enabled": True,
-                "registration_status": "verified",
-                "platform_sender": True,
-                "trial_mode": bool(config.TELNYX_TRIAL_MODE),
-            }, None
+                logger.exception(
+                    "require_tenant_sender: platform sender registration "
+                    "failed user_id=%s; refusing to send without a "
+                    "registered sender",
+                    user_id,
+                )
+                try:
+                    tdb.append_sms_audit(
+                        user_id,
+                        "sender_registration_failed",
+                        metadata={
+                            "provider": "telnyx",
+                            "sender_number": (config.TELNYX_PHONE_NUMBER or "").strip(),
+                        },
+                    )
+                except Exception:
+                    logger.exception(
+                        "require_tenant_sender: could not record "
+                        "sender_registration_failed audit user_id=%s",
+                        user_id,
+                    )
+                return None, (
+                    "SMS sender registration failed for this account. "
+                    "Sending is blocked until the sender is registered."
+                )
+            sender = tdb.get_active_sender(user_id)
+            if sender:
+                return sender, None
+            logger.error(
+                "require_tenant_sender: platform sender registration "
+                "reported success but no active sender row exists "
+                "user_id=%s; refusing to send",
+                user_id,
+            )
+            return None, NO_SENDER_MSG
     # Never use global SIMPLETEXTING_PHONE_NUMBER as implicit tenant sender.
     return None, NO_SENDER_MSG
 
