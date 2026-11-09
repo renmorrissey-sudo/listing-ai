@@ -485,7 +485,10 @@ def main():
     # Fail closed on a bad staging/production config before touching
     # the queue (see config.validate_staging_safety). Staging does not
     # run this worker, but the guard must hold wherever it does run.
-    config.validate_config()
+    # Process-aware: this worker performs no Stripe operations, so it
+    # does not require Stripe credentials (see
+    # config._STRIPE_REQUIRED_PROCESSES).
+    config.validate_config(process="sms-campaign-worker")
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
     worker_id = f"{socket.gethostname()}-{os.getpid()}"

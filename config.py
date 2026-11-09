@@ -467,13 +467,34 @@ def validate_staging_safety():
     return errors
 
 
-def validate_config():
+# Processes that genuinely perform Stripe operations (checkout, webhooks,
+# subscription gating). Only the web process is in this set: neither
+# worker imports stripe_billing/stripe or touches Stripe at runtime, so
+# requiring Stripe credentials in a worker only spreads a live secret to
+# services that never use it (see 2026-11-09 production incident, where
+# both workers crashed at boot for a missing STRIPE_SECRET_KEY they did
+# not need). A process outside this set skips the Stripe requirements.
+_STRIPE_REQUIRED_PROCESSES = {"web"}
+
+
+def validate_config(process="web"):
+    """Fail closed on a bad config for the given process.
+
+    ``process`` names the calling process: "web" (default, the Flask
+    app), "harness-worker", or "sms-campaign-worker". Stripe
+    credentials are required only for processes that perform Stripe
+    operations (currently only "web"); workers skip them. Every other
+    check — Anthropic/Flask keys, database config, staging safety
+    guards — applies to all processes unchanged. Callers must pass
+    their real process name; the default is "web" so existing callers
+    (app.py) keep the strict behavior.
+    """
     missing = []
     if not ANTHROPIC_API_KEY:
         missing.append("ANTHROPIC_API_KEY")
     if not FLASK_SECRET_KEY:
         missing.append("FLASK_SECRET_KEY")
-    if IS_PRODUCTION:
+    if IS_PRODUCTION and process in _STRIPE_REQUIRED_PROCESSES:
         if not STRIPE_SECRET_KEY:
             missing.append("STRIPE_SECRET_KEY")
         if not STRIPE_WEBHOOK_SECRET:
@@ -485,7 +506,9 @@ def validate_config():
         sys.exit(1)
 
     # Soft production guard: refuse obvious Stripe price placeholders without crashing tests.
-    if IS_PRODUCTION and SUBSCRIPTION_REQUIRED and STRIPE_PRICE_ID:
+    # Web-only: workers never perform Stripe operations, so a worker never
+    # needs a valid Stripe price id either.
+    if process in _STRIPE_REQUIRED_PROCESSES and IS_PRODUCTION and SUBSCRIPTION_REQUIRED and STRIPE_PRICE_ID:
         from stripe_billing import is_valid_stripe_price_id, stripe_mode_mismatch
 
         if not is_valid_stripe_price_id(STRIPE_PRICE_ID):
