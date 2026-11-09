@@ -438,8 +438,10 @@ def run_once(worker_id: str = "harness-worker-test", limit: int = CLAIM_LIMIT) -
 
 def main():
     # Fail closed on a bad staging/production config before touching
-    # the queue (see config.validate_staging_safety).
-    config.validate_config()
+    # the queue (see config.validate_staging_safety). Process-aware:
+    # this worker performs no Stripe operations, so it does not require
+    # Stripe credentials (see config._STRIPE_REQUIRED_PROCESSES).
+    config.validate_config(process="harness-worker")
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
     worker_id = f"harness-{socket.gethostname()}-{os.getpid()}"

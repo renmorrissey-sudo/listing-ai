@@ -419,13 +419,13 @@ def test_harness_worker_main_calls_validate_config(monkeypatch):
 
     calls = []
     monkeypatch.setattr(
-        "config.validate_config", lambda: calls.append("validate_config")
+        "config.validate_config", lambda **kwargs: calls.append(kwargs)
     )
     monkeypatch.setattr(hw.db, "init_db", lambda: None)
     monkeypatch.setattr(hw, "_touch_heartbeat", lambda *a, **k: None)
     monkeypatch.setattr(hw, "_RUNNING", False)
     hw.main()
-    assert calls == ["validate_config"]
+    assert calls == [{"process": "harness-worker"}]
 
 
 def test_sms_campaign_worker_main_calls_validate_config(monkeypatch):
@@ -433,13 +433,59 @@ def test_sms_campaign_worker_main_calls_validate_config(monkeypatch):
 
     calls = []
     monkeypatch.setattr(
-        "config.validate_config", lambda: calls.append("validate_config")
+        "config.validate_config", lambda **kwargs: calls.append(kwargs)
     )
     monkeypatch.setattr(cw.db, "init_db", lambda: None)
     monkeypatch.setattr(cw.tdb, "touch_worker_heartbeat", lambda *a, **k: True)
     monkeypatch.setattr(cw, "_RUNNING", False)
     cw.main()
-    assert calls == ["validate_config"]
+    assert calls == [{"process": "sms-campaign-worker"}]
+
+
+# --- Process-aware validate_config (Stripe only where Stripe runs) ---------
+# Regression test for the 2026-11-09 production incident: both workers
+# crashed at boot for a missing STRIPE_SECRET_KEY neither of them uses
+# (neither worker imports stripe_billing/stripe). Stripe credentials are
+# required only for the web process, which performs Stripe operations.
+
+
+def _production_without_stripe(monkeypatch):
+    """Pretend this process is production with no Stripe keys at all."""
+    monkeypatch.setattr(config, "IS_PRODUCTION", True)
+    monkeypatch.setattr(config, "IS_STAGING", False)
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "dummy-anthropic-key")
+    monkeypatch.setattr(config, "FLASK_SECRET_KEY", "dummy-flask-secret")
+    monkeypatch.setattr(config, "STRIPE_SECRET_KEY", "")
+    monkeypatch.setattr(config, "STRIPE_WEBHOOK_SECRET", "")
+    monkeypatch.setattr(config, "STRIPE_PRICE_ID", "")
+    monkeypatch.setattr(config, "SUBSCRIPTION_REQUIRED", False)
+
+
+@pytest.mark.parametrize("process", ["harness-worker", "sms-campaign-worker"])
+def test_validate_config_worker_skips_stripe_in_production(monkeypatch, process):
+    _production_without_stripe(monkeypatch)
+    # Must not exit: neither worker performs Stripe operations.
+    config.validate_config(process=process)
+
+
+def test_validate_config_web_requires_stripe_in_production(monkeypatch):
+    _production_without_stripe(monkeypatch)
+    with pytest.raises(SystemExit):
+        config.validate_config(process="web")
+
+
+def test_validate_config_default_process_is_web(monkeypatch):
+    _production_without_stripe(monkeypatch)
+    # The default keeps the strict behavior for existing callers (app.py).
+    with pytest.raises(SystemExit):
+        config.validate_config()
+
+
+def test_validate_config_worker_still_requires_anthropic_and_flask(monkeypatch):
+    _production_without_stripe(monkeypatch)
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "")
+    with pytest.raises(SystemExit):
+        config.validate_config(process="harness-worker")
 
 
 def _staging_worker_env(extra):
