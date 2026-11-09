@@ -44,6 +44,53 @@ no call site hard-codes a price.
 Every query is user_id-scoped. All SQL uses ``?`` placeholders;
 db_backend.CompatConnection translates them to ``%s`` for Postgres.
 Timestamps are UTC ISO strings. No new dependencies.
+
+Non-Anthropic providers (launch blocker 5)
+-------------------------------------------
+Anthropic is priced per token (table above). Everything else is priced
+per unit with a clearly-labelled PLACEHOLDER rate, because the repo
+carries no verified price for these providers and there is no price
+feed in the app:
+
+* Vapi voice calls — cents per minute (``HARNESS_VAPI_PRICE_CENTS_PER_MINUTE``,
+  default 10). ASSUMPTION: ~$0.10/min covers Vapi's platform + telephony
+  at list; the model running inside the call is billed by Vapi on top
+  of that in reality, so this is a conservative floor, not a quote.
+* Telnyx / Twilio / SimpleTexting SMS — cents per segment/message
+  (``HARNESS_TELNYX_PRICE_CENTS_PER_SEGMENT`` default 1,
+  ``HARNESS_TWILIO_PRICE_CENTS_PER_MESSAGE`` default 1,
+  ``HARNESS_SIMPLETEXTING_PRICE_CENTS_PER_MESSAGE`` default 2).
+  ASSUMPTIONS, modelled on published US SMS list prices (Telnyx/Twilio
+  ~$0.004–$0.008/segment). When Telnyx itself reports a cost amount in
+  the send response, that provider-reported amount is used instead of
+  the placeholder (see :func:`record_sms_send`).
+* OpenAI Realtime voice sessions — cents per minute
+  (``HARNESS_OPENAI_REALTIME_PRICE_CENTS_PER_MINUTE``, default 6).
+  ASSUMPTION: the session is recorded at mint time as a 1-minute
+  minimum; OpenAI bills audio + text tokens per minute in reality, so
+  a long session costs more than the recorded row. Duration is not
+  reported back to the server, so this cannot be trued up today.
+* SendGrid email — cents per message
+  (``HARNESS_SENDGRID_PRICE_CENTS_PER_MESSAGE``, default 1).
+  ASSUMPTION: SendGrid list email is a fraction of a cent; 1 cent is a
+  conservative ceiling.
+
+All of these are ESTIMATES (``cost_basis="estimate"``) exactly like the
+Anthropic rates. Confirm each against the provider's pricing page and
+set the env var above before relying on a dollar figure.
+
+Spend cap (universal enforcement)
+----------------------------------
+:func:`check_spend_cap` / :func:`is_spend_cap_tripped` are the single
+gate every billable path must consult BEFORE spending. The cap is
+$50/tenant/month by default (``HARNESS_MONTHLY_SPEND_CAP_CENTS``,
+confirmed by Ren 2026-11-08); there is no per-tenant override column —
+changing it is a deployment env change, see docs/ai-cost-coverage.md.
+A ledger read failure fails OPEN (spend allowed) rather than crashing
+the request, matching the pre-existing behaviour in harness.policy;
+a cap check that cannot read spend must never take the product down.
+Callers must still fail SAFE on a tripped cap: no model call, no
+provider send, draft-only / block / queue-nothing-that-can-send.
 """
 
 from __future__ import annotations
@@ -117,6 +164,141 @@ def current_month_spend_cents(user_id) -> int:
     except Exception as exc:  # table missing, DB down, etc.
         logger.warning("harness current-month spend fell back to 0: %s", exc)
         return 0
+
+
+# ---------------------------------------------------------------------------
+# Universal spend-cap gate (launch blocker 5). Every billable path
+# consults this BEFORE spending; see the module docstring.
+# ---------------------------------------------------------------------------
+SPEND_CAP_REACHED_MESSAGE = (
+    "Monthly AI spend limit reached ($50/tenant/month by default). "
+    "This action was not run and nothing was sent. The limit resets "
+    "next month; contact support to raise it."
+)
+
+
+def spend_cap_status(user_id) -> dict:
+    """``{cap_cents, spent_cents, remaining_cents, tripped}`` for a tenant.
+
+    ``tripped`` is True when the cap is enabled (cap > 0) and the
+    tenant's current-month recorded spend is at or above it. A ledger
+    read failure fails open: spent is reported as 0 and tripped False,
+    so a DB outage never takes the product down (same fail-open rule
+    as :func:`current_month_spend_cents` and harness.policy).
+    """
+    cap_cents = get_monthly_spend_cap_cents()
+    spent_cents = current_month_spend_cents(user_id) if cap_cents > 0 else 0
+    return {
+        "cap_cents": cap_cents,
+        "spent_cents": spent_cents,
+        "remaining_cents": max(cap_cents - spent_cents, 0) if cap_cents > 0 else None,
+        "tripped": bool(cap_cents > 0 and spent_cents >= cap_cents),
+    }
+
+
+def is_spend_cap_tripped(user_id) -> bool:
+    """True when the tenant's monthly spend cap is reached (fail open)."""
+    try:
+        return bool(spend_cap_status(user_id)["tripped"])
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("harness spend-cap check failed open: %s", exc)
+        return False
+
+
+def check_spend_cap(user_id):
+    """Pre-spend gate: ``(allowed, reason)``.
+
+    ``allowed`` is False with :data:`SPEND_CAP_REACHED_MESSAGE` as the
+    reason when the cap is tripped; otherwise ``(True, None)``. Callers
+    must check this BEFORE any model call or provider send and, when
+    False, fail safe (draft-only / block / send nothing).
+    """
+    if is_spend_cap_tripped(user_id):
+        return False, SPEND_CAP_REACHED_MESSAGE
+    return True, None
+
+
+# ---------------------------------------------------------------------------
+# Non-Anthropic placeholder pricing — ESTIMATES (see module docstring).
+# Cents per unit. Env overrides are read on every call so tests and a
+# reloaded process can change rates without restarting the module.
+# ---------------------------------------------------------------------------
+DEFAULT_VAPI_PRICE_CENTS_PER_MINUTE = 10
+DEFAULT_OPENAI_REALTIME_PRICE_CENTS_PER_MINUTE = 6
+DEFAULT_SENDGRID_PRICE_CENTS_PER_MESSAGE = 1
+# Cents per SMS segment/message, by provider (mock sends cost nothing).
+DEFAULT_SMS_PRICE_CENTS_PER_UNIT = {
+    "telnyx": 1,
+    "twilio": 1,
+    "simpletexting": 2,
+    "mock": 0,
+    "default": 1,
+}
+ENV_VAPI_PRICE_PER_MINUTE = "HARNESS_VAPI_PRICE_CENTS_PER_MINUTE"
+ENV_OPENAI_REALTIME_PRICE_PER_MINUTE = "HARNESS_OPENAI_REALTIME_PRICE_CENTS_PER_MINUTE"
+ENV_SENDGRID_PRICE_PER_MESSAGE = "HARNESS_SENDGRID_PRICE_CENTS_PER_MESSAGE"
+ENV_SMS_PRICE_PREFIX = "HARNESS_SMS_PRICE_CENTS_PER_"
+
+
+def _parse_unit_rate(raw, *, source: str):
+    """Parse one non-Anthropic rate override; None when missing/invalid."""
+    if raw is None or (isinstance(raw, str) and raw.strip() == ""):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("ignoring invalid non-Anthropic price override %s=%r", source, raw)
+        return None
+    if value < 0:
+        logger.warning("ignoring negative non-Anthropic price override %s=%r", source, raw)
+        return None
+    return value
+
+
+def get_vapi_price_cents_per_minute() -> int:
+    """Vapi placeholder rate, cents/minute (ESTIMATE — see docstring)."""
+    value = _parse_unit_rate(
+        os.environ.get(ENV_VAPI_PRICE_PER_MINUTE), source=ENV_VAPI_PRICE_PER_MINUTE
+    )
+    return DEFAULT_VAPI_PRICE_CENTS_PER_MINUTE if value is None else value
+
+
+def get_openai_realtime_price_cents_per_minute() -> int:
+    """OpenAI Realtime placeholder rate, cents/minute (ESTIMATE)."""
+    value = _parse_unit_rate(
+        os.environ.get(ENV_OPENAI_REALTIME_PRICE_PER_MINUTE),
+        source=ENV_OPENAI_REALTIME_PRICE_PER_MINUTE,
+    )
+    return DEFAULT_OPENAI_REALTIME_PRICE_CENTS_PER_MINUTE if value is None else value
+
+
+def get_sendgrid_price_cents_per_message() -> int:
+    """SendGrid placeholder rate, cents/message (ESTIMATE)."""
+    value = _parse_unit_rate(
+        os.environ.get(ENV_SENDGRID_PRICE_PER_MESSAGE),
+        source=ENV_SENDGRID_PRICE_PER_MESSAGE,
+    )
+    return DEFAULT_SENDGRID_PRICE_CENTS_PER_MESSAGE if value is None else value
+
+
+def get_sms_price_cents_per_unit(provider) -> int:
+    """SMS placeholder rate, cents per segment/message (ESTIMATE).
+
+    Per-provider env override:
+    ``HARNESS_SMS_PRICE_CENTS_PER_<PROVIDER>_PER_UNIT`` (e.g.
+    ``HARNESS_SMS_PRICE_CENTS_PER_TELNYX_PER_UNIT``); falls back to
+    the table above, then to the ``"default"`` entry.
+    """
+    name = str(provider or "default").strip().lower()
+    env_name = (
+        f"{ENV_SMS_PRICE_PREFIX}{_model_env_name(name)}_PER_UNIT"
+    )
+    value = _parse_unit_rate(os.environ.get(env_name), source=env_name)
+    if value is not None:
+        return value
+    return DEFAULT_SMS_PRICE_CENTS_PER_UNIT.get(
+        name, DEFAULT_SMS_PRICE_CENTS_PER_UNIT["default"]
+    )
 
 # ---------------------------------------------------------------------------
 # Anthropic pricing table — ESTIMATES (see module docstring). Cents per
@@ -315,17 +497,37 @@ def _anthropic_cost_cents(model, input_tokens, output_tokens):
     return int(round(cost))
 
 
-def record_cost(user_id, provider, tool, units, unit_type, cost_cents=0,
-                period=None):
-    """Append one cost row and return its id.
-
-    ``period`` defaults to the current YYYY-MM (UTC). ``unit_type`` is
-    'tokens' | 'segments' | 'minutes' | 'messages'. ``units`` is a float
-    (token/segment/minute/message count); ``cost_cents`` is an integer.
-    """
-    now = _now()
-    period = period or _current_period()
-    with db.get_db() as conn:
+def _insert_cost_row(conn, *, user_id, period, provider, tool, units,
+                     unit_type, cost_cents, created_at, model=None,
+                     correlation_id=None):
+    """Insert one harness_costs row, using the model/correlation_id
+    columns when they exist (migration 033) and falling back to the
+    migration-029 column set when they do not."""
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO harness_costs
+                (user_id, period, provider, tool, units, unit_type,
+                 cost_cents, created_at, model, correlation_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                period,
+                provider,
+                tool,
+                float(units or 0),
+                unit_type,
+                int(cost_cents or 0),
+                created_at,
+                (str(model)[:120] if model else None),
+                (str(correlation_id)[:120] if correlation_id else None),
+            ),
+        )
+        return cur.lastrowid
+    except Exception:
+        # Pre-033 schema (or a DB whose migrations have not run yet):
+        # retry without the two new columns instead of losing the row.
         cur = conn.execute(
             """
             INSERT INTO harness_costs
@@ -341,13 +543,96 @@ def record_cost(user_id, provider, tool, units, unit_type, cost_cents=0,
                 float(units or 0),
                 unit_type,
                 int(cost_cents or 0),
-                now,
+                created_at,
             ),
         )
         return cur.lastrowid
 
 
-def record_anthropic_usage(user_id, tool, usage, model=None):
+def record_cost(user_id, provider, tool, units, unit_type, cost_cents=0,
+                period=None, model=None, correlation_id=None):
+    """Append one cost row and return its id.
+
+    ``period`` defaults to the current YYYY-MM (UTC). ``unit_type`` is
+    'tokens' | 'segments' | 'minutes' | 'messages' | 'sessions' |
+    'calls'. ``units`` is a float (token/segment/minute/message/session/
+    call count); ``cost_cents`` is an integer ESTIMATE (see module
+    docstring). ``model`` is the provider model id when one applies
+    (e.g. ``claude-sonnet-5``); ``correlation_id`` traces the row back
+    to the request/event that caused the spend (inbound SMS id, Ask
+    TopAI request id, Vapi provider call id, ...). Both are stored when
+    migration 033 has landed and silently dropped otherwise.
+    """
+    now = _now()
+    period = period or _current_period()
+    with db.get_db() as conn:
+        return _insert_cost_row(
+            conn,
+            user_id=user_id,
+            period=period,
+            provider=provider,
+            tool=tool,
+            units=units,
+            unit_type=unit_type,
+            cost_cents=cost_cents,
+            created_at=now,
+            model=model,
+            correlation_id=correlation_id,
+        )
+
+
+def record_cost_once(user_id, provider, tool, units, unit_type, cost_cents=0,
+                     period=None, model=None, correlation_id=None):
+    """Idempotent :func:`record_cost`: no-op when a row with the same
+    ``(user_id, tool, correlation_id)`` already exists in the period.
+
+    Used for true-ups that can arrive more than once (e.g. a Vapi
+    end-of-call webhook delivered twice). Returns the new row id, or
+    None when the row already existed. Best-effort: any DB error is
+    logged and returns None rather than raising into the caller.
+    """
+    if correlation_id is None:
+        return record_cost(
+            user_id, provider, tool, units, unit_type,
+            cost_cents=cost_cents, period=period, model=model,
+            correlation_id=None,
+        )
+    period = period or _current_period()
+    try:
+        with db.get_db() as conn:
+            try:
+                existing = conn.execute(
+                    """
+                    SELECT id FROM harness_costs
+                    WHERE user_id = ? AND period = ? AND tool = ?
+                      AND correlation_id = ?
+                    LIMIT 1
+                    """,
+                    (user_id, period, tool, str(correlation_id)[:120]),
+                ).fetchone()
+            except Exception:
+                existing = None  # pre-033 schema: no correlation_id column
+            if existing:
+                return None
+            return _insert_cost_row(
+                conn,
+                user_id=user_id,
+                period=period,
+                provider=provider,
+                tool=tool,
+                units=units,
+                unit_type=unit_type,
+                cost_cents=cost_cents,
+                created_at=_now(),
+                model=model,
+                correlation_id=correlation_id,
+            )
+    except Exception as exc:
+        logger.warning("harness_costs idempotent write failed: %s", exc)
+        return None
+
+
+def record_anthropic_usage(user_id, tool, usage, model=None, correlation_id=None):
     """Record one Anthropic call's token usage and estimated cost.
 
     ``usage`` is an Anthropic response ``usage`` object (attribute access)
@@ -356,10 +641,14 @@ def record_anthropic_usage(user_id, tool, usage, model=None):
     'default' (Sonnet-tier) prices apply, so callers that know the model
     should pass it explicitly. The stored ``cost_cents`` is an ESTIMATE
     (see module docstring) — token counts (``units``) are exact. Returns
-    the cost row id.
+    the cost row id, or None when the usage carries no tokens at all
+    (e.g. a mocked response with no ``usage`` field — nothing was
+    measurably spent, so no row is written).
     """
     input_tokens = _usage_tokens(usage, "input_tokens")
     output_tokens = _usage_tokens(usage, "output_tokens")
+    if input_tokens + output_tokens <= 0:
+        return None
     cost_cents = _anthropic_cost_cents(model, input_tokens, output_tokens)
     return record_cost(
         user_id,
@@ -368,6 +657,225 @@ def record_anthropic_usage(user_id, tool, usage, model=None):
         units=input_tokens + output_tokens,
         unit_type="tokens",
         cost_cents=cost_cents,
+        model=model,
+        correlation_id=correlation_id,
+    )
+
+
+def record_anthropic_message(user_id, tool, message, model=None, correlation_id=None):
+    """Record one Anthropic response message's usage (best-effort).
+
+    ``message`` is the object returned by ``client.messages.create``;
+    its ``usage`` attribute is read when present. Never raises — a
+    recording failure must not break the user-facing request that
+    already succeeded. Returns the cost row id or None.
+    """
+    if user_id is None or message is None:
+        return None
+    try:
+        return record_anthropic_usage(
+            user_id, tool, getattr(message, "usage", None),
+            model=model, correlation_id=correlation_id,
+        )
+    except Exception as exc:
+        logger.warning("harness anthropic cost recording failed: %s", exc)
+        return None
+
+
+def record_provider_usage(user_id, provider, tool, units, unit_type,
+                          cost_cents=None, *, model=None, correlation_id=None,
+                          rate_cents_per_unit=None):
+    """Record one non-Anthropic provider usage row (best-effort).
+
+    When ``cost_cents`` is None it is derived as
+    ``round(units * rate_cents_per_unit)``; callers that already know a
+    provider-reported amount pass ``cost_cents`` explicitly. The cost
+    is an ESTIMATE unless the caller passed a provider-reported amount
+    (see :func:`record_sms_send`). Never raises; returns the row id
+    or None. ``user_id`` None means "no tenant to attribute to" — the
+    row is skipped (callers must pass the tenant).
+    """
+    if user_id is None:
+        return None
+    try:
+        if cost_cents is None:
+            rate = rate_cents_per_unit if rate_cents_per_unit is not None else 0
+            cost_cents = int(round(float(units or 0) * rate))
+        return record_cost(
+            user_id,
+            provider=provider,
+            tool=tool,
+            units=units,
+            unit_type=unit_type,
+            cost_cents=cost_cents,
+            model=model,
+            correlation_id=correlation_id,
+        )
+    except Exception as exc:
+        logger.warning("harness provider cost recording failed: %s", exc)
+        return None
+
+
+def _sms_segments(result, message_body=None):
+    """Segment count for an SMS send result; 1 when unknown.
+
+    Telnyx reports ``segments`` (or ``parts``); other providers report
+    nothing, in which case one message is one billable unit.
+    """
+    if isinstance(result, dict):
+        for key in ("segments", "parts"):
+            value = result.get(key)
+            try:
+                count = int(value)
+            except (TypeError, ValueError):
+                continue
+            if count > 0:
+                return count
+    return 1
+
+
+def _provider_reported_cost_cents(result):
+    """Telnyx-reported cost in cents, or None.
+
+    Telnyx's send response carries ``cost: {"amount": "0.008", ...}``
+    where the amount is USD. When present and parseable it is the
+    provider's own figure, so it replaces the placeholder rate. Any
+    other shape (missing, non-numeric, negative) falls back to the
+    placeholder.
+    """
+    if not isinstance(result, dict):
+        return None
+    cost = result.get("cost")
+    amount = None
+    if isinstance(cost, dict):
+        amount = cost.get("amount")
+    elif isinstance(cost, (int, float, str)):
+        amount = cost
+    if amount is None:
+        return None
+    try:
+        dollars = float(amount)
+    except (TypeError, ValueError):
+        return None
+    if dollars < 0:
+        return None
+    return int(round(dollars * 100))
+
+
+def record_sms_send(user_id, *, provider, tool, result=None,
+                    message_body=None, correlation_id=None):
+    """Record one outbound SMS send (best-effort, never raises).
+
+    ``provider`` is the SMS provider name (``telnyx`` / ``twilio`` /
+    ``simpletexting`` / ``mock``). ``result`` is the provider's send
+    result dict. Cost: the Telnyx-reported amount when the provider
+    supplied one, otherwise ``segments *`` the per-provider placeholder
+    rate from :func:`get_sms_price_cents_per_unit` (mock sends cost 0).
+    Returns the cost row id or None.
+    """
+    if user_id is None:
+        return None
+    segments = _sms_segments(result, message_body)
+    reported = _provider_reported_cost_cents(result)
+    if reported is not None:
+        cost_cents = reported
+    else:
+        cost_cents = segments * get_sms_price_cents_per_unit(provider)
+    return record_provider_usage(
+        user_id,
+        provider=str(provider or "unknown").lower(),
+        tool=tool,
+        units=segments,
+        unit_type="segments",
+        cost_cents=cost_cents,
+        correlation_id=correlation_id,
+    )
+
+
+def record_vapi_call(user_id, *, tool="vapi_outbound_call", minutes=1.0,
+                     correlation_id=None):
+    """Record one Vapi outbound call (best-effort, never raises).
+
+    The call's real duration is not known when the call is created, so
+    the start records a 1-minute minimum at the placeholder per-minute
+    rate; :func:`record_vapi_call_duration` trues up longer calls from
+    the end-of-call webhook. Returns the cost row id or None.
+    """
+    return record_provider_usage(
+        user_id,
+        provider="vapi",
+        tool=tool,
+        units=float(minutes or 0),
+        unit_type="minutes",
+        rate_cents_per_unit=get_vapi_price_cents_per_minute(),
+        correlation_id=correlation_id,
+    )
+
+
+def record_vapi_call_duration(user_id, *, duration_seconds, correlation_id=None):
+    """True up a Vapi call's cost from its end-of-call duration.
+
+    Records ONLY the minutes beyond the 1-minute minimum already
+    recorded at call start, as tool ``vapi_call_duration``, idempotently
+    per ``correlation_id`` (the Vapi provider call id) — a redelivered
+    webhook must not double-charge the ledger. Returns the row id, or
+    None when there is nothing to true up (<= 60s, no duration, or the
+    true-up row already exists).
+    """
+    if user_id is None or correlation_id is None:
+        return None
+    try:
+        total_minutes = -(-int(duration_seconds) // 60)  # ceil
+    except (TypeError, ValueError):
+        return None
+    extra_minutes = total_minutes - 1
+    if extra_minutes <= 0:
+        return None
+    return record_cost_once(
+        user_id,
+        provider="vapi",
+        tool="vapi_call_duration",
+        units=float(extra_minutes),
+        unit_type="minutes",
+        cost_cents=extra_minutes * get_vapi_price_cents_per_minute(),
+        correlation_id=correlation_id,
+    )
+
+
+def record_realtime_session(user_id, *, model=None, correlation_id=None):
+    """Record one OpenAI Realtime session mint (best-effort, never raises).
+
+    The browser session's real audio/token usage is never reported back
+    to the server, so the row records a 1-minute minimum at the
+    placeholder per-minute rate (see module docstring) — a long session
+    costs more than this row. Returns the cost row id or None.
+    """
+    return record_provider_usage(
+        user_id,
+        provider="openai",
+        tool="realtime_session",
+        units=1,
+        unit_type="sessions",
+        rate_cents_per_unit=get_openai_realtime_price_cents_per_minute(),
+        model=model,
+        correlation_id=correlation_id,
+    )
+
+
+def record_sendgrid_message(user_id, *, tool="lead_email", correlation_id=None):
+    """Record one SendGrid email send (best-effort, never raises).
+
+    One message at the placeholder per-message rate (ESTIMATE).
+    Returns the cost row id or None.
+    """
+    return record_provider_usage(
+        user_id,
+        provider="sendgrid",
+        tool=tool,
+        units=1,
+        unit_type="messages",
+        rate_cents_per_unit=get_sendgrid_price_cents_per_message(),
+        correlation_id=correlation_id,
     )
 
 

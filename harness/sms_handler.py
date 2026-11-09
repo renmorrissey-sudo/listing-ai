@@ -14,8 +14,14 @@ Processes one durable ``sms_auto_reply`` job:
    UI-selectable in Phase 1.
 6. BLOCK/DEFER: audit the decision, create a needs-attention entry via the
    existing helper, no send.
-7. Record Anthropic token usage to ``harness.costs`` when the coach analysis
-   exposes usage (best-effort).
+7. Token usage is recorded to ``harness.costs`` by the coach itself
+   (``sms_coach.analyze_inbound_reply`` records exactly once, tool
+   ``sms_coach``, with this job's correlation id) — the handler must
+   NOT record it again or the same call would be double-counted.
+   The monthly spend cap is enforced upstream in
+   ``sms_inbound.analyze_inbound_and_coach``: a capped tenant never
+   burns a coach call, and the job BLOCKs here with reason
+   ``spend_cap_reached`` instead of drafting or sending.
 
 Hard rule: never send when the tenant mode is ``drafts_only`` or paused.
 The mode gate is enforced locally here as well as by the policy module, so
@@ -81,6 +87,15 @@ def get_harness_mode(user_id):
         mode = (row["mode"] or DEFAULT_MODE).strip().lower() or DEFAULT_MODE
         paused = bool(row["paused"])
         ai_enabled = bool(row["ai_enabled"]) if row["ai_enabled"] is not None else True
+    # Staging mode lock (fallback path — the get_settings path locks in
+    # harness.policy): a staging process never reports a live mode.
+    try:
+        import config as _config
+
+        if bool(getattr(_config, "IS_STAGING", False)):
+            mode = DEFAULT_MODE
+    except Exception:
+        pass
     return mode, paused, ai_enabled
 
 
@@ -192,54 +207,6 @@ def _create_approval(user_id, job_id, kind, draft_payload):
             user_id,
             job_id,
         )
-        return None
-
-
-def _record_cost(user_id, usage, *, job_id=None):
-    """Record Anthropic token usage to harness_costs, best-effort.
-
-    The coach analysis exposes a ``usage`` payload (sms_coach attaches the
-    Anthropic response usage fields since Phase 1); without one this is a
-    no-op. Never raises.
-    Prefers the sibling-owned ``harness.costs.record_anthropic_usage``.
-    """
-    if not isinstance(usage, dict):
-        return None
-    try:
-        input_tokens = int(usage.get("input_tokens") or 0)
-        output_tokens = int(usage.get("output_tokens") or 0)
-    except (TypeError, ValueError):
-        return None
-    total = input_tokens + output_tokens
-    if total <= 0:
-        return None
-    try:
-        import config
-        from harness.costs import record_anthropic_usage
-
-        record_anthropic_usage(
-            user_id, "sms_auto_reply", usage, model=config.CLAUDE_MODEL
-        )
-        return total
-    except Exception:
-        pass
-    try:
-        from datetime import datetime as _dt
-
-        period = _dt.now(timezone.utc).strftime("%Y-%m")
-        with db.get_db() as conn:
-            conn.execute(
-                """
-                INSERT INTO harness_costs
-                    (user_id, period, provider, tool, units, unit_type,
-                     cost_cents, created_at)
-                VALUES (?, ?, 'anthropic', 'sms_auto_reply', ?, 'tokens', 0, ?)
-                """,
-                (user_id, period, total, _now()),
-            )
-        return total
-    except Exception:
-        logger.warning("harness_costs write failed tenant=%s job=%s", user_id, job_id)
         return None
 
 
@@ -489,10 +456,16 @@ def process_sms_auto_reply_job(job):
             "retryable": True,
         }
 
-    # (2) Existing coach analysis -- never reimplemented here.
+    # (2) Existing coach analysis -- never reimplemented here. The coach
+    # records its own token usage to the cost ledger exactly once (tool
+    # "sms_coach", this job's correlation id); a capped tenant never
+    # reaches the model call — analyze_inbound_and_coach returns
+    # error="spend_cap_reached" with no analysis, which BLOCKs below.
     from sms_inbound import analyze_inbound_and_coach
 
-    coach = analyze_inbound_and_coach(user_id, lead_id, inbound_id, body) or {}
+    coach = analyze_inbound_and_coach(
+        user_id, lead_id, inbound_id, body, correlation_id=correlation_id
+    ) or {}
     analysis = coach.get("analysis")
     if coach.get("error") == "coach_failed" or not analysis:
         reason = coach.get("error") or "no_analysis"
@@ -527,8 +500,12 @@ def process_sms_auto_reply_job(job):
 
     draft = str(analysis.get("draft_reply") or analysis.get("suggested_reply") or "").strip()[:480]
 
-    # (7) Token usage, best-effort (coach exposes usage since Phase 1).
-    _record_cost(user_id, coach.get("usage") or analysis.get("usage"), job_id=job_id)
+    # (7) Token usage is already recorded exactly once by the coach
+    # itself (sms_coach.analyze_inbound_reply, tool "sms_coach") —
+    # nothing to record here; recording again would double-count.
+    # A spend-cap trip surfaces as error="spend_cap_reached" with no
+    # analysis and BLOCKs above with retryable=False (the cap resets
+    # monthly; retrying with backoff would burn the job queue).
 
     # (3) Policy gate.
     decision, gate_reason, rate_limited = _decide_policy(

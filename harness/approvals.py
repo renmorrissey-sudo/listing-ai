@@ -38,9 +38,10 @@ user_id-scoped: a tenant touching another tenant's approval sees it as
 not found (the routes map that to 404 and never reveal it exists).
 
 Out of scope (deliberate): the Ask TopAI confirmation-token path
-(``ask_topai`` ``interpret()`` always returning ``confirmation_token``
-None) remains dead code; this harness approvals path is the approval
-flow that actually executes.
+was removed in Phase I hardening (2026-11-08) — it could never
+succeed (no token was ever issued or stored, so ``confirm()`` could
+only return 400) and nothing called it. This harness approvals path
+is the approval flow that actually executes.
 """
 
 from __future__ import annotations
@@ -447,6 +448,11 @@ def _execution_gate_context(user_id, lead):
         quiet_hours = False
     return {
         "mode": "authorized",
+        # Human-approval marker: the approval itself satisfies the mode
+        # gate. The staging mode lock in harness.policy honours this
+        # marker and nothing else; consent / suppression / quiet-hours /
+        # rate-limit / pause still apply in full.
+        "human_approval": True,
         "paused": paused,
         "consent_status": (lead or {}).get("sms_consent_status") or "",
         "opted_out": (lead or {}).get("opt_out_status") == "opted_out",

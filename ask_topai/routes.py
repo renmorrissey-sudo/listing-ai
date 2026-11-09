@@ -43,37 +43,6 @@ def api_interpret():
     return jsonify(result)
 
 
-@ask_topai_bp.route("/api/ask-topai/confirm", methods=["POST"])
-@auth.subscription_required
-def api_confirm():
-    user, err = _user_or_401()
-    if err:
-        return err
-    data = request.get_json(silent=True) or {}
-    token = str(data.get("confirmation_token") or "").strip()
-    context = data.get("context") if isinstance(data.get("context"), dict) else {}
-    result, status = service.confirm(user["id"], token, context)
-    return jsonify(result), status
-
-
-@ask_topai_bp.route("/api/ask-topai/cancel", methods=["POST"])
-@auth.subscription_required
-def api_cancel():
-    user, err = _user_or_401()
-    if err:
-        return err
-    data = request.get_json(silent=True) or {}
-    token = str(data.get("confirmation_token") or "").strip()
-    pending = None
-    if token:
-        from ask_topai import audit
-
-        pending = audit.get_pending_by_token(user["id"], token)
-        if pending:
-            audit.mark_status(pending["id"], user["id"], "cancelled")
-    return jsonify({"ok": True, "status": "cancelled"})
-
-
 @ask_topai_bp.route("/api/ask-topai/live/health", methods=["GET"])
 @auth.subscription_required
 def api_live_health():

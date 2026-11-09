@@ -14,6 +14,14 @@ audit log would gain one row per gated action while a tenant sits over a
 threshold. The level and period are embedded in ``gate_reason`` so the
 dedup query can match on them; the spend/cap figures in the reason are
 the values observed when the alert first fired that month.
+
+When a webhook notifier is configured, a new spend alert is also POSTed
+via :func:`notify_event` (event ``"spend_alert"``, deduped per
+tenant/level/month by its own ``ops_alert`` audit row). When no notifier
+is configured the alert stays audit-only and no extra audit row is
+written. A failed webhook delivery is retried on the next ``decide()``
+call, because the spend-alert dedup short-circuit no longer skips the
+webhook fan-out.
 """
 
 from __future__ import annotations
@@ -72,17 +80,18 @@ def record_spend_alert(user_id, spend_cents, cap_cents, level) -> int | None:
                 (user_id, f"%level={level}%", f"{period}%"),
             ).fetchone()
         if existing:
-            return int(dict(existing)["id"])
-        audit_id = record_audit(
-            user_id,
-            actor="system",
-            action="spend_alert",
-            tool="spend_alert",
-            mode=None,
-            gate_decision=_LEVEL_GATE_DECISION[level],
-            gate_reason=gate_reason,
-            cost_cents=int(spend_cents or 0),
-        )
+            audit_id = int(dict(existing)["id"])
+        else:
+            audit_id = record_audit(
+                user_id,
+                actor="system",
+                action="spend_alert",
+                tool="spend_alert",
+                mode=None,
+                gate_decision=_LEVEL_GATE_DECISION[level],
+                gate_reason=gate_reason,
+                cost_cents=int(spend_cents or 0),
+            )
     except Exception as exc:  # audit table missing, DB down, etc.
         logger.warning("spend alert could not be recorded: %s", exc)
         return None
@@ -90,6 +99,29 @@ def record_spend_alert(user_id, spend_cents, cap_cents, level) -> int | None:
         "harness spend_alert user_id=%s level=%s period=%s spend_cents=%s cap_cents=%s",
         user_id, level, period, int(spend_cents or 0), int(cap_cents or 0),
     )
+    # Webhook fan-out (audit-only when no notifier is configured).
+    # Deliberately NOT skipped when this month's alert already exists:
+    # notify_event has its own dedup (in-memory + ops_alert audit row),
+    # so a delivery that failed on the first attempt is retried on the
+    # next decide() call instead of being lost to the spend dedup.
+    # A notifier failure here must never break the policy gate.
+    try:
+        if get_notifier() is not None:
+            notify_event(
+                "spend_alert",
+                f"spend_alert:{user_id}:{level}:{period}",
+                f"Harness spend {level} for tenant {user_id}",
+                detail={
+                    "user_id": user_id,
+                    "level": level,
+                    "period": period,
+                    "spend_cents": int(spend_cents or 0),
+                    "cap_cents": int(cap_cents or 0),
+                },
+                user_id=user_id,
+            )
+    except Exception as exc:  # pragma: no cover - notify_event is non-raising
+        logger.warning("spend alert webhook fan-out failed: %s", exc)
     return audit_id
 
 
@@ -117,7 +149,18 @@ def record_spend_alert(user_id, spend_cents, cap_cents, level) -> int | None:
 # set) and at most once ever across restarts (an ``ops_alert`` audit row
 # carrying the key). Provider/worker-failure keys are scoped to the
 # current UTC hour so a still-broken provider re-alerts hourly, not on
-# every failure.
+# every failure. A failed webhook delivery is recorded as a separate
+# ``ops_alert_failed`` audit row (durable trace; dedup never looks at
+# it, so the next re-trigger still retries the send). The in-memory
+# set is capped at 5000 keys (see _prune_hour_keys); dropping keys is
+# safe because the audit row is the backstop.
+#
+# Diagnostics: every alert detail carries ``user_id`` (tenant scope)
+# and ``correlation_id`` (the job's trace id, L4) where the event has
+# one, plus job id / kind / attempts / error / counts as applicable.
+# Payload values never travel — dead-letter alerts carry payload key
+# names only — and every alert string is redacted (secrets, phone,
+# email, street address) before it leaves the process.
 #
 # Non-blocking: every public function here catches its own failures
 # (notifier raising, audit/DB errors, redaction errors) and returns
@@ -159,24 +202,46 @@ def _current_hour() -> str:
 
 
 def _redact_value(value):
-    """Redact secrets (everywhere) plus phone/email from a string value.
+    """Redact secrets (everywhere) plus phone/email/address from a string.
 
     Reuses harness.jobs.redact_text (H3) with redact_pii=True so phone
     numbers and emails never appear verbatim in an alert, even when they
-    sit in a non-body field. Falls back to a local secret-only pass if
-    the jobs module is unavailable.
+    sit in a non-body field. Street addresses are NOT covered by
+    redact_text, so an address pattern is applied on top: a handler or
+    provider error string can carry a lead/property address verbatim
+    (proven by the E2E redaction test — "1462 Sonata Ct" reached a
+    webhook payload before this pattern existed). The pattern needs a
+    leading house number plus a street suffix, so ordinary phrases
+    ("attempt 3", "error 500") are untouched. Falls back to a local
+    secret-only pass if the jobs module is unavailable.
     """
     if not isinstance(value, str):
         return value
     if _redact_text is not None:
         try:
-            return _redact_text(value, redact_pii=True)
+            redacted = _redact_text(value, redact_pii=True)
         except Exception:
-            pass
-    return _re.sub(
-        r"(?i)(api[_-]?key|secret|password|token)\s*[:=]\s*\S+", r"\1=[REDACTED]",
-        _re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "[REDACTED]", value),
-    )
+            redacted = value
+    else:
+        redacted = _re.sub(
+            r"(?i)(api[_-]?key|secret|password|token)\s*[:=]\s*\S+",
+            r"\1=[REDACTED]",
+            _re.sub(r"sk-[A-Za-z0-9_\-]{8,}", "[REDACTED]", value),
+        )
+    return _ADDRESS_RE.sub("[REDACTED]", redacted)
+
+
+# US street address: house number + words + street suffix. Applied only
+# to alert strings (not to job payloads, which keep structured address
+# fields for the send path). Requires the leading number so phrases
+# like "Main Street" with no number, or "attempt 3 failed", do not match.
+_ADDRESS_RE = _re.compile(
+    r"\b\d{1,6}\s+(?:[A-Za-z0-9.'#\-]+\s+){0,4}?"
+    r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr"
+    r"|Court|Ct|Place|Pl|Way|Terrace|Trail|Parkway|Pkwy|Circle|Cir"
+    r"|Highway|Hwy)\b\.?",
+    _re.IGNORECASE,
+)
 
 
 def _redact_detail(detail):
@@ -185,9 +250,23 @@ def _redact_detail(detail):
     Structured payload values are dropped to key names only by the
     callers; this is the belt-and-braces pass over whatever remains:
     every string is run through _redact_value.
+
+    Exception — the ``correlation_id`` field: a job's correlation id is
+    a uuid4 hex trace id (see harness.jobs.new_correlation_id), and the
+    long-hex secret pattern in redact_text matches any 32-hex string,
+    so a blind pass would replace every correlation id with
+    ``[REDACTED]`` and destroy the trace the alert exists to carry
+    (proven by the E2E delivery tests). The key name is controlled by
+    alert code, never by user input, and the value is a trace id by
+    construction — it is already logged and stored in plaintext
+    elsewhere (SMS_AI_ENQUEUED log lines, the harness_audit
+    correlation_id column) — so it passes through verbatim.
     """
     if isinstance(detail, dict):
-        return {k: _redact_detail(v) for k, v in detail.items()}
+        return {
+            k: v if k == "correlation_id" else _redact_detail(v)
+            for k, v in detail.items()
+        }
     if isinstance(detail, list):
         return [_redact_detail(v) for v in detail]
     if isinstance(detail, str):
@@ -227,19 +306,29 @@ def _audit_has_key(key) -> bool:
         return False
 
 
-def _record_ops_audit(user_id, event_type, key, title):
+def _record_ops_audit(user_id, event_type, key, title, action="ops_alert",
+                      correlation_id=None):
+    """Write one ops-alert audit row (durable dedup record + trace).
+
+    ``action`` is ``"ops_alert"`` for a sent (or no-notifier) alert and
+    ``"ops_alert_failed"`` for a webhook delivery failure. Dedup only
+    ever looks at ``ops_alert`` rows, so a failed-delivery row never
+    suppresses a later retry — it is a durable trace that the webhook
+    was down, visible next to the eventual successful alert.
+    """
     try:
         from harness.audit import record_audit
 
         return record_audit(
             user_id,
             actor="system",
-            action="ops_alert",
+            action=action,
             tool="ops_alert",
             mode=None,
             gate_decision=None,
-            gate_reason=f"ops_alert event={event_type} key={key} {_redact_value(title)}",
+            gate_reason=f"{action} event={event_type} key={key} {_redact_value(title)}",
             cost_cents=0,
+            correlation_id=correlation_id,
         )
     except Exception as exc:
         logger.warning("ops alert audit row could not be recorded: %s", exc)
@@ -247,11 +336,27 @@ def _record_ops_audit(user_id, event_type, key, title):
 
 
 def _prune_hour_keys():
-    """Drop hour-scoped dedup keys from earlier UTC hours."""
+    """Drop hour-scoped dedup keys from earlier UTC hours.
+
+    Also bounds the in-memory set: dead-letter keys never expire by
+    hour, so without a cap a long-running worker would accumulate one
+    entry per dead-lettered job forever. Dropping non-hour keys over the
+    cap is safe — the durable ``ops_alert`` audit row is the backstop
+    and ``notify_event`` re-checks it before sending.
+    """
     hour = _current_hour()
     stale = [k for k in _sent_keys if "|hour=" in k and not k.endswith(f"|hour={hour}")]
     for k in stale:
         _sent_keys.discard(k)
+    if len(_sent_keys) > _MAX_SENT_KEYS:
+        for k in [k for k in _sent_keys if "|hour=" not in k]:
+            _sent_keys.discard(k)
+            if len(_sent_keys) <= _MAX_SENT_KEYS:
+                break
+
+
+# Cap on the in-memory dedup set (see _prune_hour_keys).
+_MAX_SENT_KEYS = 5000
 
 
 def _reset_alert_state():
@@ -264,8 +369,9 @@ class Notifier:
     """Alert sink interface: implement ``send(alert: dict) -> None``.
 
     ``alert`` has keys ``event``, ``key``, ``title``, ``detail`` (a
-    redacted dict) and ``timestamp`` (UTC ISO). ``send`` raising means
-    delivery failed; the caller logs and continues.
+    redacted dict), ``text``/``content`` (the same redacted one-liner,
+    for Slack/Discord incoming webhooks) and ``timestamp`` (UTC ISO).
+    ``send`` raising means delivery failed; the caller logs and continues.
     """
 
     def send(self, alert):
@@ -274,7 +380,9 @@ class Notifier:
 
 class WebhookNotifier(Notifier):
     """POST the alert JSON to a webhook URL (Slack-compatible shape:
-    a plain JSON object). Stdlib only; non-2xx raises."""
+    a plain JSON object with ``text``/``content`` one-liner plus the
+    structured ``event``/``key``/``title``/``detail`` fields, so Slack
+    and Discord incoming webhooks accept it). Stdlib only; non-2xx raises."""
 
     def __init__(self, url, timeout=5):
         self.url = url
@@ -349,14 +457,16 @@ def get_provider_failure_threshold() -> int:
 
 
 def notify_event(event_type, key, title, detail=None, user_id=None,
-                 notifier=None):
+                 notifier=None, correlation_id=None):
     """Send one deduped, redacted ops alert. Returns True iff an
     external notification was actually sent.
 
     Returns False (never raises) when the event was already alerted,
     when no notifier is configured (audit row + log line still written),
     or when delivery failed. A failed delivery is deliberately NOT
-    recorded as sent, so a later re-trigger of the same event retries.
+    recorded as sent, so a later re-trigger of the same event retries;
+    it IS recorded as an ``ops_alert_failed`` audit row, so a down
+    webhook leaves a durable trace instead of only a log line.
     """
     _prune_hour_keys()
     full_key = f"{event_type}:{key}"
@@ -370,6 +480,20 @@ def notify_event(event_type, key, title, detail=None, user_id=None,
             "detail": _redact_detail(detail or {}),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+        # Human-readable line for chat webhooks: Slack incoming webhooks
+        # reject a payload with no ``text`` (``no_text`` / HTTP 400) and
+        # Discord rejects one with no ``content``/``embeds`` (400 code
+        # 50006 "Cannot send an empty message"), so the same redacted
+        # one-liner is carried under both field names. Generic receivers
+        # ignore the extra fields. The title is already redacted, and
+        # the key holds no secrets (signatures are redacted), so the
+        # line is safe to display in a channel.
+        summary = (
+            f"[TopAI Harness] {alert['title']} "
+            f"(event={event_type} key={key})"
+        )
+        alert["text"] = summary
+        alert["content"] = summary
     except Exception as exc:
         logger.warning("ops alert could not be built event=%s: %s", event_type, exc)
         return False
@@ -378,7 +502,8 @@ def notify_event(event_type, key, title, detail=None, user_id=None,
         return False
     sink = notifier if notifier is not None else get_notifier()
     if sink is None:
-        _record_ops_audit(user_id, event_type, key, title)
+        _record_ops_audit(user_id, event_type, key, title,
+                          correlation_id=correlation_id)
         _sent_keys.add(full_key)
         logger.warning(
             "harness ops_alert (no notifier configured) event=%s key=%s title=%s",
@@ -392,9 +517,13 @@ def notify_event(event_type, key, title, detail=None, user_id=None,
             "harness ops_alert delivery failed event=%s key=%s: %s",
             event_type, key, exc,
         )
+        _record_ops_audit(user_id, event_type, key, title,
+                          action="ops_alert_failed",
+                          correlation_id=correlation_id)
         return False
     _sent_keys.add(full_key)
-    _record_ops_audit(user_id, event_type, key, title)
+    _record_ops_audit(user_id, event_type, key, title,
+                      correlation_id=correlation_id)
     logger.warning(
         "harness ops_alert sent event=%s key=%s title=%s",
         event_type, key, alert["title"],
@@ -440,6 +569,8 @@ def alert_dead_letter(job, error=None, notifier=None):
             err = None
     detail = {
         "job_id": job_id,
+        "user_id": (job or {}).get("user_id"),
+        "correlation_id": (job or {}).get("correlation_id"),
         "kind": kind,
         "attempts": (job or {}).get("attempts"),
         "error": _redact_value(str(err)[:300]) if err is not None else None,
@@ -453,6 +584,7 @@ def alert_dead_letter(job, error=None, notifier=None):
             detail=detail,
             user_id=(job or {}).get("user_id"),
             notifier=notifier,
+            correlation_id=(job or {}).get("correlation_id"),
         )
     except Exception as exc:
         logger.warning("dead-letter alert failed job=%s: %s", job_id, exc)
@@ -460,7 +592,7 @@ def alert_dead_letter(job, error=None, notifier=None):
 
 
 def alert_provider_failure(provider, error, *, kind=None, user_id=None,
-                           threshold=None, notifier=None):
+                           threshold=None, notifier=None, correlation_id=None):
     """Alert after ``threshold`` consecutive retryable failures for one
     provider (default 3, via HARNESS_ALERT_PROVIDER_FAILURE_THRESHOLD).
     Failures before the threshold return False silently; the alert fires
@@ -479,6 +611,8 @@ def alert_provider_failure(provider, error, *, kind=None, user_id=None,
     detail = {
         "provider": provider,
         "kind": kind,
+        "user_id": user_id,
+        "correlation_id": correlation_id,
         "error": _redact_value(str(error)[:300]),
         "consecutive_failures": count,
     }
@@ -491,18 +625,21 @@ def alert_provider_failure(provider, error, *, kind=None, user_id=None,
             detail=detail,
             user_id=user_id,
             notifier=notifier,
+            correlation_id=correlation_id,
         )
     except Exception as exc:
         logger.warning("provider-failure alert failed provider=%s: %s", provider, exc)
         return False
 
 
-def alert_worker_failure(error, *, worker_id=None, context=None, notifier=None):
+def alert_worker_failure(error, *, worker_id=None, context=None, notifier=None,
+                         correlation_id=None):
     """Alert once per error signature per UTC hour when the worker
     itself fails (dispatch crash, loop error). Returns True iff sent."""
     signature = _signature(error)
     detail = {
         "worker_id": worker_id,
+        "correlation_id": correlation_id,
         "error": _redact_value(str(error)[:300]),
     }
     if isinstance(context, dict):
@@ -519,6 +656,7 @@ def alert_worker_failure(error, *, worker_id=None, context=None, notifier=None):
             detail=detail,
             user_id=None,
             notifier=notifier,
+            correlation_id=correlation_id,
         )
     except Exception as exc:
         logger.warning("worker-failure alert failed: %s", exc)

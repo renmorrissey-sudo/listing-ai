@@ -170,6 +170,9 @@ TELNYX_TRIAL_MODE = (_env("TELNYX_TRIAL_MODE", "true") or "true").lower() in {
 TELNYX_VERIFIED_TEST_NUMBER = _env_strip("TELNYX_VERIFIED_TEST_NUMBER")
 TELNYX_API_BASE = _env_strip("TELNYX_API_BASE") or "https://api.telnyx.com/v2"
 TELNYX_WEBHOOK_TOLERANCE_SECONDS = int(_env("TELNYX_WEBHOOK_TOLERANCE_SECONDS", "300"))
+# Production toll-free number. Staging must never send from it
+# (validate_staging_safety() refuses to boot if it is configured there).
+PRODUCTION_TELNYX_NUMBER = "+18888210810"
 # Customer-facing toll-free verification badge for diagnostics (pending|verified|unknown).
 # Source of truth for outbound eligibility when SMS_PROVIDER=telnyx — only "verified" allows sends.
 TELNYX_TOLL_FREE_VERIFICATION_STATUS = (
@@ -202,6 +205,17 @@ SMS_AI_MAX_REPLIES_PER_CONTACT_PER_DAY = int(
 )
 SMS_CERT_TEXT_VERSION_ONE_TO_ONE = "one_to_one_cert_v1"
 SMS_CERT_TEXT_VERSION_CAMPAIGN = "campaign_cert_v1"
+
+# --- Harness staging safety -------------------------------------------------
+# HARNESS_MOCK_PROVIDERS: when true, the SMS provider factory returns the
+# mock provider (sms_providers/mock.py), which records sends in memory
+# and never touches the network. Defaults ON in staging and OFF elsewhere;
+# an explicit env value always wins. Staging therefore cannot send a real
+# SMS unless someone deliberately sets HARNESS_MOCK_PROVIDERS=false AND
+# turns Telnyx trial mode off (which validate_staging_safety() refuses).
+HARNESS_MOCK_PROVIDERS = _env_bool(
+    "HARNESS_MOCK_PROVIDERS", APP_ENV == "staging"
+)
 SMS_IMPORT_UPLOAD_DIR = _env_strip("SMS_IMPORT_UPLOAD_DIR") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "private_uploads", "sms_imports"
 )
@@ -332,6 +346,127 @@ def validate_database_config():
         )
 
 
+def validate_staging_safety():
+    """Fail-closed staging guards. Returns a list of error strings.
+
+    Staging must never be able to send a real SMS, send a real email,
+    place a real call, or charge a real card by misconfiguration. These
+    checks run at boot (see validate_config) and refuse to start when
+    any fires. They run in every process that calls validate_config()
+    (web, harness worker, SMS campaign worker — see workers/* main()).
+
+    * a live Stripe secret in staging (real charges possible);
+    * the production Telnyx toll-free number as the staging sender;
+    * a real Telnyx API key with mock providers off AND trial mode off
+      (unrestricted real sends to arbitrary numbers);
+    * trial mode on but no verified test number configured (trial mode
+      cannot restrict destinations without one);
+    * real Twilio / SimpleTexting credentials for the *active* SMS
+      provider with mock providers off (Telnyx trial mode is a
+      Telnyx-only restriction; the other providers have no equivalent,
+      so there is no safe non-mock config for them in staging);
+    * a SendGrid key or SMTP configuration (real email is reachable
+      from the staging UI — e.g. password reset via
+      email_service.send_email — and there is no SendGrid test key, so
+      staging email stays unset until an email mock exists);
+    * a Vapi key (POST /voice/calls places a real outbound call
+      outside the harness gate) or an OpenAI key (POST
+      /api/ask-topai/live/session mints a real metered realtime
+      session, also outside the harness gate).
+
+    Keys for a provider that is NOT the active SMS provider are inert
+    (the factory never constructs it) and do not trip the guard; keys
+    for any provider are inert while HARNESS_MOCK_PROVIDERS is on, so
+    a mock-on staging config passes with real keys set.
+    """
+    errors = []
+    if not IS_STAGING:
+        return errors
+    stripe_key = (STRIPE_SECRET_KEY or "").strip()
+    if stripe_key.startswith("sk_live_"):
+        errors.append(
+            "Staging must not use a live Stripe secret key "
+            "(sk_live_…); leave Stripe unset in staging."
+        )
+    telnyx_number = (TELNYX_PHONE_NUMBER or "").strip()
+    if telnyx_number and telnyx_number == PRODUCTION_TELNYX_NUMBER:
+        errors.append(
+            "Staging must not use the production Telnyx number "
+            f"({PRODUCTION_TELNYX_NUMBER}); leave TELNYX_PHONE_NUMBER unset "
+            "in staging (mock provider) or use a staging-only number."
+        )
+    telnyx_key = (TELNYX_API_KEY or "").strip()
+    if telnyx_key and not HARNESS_MOCK_PROVIDERS and not TELNYX_TRIAL_MODE:
+        errors.append(
+            "Staging has a real Telnyx API key with mock providers off "
+            "and trial mode off; that would allow real SMS to arbitrary "
+            "numbers. Set HARNESS_MOCK_PROVIDERS=true or "
+            "TELNYX_TRIAL_MODE=true."
+        )
+    if telnyx_key and not HARNESS_MOCK_PROVIDERS and TELNYX_TRIAL_MODE:
+        if not (TELNYX_VERIFIED_TEST_NUMBER or "").strip():
+            errors.append(
+                "Staging Telnyx trial mode requires "
+                "TELNYX_VERIFIED_TEST_NUMBER; without it trial mode "
+                "cannot restrict destinations."
+            )
+    # Other SMS providers: Telnyx trial mode does not restrict them, so
+    # a real credential for the active provider with mock off is an
+    # unrestricted real-send path. Scoped to the active provider —
+    # credentials for an unselected provider are inert.
+    active_provider = (SMS_PROVIDER or "telnyx").lower().strip()
+    if active_provider == "twilio" and not HARNESS_MOCK_PROVIDERS:
+        twilio_sid = (TWILIO_ACCOUNT_SID or "").strip()
+        twilio_token = (TWILIO_AUTH_TOKEN or "").strip()
+        if twilio_sid.startswith("AC") and twilio_token:
+            errors.append(
+                "Staging must not use real Twilio credentials with mock "
+                "providers off; that would allow real SMS to arbitrary "
+                "numbers (Twilio has no trial-mode restriction in this "
+                "codebase). Set HARNESS_MOCK_PROVIDERS=true or leave "
+                "Twilio unset in staging."
+            )
+    if active_provider == "simpletexting" and not HARNESS_MOCK_PROVIDERS:
+        if (SIMPLETEXTING_API_TOKEN or "").strip():
+            errors.append(
+                "Staging must not use a real SimpleTexting API token with "
+                "mock providers off; that would allow real SMS to "
+                "arbitrary numbers. Set HARNESS_MOCK_PROVIDERS=true or "
+                "leave SimpleTexting unset in staging."
+            )
+    # Email: a SendGrid key or SMTP config makes real email reachable
+    # from the staging UI (password reset, etc.) with no harness gate
+    # in the way. There is no SendGrid test key, so refuse, don't warn.
+    if (SENDGRID_API_KEY or "").strip():
+        errors.append(
+            "Staging must not set SENDGRID_API_KEY (SendGrid); it would allow real "
+            "email from staging (e.g. password reset). Leave email unset "
+            "in staging until an email mock exists."
+        )
+    if (SMTP_HOST or "").strip():
+        errors.append(
+            "Staging must not configure SMTP (SMTP_HOST is set); it would "
+            "allow real email from staging. Leave email unset in staging "
+            "until an email mock exists."
+        )
+    # Voice / realtime: both are reachable from the staging UI outside
+    # the harness gate and spend real money (Vapi outbound calls,
+    # OpenAI realtime sessions). Refuse until a mock exists for them.
+    if (VOICE_PROVIDER_API_KEY or "").strip():
+        errors.append(
+            "Staging must not set VOICE_PROVIDER_API_KEY (Vapi); it would "
+            "allow real outbound calls from staging. Leave voice unset "
+            "in staging until a voice mock exists."
+        )
+    if (OPENAI_API_KEY or "").strip():
+        errors.append(
+            "Staging must not set OPENAI_API_KEY; it would allow real "
+            "metered OpenAI realtime sessions from staging. Leave it "
+            "unset in staging until a realtime mock exists."
+        )
+    return errors
+
+
 def validate_config():
     missing = []
     if not ANTHROPIC_API_KEY:
@@ -367,6 +502,16 @@ def validate_config():
             sys.exit(1)
 
     validate_database_config()
+
+    # Staging safety guards fail closed at boot (see
+    # validate_staging_safety). They are part of validate_config so the
+    # web process, the harness worker, and the migration runner path all
+    # enforce them.
+    staging_errors = validate_staging_safety()
+    if staging_errors:
+        for err in staging_errors:
+            print(f"FATAL: {err}", file=sys.stderr)
+        sys.exit(1)
 
     # Safe Twilio startup checks — never log credential values.
     account_sid_ok = bool(TWILIO_ACCOUNT_SID and TWILIO_ACCOUNT_SID.startswith("AC"))

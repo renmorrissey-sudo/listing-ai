@@ -9,7 +9,9 @@ erroring.
 
 from __future__ import annotations
 
+import hmac
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, jsonify, render_template, request
@@ -17,6 +19,8 @@ from flask import Blueprint, jsonify, render_template, request
 import auth
 import config
 import db
+
+from harness.worker_health import check_worker_health, get_worker_heartbeat, maybe_alert_worker_health
 
 from harness.approvals import (
     approve_approval,
@@ -171,6 +175,25 @@ def _outbound_activity(user_id):
     }
 
 
+def _harness_worker_heartbeat():
+    """Liveness of the harness worker service. Never raises.
+
+    Delegates to ``harness.worker_health.get_worker_heartbeat`` (same
+    freshest ``harness-%`` row, same 120 s freshness window) but keeps
+    this function's historical return shape — ``{"running",
+    "last_seen_at", "worker_id"}`` — so existing callers and tests are
+    unaffected. Staleness detail, stuck jobs, and the overall health
+    verdict live in the ``worker_health`` key of ``get_harness_status``
+    instead (see ``harness.worker_health.check_worker_health``).
+    """
+    heartbeat = get_worker_heartbeat()
+    return {
+        "running": bool(heartbeat["running"]),
+        "last_seen_at": heartbeat["last_seen_at"],
+        "worker_id": heartbeat["worker_id"],
+    }
+
+
 def get_harness_status(user_id):
     """Read-only status dict for one tenant. Never raises for missing tables.
 
@@ -193,7 +216,16 @@ def get_harness_status(user_id):
     harness-wide ``paused`` pauses ALL automated sending, including SMS.
     ``voice`` reports only whether Vapi is configured; voice tools are
     gated by the same policy gate as SMS. ``outbound_activity`` is
-    recorded activity (see ``_outbound_activity``).
+    recorded activity (see ``_outbound_activity``). ``worker`` reports
+    harness-worker liveness from its durable heartbeat row (see
+    ``_harness_worker_heartbeat``): ``running`` is True only when a
+    ``harness-<hostname>-<pid>`` heartbeat is fresh (<= 120 s old).
+    ``worker_health`` (see ``harness.worker_health.check_worker_health``)
+    adds the staleness verdict, stuck-job and overdue-job counts for
+    this tenant, and the overall ``healthy`` flag. This function itself
+    stays side-effect free — it reports health but never alerts; the
+    web-side alert check runs in ``GET /api/harness/health`` and in
+    the ``/harness`` page route.
     """
     mode, paused, ai_enabled = _harness_settings(user_id)
     pending_approvals = _count(
@@ -247,11 +279,73 @@ def get_harness_status(user_id):
             "auto_reply_configured": _sms_auto_reply_configured(),
             "paused": paused,
         },
+        "worker": _harness_worker_heartbeat(),
+        "worker_health": check_worker_health(user_id),
         "voice": {
             "configured": _voice_configured(),
         },
         "outbound_activity": _outbound_activity(user_id),
     }
+
+
+def _health_token_valid():
+    """True when the request carries the HARNESS_HEALTH_TOKEN.
+
+    The token (env ``HARNESS_HEALTH_TOKEN``) lets a free external
+    uptime monitor poll ``GET /api/harness/health`` without a login
+    session, so a dead deployment is still detected when nobody is
+    signed in. Constant-time comparison; when the env var is unset,
+    token auth is unavailable and the endpoint requires login.
+    Accepts ``?token=...`` or the ``X-Harness-Health-Token`` header.
+    The token is a bearer credential for a read-only health read only
+    — it grants no other access and must never be reused elsewhere.
+    """
+    expected = (os.environ.get("HARNESS_HEALTH_TOKEN") or "").strip()
+    if not expected:
+        return False
+    supplied = (
+        request.args.get("token")
+        or request.headers.get("X-Harness-Health-Token")
+        or ""
+    )
+    return hmac.compare_digest(str(supplied), expected)
+
+
+@harness_bp.route("/api/harness/health", methods=["GET"])
+def api_harness_health():
+    """Worker-health check for operators and external watchers.
+
+    Token-authenticated (``HARNESS_HEALTH_TOKEN``) callers get the
+    platform-wide health (no tenant); otherwise login is required and
+    the stuck/overdue counts are scoped to the signed-in tenant.
+    Runs the web-side health alert check on every call — the web
+    process is alive precisely when the worker may not be, and dedup
+    (hour-scoped, durable) keeps repeat polls from re-sending. Never
+    fails the endpoint on an alert error. Returns 503 with
+    ``healthy: false`` only when the health check itself cannot run.
+    """
+    if _health_token_valid():
+        user_id = None
+    else:
+        user = auth.get_current_user()
+        if not user:
+            return jsonify({"error": "Please log in to continue."}), 401
+        user_id = user["id"]
+    try:
+        health = check_worker_health(user_id)
+    except Exception:
+        logger.exception("harness health check failed")
+        return jsonify({"healthy": False, "error": "health check failed"}), 503
+    try:
+        health["alerts"] = maybe_alert_worker_health(health, user_id)
+    except Exception:
+        logger.exception("harness health alert check failed")
+        health["alerts"] = {
+            "worker_stale": False,
+            "stuck_jobs": False,
+            "worker_recovered": False,
+        }
+    return jsonify(health)
 
 
 @harness_bp.route("/api/harness/status", methods=["GET"])
@@ -341,6 +435,13 @@ def harness_status_page():
         return jsonify({"error": "Please log in to continue."}), 401
     status = get_harness_status(user["id"])
     approvals = list_pending_approvals(user["id"])
+    # Web-side health alert check: the web process is alive precisely
+    # when the worker may not be. Deduped (hour-scoped, durable), so a
+    # page reload never re-sends; failures here must never break the page.
+    try:
+        maybe_alert_worker_health(status.get("worker_health") or {}, user["id"])
+    except Exception:
+        logger.exception("harness health alert check failed")
     recent_audit = []
     try:
         from harness.audit import list_audit
@@ -370,6 +471,8 @@ def harness_status_page():
         sms=status["sms"],
         voice=status["voice"],
         outbound_activity=status["outbound_activity"],
+        worker=status["worker"],
+        worker_health=status["worker_health"],
         approvals=approvals,
         recent_audit=recent_audit,
         spend_cents=spend_cents,

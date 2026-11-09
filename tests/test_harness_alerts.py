@@ -256,6 +256,28 @@ def test_alert_redacts_secrets_and_phone(two_users):
     assert "[REDACTED]" in dumped
 
 
+def test_alert_keeps_correlation_id_but_redacts_secrets(two_users):
+    """A uuid-hex correlation id must survive redaction (it matches the
+    long-hex secret pattern) while secrets in the same alert do not."""
+    u1, _ = two_users
+    recorder = RecordingNotifier()
+    corr = "a77790ed601c4a8c8c05a0d0792973f2"
+    fake_key = "sk-ant-api03-FAKESECRETKEY1234567890"
+    job = {
+        "id": 424246,
+        "user_id": u1,
+        "kind": "sms_auto_reply",
+        "attempts": 5,
+        "correlation_id": corr,
+        "payload_json": "{}",
+    }
+    assert alerts.alert_dead_letter(job, f"boom key={fake_key}", notifier=recorder) is True
+    alert = recorder.sent[0]
+    assert alert["detail"]["correlation_id"] == corr
+    assert fake_key not in json.dumps(alert)
+    assert alert["detail"]["user_id"] == u1
+
+
 def test_failing_notifier_is_non_blocking(two_users):
     from workers.harness_worker import run_once
 

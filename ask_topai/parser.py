@@ -1,31 +1,50 @@
 """Convert natural language into validated Phase 1 commands. Never executes them.
 
-Confirmation-token design (Phase 1 — intentional, not a bug)
-------------------------------------------------------------
+Confirmation-token flow — REMOVED (Phase I hardening, 2026-11-08)
+------------------------------------------------------------------
 Ask TopAI executes routine commands immediately: ``ask_topai.service.
-interpret()`` runs the validated commands and always returns
-``confirmation_token: None`` in its response. There is no
-confirmation step for routine Phase 1 actions (create lead / note /
-task / criteria update), so no ``pending_confirmation`` row is ever
-created and no token is ever issued on that path.
+interpret()`` runs the validated commands and returns no
+``confirmation_token`` field at all.
 
-``ask_topai.audit.issue_confirmation_token()`` is the issuer for a
-*future* confirmation flow (sensitive actions that must wait for a
-human). It currently has zero callers in non-test code — that is
-deliberate, not dead code to delete: the ``confirm()`` path in
-``ask_topai.service`` and the ``/api/ask-topai/confirm`` route are
-already wired to look a token up (``audit.get_by_token`` /
-``get_pending_by_token``), and removing the issuer would remove the
-only way to mint a token when that flow is switched on. Keep it; do
-not call it from ``interpret()`` unless a confirmation step is added
-for a specific action, and do not remove the ``confirmation_token``
-field from ``interpret()`` responses — clients and tests rely on the
-field being present (always ``None`` today).
+The confirmation-token flow was removed, not kept, because it could
+never succeed:
 
-The harness human-approval flow (``harness.approvals`` /
-``harness_approvals`` rows) is separate from this token flow and is
-unaffected by it. ``tests/test_ask_topai_confirmation.py`` pins all
-of the above.
+* ``interpret()`` never issued a token and never created a
+  ``pending_confirmation`` row — every ``record_command()`` call site
+  passes no token and a status other than ``pending_confirmation``.
+* ``service.confirm()`` could therefore only ever return 400: its
+  token lookup (``audit.get_by_token`` / ``get_pending_by_token``)
+  matches only rows with a stored ``confirmation_token_hash``, and
+  every row has a NULL hash — including executed rows, so even the
+  duplicate-replay branch was unreachable. Minting a token alone
+  granted nothing.
+* No caller existed outside tests: the widget (``templates/
+  ask_topai_widget.html``) only calls ``/api/ask-topai/interpret``
+  and never reads ``confirmation_token``; nothing calls
+  ``/api/ask-topai/confirm`` or ``/api/ask-topai/cancel`` (the latter
+  also returned success unconditionally while cancelling nothing).
+
+What was removed: ``confirmation_token`` from all ``interpret()``
+responses, ``service.confirm()``, the ``/api/ask-topai/confirm`` and
+``/api/ask-topai/cancel`` routes, ``audit.issue_confirmation_token()``,
+``audit.get_by_token()``, ``audit.get_pending_by_token()``, and the
+``confirmation_token`` / ``expires_at`` parameters of
+``audit.record_command()``. The ``confirmation_token_hash`` and
+``expires_at`` columns remain in ``ask_topai_commands`` (migration
+023, already applied; dropping them needs a new migration) and now
+always store NULL — harmless, no code reads them.
+
+What would change this decision: if a future Ask TopAI action must
+wait for a human before executing, build that confirmation step on
+the harness human-approval flow (``harness.approvals`` /
+``harness_approvals`` rows — the approval flow that actually
+executes), not by resurrecting this token flow. The realtime
+spoken-confirmation policy (``ask_topai.policy`` /
+``realtime/runtime.py``) is separate and unaffected.
+
+``tests/test_ask_topai_confirmation.py`` pins the removal (no
+``confirmation_token`` key, no confirm/cancel routes, no issuer) and
+the future-tool classification in ``ask_topai/registry.py``.
 """
 
 from __future__ import annotations
@@ -90,9 +109,35 @@ def extract_json_object(content: str) -> dict:
     return data
 
 
-def call_llm(transcript: str, context: dict) -> dict:
+def call_llm(transcript: str, context: dict, *, user_id=None, correlation_id=None) -> dict:
+    """Legacy single-shot Ask TopAI model call (pre-tool-loop parser).
+
+    The live path is ``ask_topai.agent.complete`` (used by
+    ``ask_topai.service.interpret`` and ``harness.orchestrator``); this
+    function is only reached via ``interpret_request`` with no
+    pre-supplied model payload, which has no in-repo callers. It is
+    still gated and recorded like every other billable path: the spend
+    cap is checked before the call (a tripped cap raises RuntimeError
+    with no model call), and usage is recorded when ``user_id`` is
+    given. Without a ``user_id`` the spend cannot be attributed to a
+    tenant — that is a known gap, documented in
+    docs/ai-cost-coverage.md.
+    """
     if not is_configured():
         raise RuntimeError("Ask TopAI is not configured.")
+    if user_id is not None:
+        try:
+            from harness.costs import is_spend_cap_tripped
+
+            if is_spend_cap_tripped(user_id):
+                raise RuntimeError(
+                    "Monthly AI spend limit reached. Ask TopAI did not "
+                    "run this request; the limit resets next month."
+                )
+        except RuntimeError:
+            raise
+        except Exception:
+            pass  # fail open on an unreadable ledger (see harness.costs)
     client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
     context_bits = []
     if context.get("lead_id"):
@@ -113,6 +158,19 @@ def call_llm(transcript: str, context: dict) -> dict:
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
     )
+    if user_id is not None:
+        try:
+            from harness.costs import record_anthropic_message
+
+            record_anthropic_message(
+                user_id,
+                "ask_topai_legacy",
+                message,
+                model=config.CLAUDE_MODEL,
+                correlation_id=correlation_id,
+            )
+        except Exception:
+            pass  # recording must never break the parse
     return extract_json_object(message.content[0].text)
 
 
@@ -193,7 +251,8 @@ def validate_model_payload(payload: dict, transcript: str) -> dict:
     }
 
 
-def interpret_request(transcript: str, context: dict | None = None, *, model_payload: dict | None = None) -> dict:
+def interpret_request(transcript: str, context: dict | None = None, *, model_payload: dict | None = None,
+                      user_id=None, correlation_id=None) -> dict:
     text = (transcript or "").strip()
     if not text:
         return {
@@ -202,5 +261,6 @@ def interpret_request(transcript: str, context: dict | None = None, *, model_pay
             "commands": [],
         }
     if model_payload is None:
-        model_payload = call_llm(text, context or {})
+        model_payload = call_llm(text, context or {}, user_id=user_id,
+                                 correlation_id=correlation_id)
     return validate_model_payload(model_payload, text)

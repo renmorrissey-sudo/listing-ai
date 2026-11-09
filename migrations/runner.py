@@ -59,6 +59,17 @@ MIGRATION_MODULES = [
     "migrations.versions.032_tenant_sms_senders_scoped_unique",
 ]
 
+# RELEASE NOTE (topai-launch-readiness-release, 2026-11-09): the release
+# must contain no schema migrations, so 033 (harness_costs model +
+# correlation_id columns) and 034 (harness_jobs claim-path index) were
+# removed from this list and their files deleted. The files remain in git
+# history (branch topai-launch-readiness-final, commit e93cf7e) for a
+# future migration-bearing release. harness.costs.record_cost already
+# degrades gracefully to the 029 column set when the 033 columns are
+# absent, so cost recording and cap enforcement still work; model /
+# correlation_id are dropped and idempotent true-up dedup is lost
+# (see tests/test_release_no_migrations.py).
+
 # Required after 001_baseline. App has no separate accounts/tenants/subscriptions
 # or SMS conversations tables — those concepts live on users / leads / sms_messages.
 REQUIRED_BASELINE_TABLES = (

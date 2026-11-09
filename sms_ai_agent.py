@@ -255,6 +255,30 @@ def process_inbound_ai(user_id, lead_id, inbound_id, inbound_body, receiving_num
 
     provider = get_sms_provider()
     from_number = receiving_number or None
+    # Universal spend cap (launch blocker 5): the AI reply send itself
+    # is billable (Telnyx/Twilio/SimpleTexting). The coach call was
+    # already gated upstream in analyze_inbound_and_coach; re-check
+    # here because the coach spend may have tripped the cap since.
+    # Fail safe: no send, the claimed reply slot stays un-sent and the
+    # inbound remains visible for manual follow-up.
+    try:
+        from harness.costs import check_spend_cap
+
+        _cap_allowed, _cap_reason = check_spend_cap(user_id)
+    except Exception:
+        _cap_allowed, _cap_reason = True, None  # fail open on unreadable ledger
+    if not _cap_allowed:
+        logger.info(
+            "SMS_AI_REPLY_BLOCKED_SPEND_CAP inbound_id=%s tenant=%s",
+            inbound_id,
+            user_id,
+        )
+        _needs_attention(user_id, lead_id, inbound_id, "ai_reply_blocked")
+        return {
+            "replied": False,
+            "reason": "spend_cap_reached",
+            "message_id": message_id,
+        }
     logger.info(
         "SMS_OUTBOUND_REQUEST message_id=%s inbound_id=%s lead_id=%s tenant=%s ai=1",
         message_id,
@@ -297,6 +321,21 @@ def process_inbound_ai(user_id, lead_id, inbound_id, inbound_body, receiving_num
         return {"replied": False, "reason": "send_failed", "message_id": message_id}
 
     provider_message_id = result.get("provider_message_id")
+    # Universal cost recording: the provider accepted the AI reply, so
+    # the send is billable — record it (Telnyx-reported amount when
+    # supplied, else the per-segment placeholder rate). Best-effort.
+    try:
+        from harness.costs import record_sms_send
+
+        record_sms_send(
+            user_id,
+            provider=config.SMS_PROVIDER,
+            tool="sms_ai_reply",
+            result=result,
+            correlation_id=f"ai-reply:{inbound_id}",
+        )
+    except Exception:
+        logger.warning("sms ai-reply cost recording failed tenant=%s", user_id)
     db.update_sms_message_send_result(
         message_id,
         provider_message_id=str(provider_message_id) if provider_message_id else None,
@@ -377,12 +416,21 @@ def _auto_reply_allowed(user_id, lead, analysis):
     }:
         return False, "escalation_topic"
 
-    toll_ok, _err = check_telnyx_toll_free_send_allowed()
-    if not toll_ok:
-        return False, "toll_free_not_verified"
-    trial_ok, _err = check_telnyx_trial_destination(phone)
-    if not trial_ok:
-        return False, "trial_destination_blocked"
+    # Staging mock: the mock provider records the send in memory and
+    # never delivers, so Telnyx delivery restrictions (toll-free
+    # verification, trial destination) are meaningless here — enforcing
+    # them would make an approved mock send unreachable in staging,
+    # where the toll-free status is deliberately unset. Consent,
+    # suppression, quiet-hours, rate-limit and escalation checks above
+    # still apply in full, and the mock intercepts every send path, so
+    # skipping these two checks cannot produce a real delivery.
+    if not config.HARNESS_MOCK_PROVIDERS:
+        toll_ok, _err = check_telnyx_toll_free_send_allowed()
+        if not toll_ok:
+            return False, "toll_free_not_verified"
+        trial_ok, _err = check_telnyx_trial_destination(phone)
+        if not trial_ok:
+            return False, "trial_destination_blocked"
 
     since = (
         datetime.now(timezone.utc) - timedelta(days=1)

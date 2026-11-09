@@ -313,6 +313,32 @@ def screen_inbound_text(text) -> bool:
 
 # --- Settings ---------------------------------------------------------------
 
+def _apply_staging_mode_lock(settings: dict) -> dict:
+    """Staging safety: staging tenants are always drafts_only.
+
+    Whatever mode is stored in the DB, a staging process reports (and
+    gates on) ``drafts_only``. The only override is the human-approval
+    execution path (``harness.approvals`` passes
+    ``context["human_approval"]=True`` to :func:`decide`), which still
+    requires a human-approved approval row, a fresh policy re-check,
+    and — in staging — the mock SMS provider. Supervised/authorized
+    behaviour is unit-tested, never live-tested in staging.
+    """
+    try:
+        import config as _config
+
+        staging = bool(getattr(_config, "IS_STAGING", False))
+    except Exception:
+        staging = False
+    if staging and settings.get("mode") != "drafts_only":
+        logger.warning(
+            "staging mode lock: stored mode %r forced to drafts_only",
+            settings.get("mode"),
+        )
+        settings["mode"] = "drafts_only"
+    return settings
+
+
 def get_settings(user_id) -> dict:
     """Per-tenant harness settings, safely initialized for new tenants.
 
@@ -347,7 +373,7 @@ def get_settings(user_id) -> dict:
         )
         settings["monthly_spend_cap_cents"] = 5000
     if user_id is None:
-        return settings
+        return _apply_staging_mode_lock(settings)
     try:
         import db
 
@@ -379,9 +405,9 @@ def get_settings(user_id) -> dict:
                 ).fetchone()
     except Exception as exc:  # table missing, DB down, etc. — fail to defaults
         logger.warning("harness get_settings fell back to defaults: %s", exc)
-        return settings
+        return _apply_staging_mode_lock(settings)
     if not row:
-        return settings
+        return _apply_staging_mode_lock(settings)
     data = dict(row)
     mode = str(data.get("mode") or "").strip().lower()
     if mode in MODES:
@@ -390,7 +416,7 @@ def get_settings(user_id) -> dict:
     settings["paused"] = bool(paused) if paused is not None else False
     ai_enabled = data.get("ai_enabled")
     settings["ai_enabled"] = bool(ai_enabled) if ai_enabled is not None else True
-    return settings
+    return _apply_staging_mode_lock(settings)
 
 
 # --- Gate -------------------------------------------------------------------
@@ -552,6 +578,20 @@ def _decide(user_id, action, tool, context=None) -> tuple[str, str]:
     mode = _normalize(context.get("mode") or settings.get("mode") or DEFAULT_MODE)
     if mode not in MODES:
         mode = DEFAULT_MODE
+    # Staging mode lock (defence in depth alongside get_settings): a
+    # caller-supplied context mode cannot lift staging out of
+    # drafts_only. The sole exception is a human approval executing
+    # (harness.approvals sets context["human_approval"]=True), which
+    # still re-checks consent/suppression/quiet-hours/rate-limit/pause
+    # and, in staging, sends only through the mock provider.
+    if mode != DEFAULT_MODE and not context.get("human_approval"):
+        try:
+            import config as _config
+
+            if bool(getattr(_config, "IS_STAGING", False)):
+                mode = DEFAULT_MODE
+        except Exception:
+            pass
     paused = bool(context.get("paused", settings.get("paused", False)))
     human_takeover = bool(
         context.get("human_takeover", context.get("human_takeover_active", False))

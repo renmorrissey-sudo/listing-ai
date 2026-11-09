@@ -88,7 +88,7 @@ def test_create_john_smith_plan(app_client, two_users, monkeypatch):
     res = app_client.post("/api/ask-topai/interpret", json={"text": transcript, "source": "text"})
     data = res.get_json()
     assert data["status"] == "executed"
-    assert data["confirmation_token"] is None
+    assert "confirmation_token" not in data
     assert "John Smith" in (data.get("message") or "")
     leads = [lead for lead in db.list_leads(u1, limit=50) if lead.get("name") == "John Smith"]
     assert len(leads) == 1
@@ -293,7 +293,7 @@ def test_ambiguous_lead_clarifies_without_mutation(app_client, two_users, monkey
         "/api/ask-topai/interpret", json={"text": "Add a note to John that he wants to tour Saturday."}
     ).get_json()
     assert data["status"] == "clarification_required"
-    assert data["confirmation_token"] is None
+    assert "confirmation_token" not in data
     assert "John Smith" in data["message"]
     assert "John Williams" in data["message"]
     assert "Tour Saturday" not in (db.get_lead(a_id, u1).get("notes") or "")
@@ -346,7 +346,7 @@ def test_clarification_continues_prior_create(app_client, two_users, monkeypatch
     ).get_json()
     assert first["status"] == "clarification_required"
     assert "phone" in first["message"].lower()
-    assert first["confirmation_token"] is None
+    assert "confirmation_token" not in first
     assert db.list_leads(u1, limit=20) == []
 
     second = app_client.post(
@@ -380,7 +380,7 @@ def test_unsupported_email_is_understood_not_executed(app_client, two_users, mon
         "/api/ask-topai/interpret", json={"text": "Email Sarah these listings."}
     ).get_json()
     assert data["status"] == "unsupported_action"
-    assert data["confirmation_token"] is None
+    assert "confirmation_token" not in data
     assert "email" in data["message"].lower()
     assert "doesn't have" in data["message"].lower() or "does not have" in data["message"].lower()
 
@@ -426,7 +426,7 @@ def test_cross_account_lead_access_is_impossible(app_client, two_users, monkeypa
             "context": {"lead_id": sarah_id},
         },
     ).get_json()
-    assert data["confirmation_token"] is None
+    assert "confirmation_token" not in data
     assert data["status"] in {"clarification_required", "error", "unsupported_action"}
     assert "cross account" not in (db.get_lead(sarah_id, u1).get("notes") or "")
 
@@ -551,7 +551,7 @@ def test_claude_failure_creates_no_mutation(app_client, two_users, monkeypatch):
         "/api/ask-topai/interpret", json={"text": "Create a lead named Failure Case at 303-555-4111"}
     ).get_json()
     assert data["status"] == "error"
-    assert data["confirmation_token"] is None
+    assert "confirmation_token" not in data
     assert db.list_leads(u1, limit=20) == []
     rows = audit.list_recent(u1)
     assert rows[0]["status"] == "error"

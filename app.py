@@ -323,6 +323,44 @@ def _message_text(message):
     return "\n".join(parts)
 
 
+def _spend_cap_error_response(user_id):
+    """Universal spend-cap gate for the direct (non-harness) AI routes.
+
+    Returns a ``(jsonify(...), 402)`` response when the tenant's monthly
+    AI spend cap is tripped, else None. The check fails OPEN on a ledger
+    read error (matching harness.costs / harness.policy) so a DB outage
+    never takes the route down; a tripped cap fails SAFE — the caller
+    must return this response BEFORE any model call or provider send.
+    """
+    try:
+        from harness.costs import check_spend_cap
+
+        allowed, reason = check_spend_cap(user_id)
+    except Exception:
+        logger.warning("spend-cap check failed open for user %s", user_id)
+        return None
+    if allowed:
+        return None
+    return jsonify({"error": reason}), 402
+
+
+def _record_generation_cost(user_id, tool, message, model, correlation_id=None):
+    """Record one direct Anthropic generation's token usage (best-effort).
+
+    Never raises: a recording failure must not break a generation that
+    already succeeded. Skips rows with no usage data (e.g. mocked
+    responses in tests carry no ``usage`` field).
+    """
+    try:
+        from harness.costs import record_anthropic_message
+
+        record_anthropic_message(
+            user_id, tool, message, model=model, correlation_id=correlation_id
+        )
+    except Exception:
+        logger.warning("generation cost recording failed tool=%s", tool)
+
+
 from stripe_billing import (
     billing_config_error as _billing_config_error,
     billing_is_configured as _billing_is_configured,
@@ -1271,11 +1309,27 @@ def start_voice_call():
         data=cleaned,
     )
     prompt = build_voice_call_prompt(persona, cleaned)
+    # Universal spend cap: never start a billable Vapi call on a capped tenant.
+    cap_response = _spend_cap_error_response(user["id"])
+    if cap_response is not None:
+        return cap_response
     try:
         result = get_voice_provider().start_outbound_call(
             call_id, cleaned, persona, prompt, variable_values=variable_values
         )
         db.update_voice_call_provider(call_id, result["provider_call_id"], "started")
+        # Vapi bills per minute; the real duration is unknown at start, so
+        # record a 1-minute minimum now (placeholder rate, ESTIMATE) and
+        # true up longer calls from the end-of-call webhook.
+        try:
+            from harness.costs import record_vapi_call
+
+            record_vapi_call(
+                user["id"],
+                correlation_id=str(result.get("provider_call_id") or call_id),
+            )
+        except Exception:
+            logger.warning("vapi cost recording failed call_id=%s", call_id)
         if normalize_lead_status(lead.get("status")) == "new":
             crm_db.set_lead_status(
                 user["id"], lead_id, "attempting_contact", from_automation=True
@@ -1675,11 +1729,21 @@ def generate_sms():
     if not persona:
         return jsonify({"error": "Selected persona was not found."}), 404
 
+    # Universal spend cap: never burn a model call on a capped tenant.
+    correlation_id = f"web-{secrets.token_hex(8)}"
+    cap_response = _spend_cap_error_response(user["id"])
+    if cap_response is not None:
+        return cap_response
+
     try:
         message = client.messages.create(
             model=config.CLAUDE_MODEL,
             max_tokens=300,
             messages=[{"role": "user", "content": build_sms_prompt(persona, cleaned)}],
+        )
+        _record_generation_cost(
+            user["id"], "sms_generation", message, config.CLAUDE_MODEL,
+            correlation_id=correlation_id,
         )
         body = _message_text(message).strip().strip('"').strip("'")
         db.record_tool_usage(user["id"], "ai_sms", "generated")
@@ -1857,6 +1921,11 @@ def sms_test_send():
     sender, sender_err = require_tenant_sender(user["id"])
     if sender_err:
         return jsonify({"ok": False, "error": sender_err}), 403
+    # Universal spend cap (launch blocker 5): a test send is still a
+    # billable provider send - a capped tenant sends nothing.
+    cap_response = _spend_cap_error_response(user["id"])
+    if cap_response is not None:
+        return cap_response
     provider = get_sms_provider()
     if not provider.is_configured():
         return jsonify({"ok": False, "error": "SMS provider is not configured."}), 503
@@ -1886,6 +1955,19 @@ def sms_test_send():
             provider_message_id=result["provider_message_id"],
             status=result.get("status") or "queued",
         )
+        # Universal cost recording: the test send is billable.
+        try:
+            from harness.costs import record_sms_send
+
+            record_sms_send(
+                user["id"],
+                provider=config.SMS_PROVIDER,
+                tool="sms_test_send",
+                result=result,
+                correlation_id=f"sms-test:{message_id}",
+            )
+        except Exception:
+            logger.warning("sms test-send cost recording failed")
         db.record_tool_usage(user["id"], "ai_sms", "test_sent")
         return jsonify({
             "ok": True,
@@ -2124,6 +2206,24 @@ def voice_webhook():
             apply_voice_call_webhook_to_lead(call_row["user_id"], call_row, normalized)
         except Exception:
             logger.exception("Failed to apply voice webhook to CRM lead")
+        # Vapi duration true-up: the start recorded a 1-minute minimum;
+        # a longer call records the extra minutes (idempotent per
+        # provider call id, so a redelivered webhook cannot double-count).
+        try:
+            duration = normalized.get("duration") or normalized.get(
+                "recording_duration_seconds"
+            )
+            provider_call_id = normalized.get("provider_call_id")
+            if duration and provider_call_id:
+                from harness.costs import record_vapi_call_duration
+
+                record_vapi_call_duration(
+                    call_row["user_id"],
+                    duration_seconds=duration,
+                    correlation_id=str(provider_call_id),
+                )
+        except Exception:
+            logger.warning("vapi duration true-up failed call_id=%s", call_row.get("id"))
 
     return jsonify({"received": True}), 200
 
@@ -2360,17 +2460,28 @@ def generate():
     cleaned, error = validate_listing_payload(data)
     if error:
         return jsonify({"error": error}), 400
+    user = auth.get_current_user()
+    # Universal spend cap: never burn a model call on a capped tenant.
+    correlation_id = f"web-{secrets.token_hex(8)}"
+    if user:
+        cap_response = _spend_cap_error_response(user["id"])
+        if cap_response is not None:
+            return cap_response
     try:
         message = client.messages.create(
             model=config.CLAUDE_MODEL,
             max_tokens=1500,
             messages=[{"role": "user", "content": build_listing_prompt(cleaned)}],
         )
+        if user:
+            _record_generation_cost(
+                user["id"], "listing_generation", message, config.CLAUDE_MODEL,
+                correlation_id=correlation_id,
+            )
         raw = _message_text(message)
         listing = _extract_section(raw, "LISTING DESCRIPTION", "SOCIAL POSTS").strip()
         social = _extract_section(raw, "SOCIAL POSTS", "PROSPECT EMAIL").strip()
         email = _extract_section(raw, "PROSPECT EMAIL", None).strip()
-        user = auth.get_current_user()
         output_snapshot = {"listing": listing, "social": social, "email": email}
         response_body = dict(output_snapshot)
         social_content = build_social_content_snapshot(social)
@@ -2619,17 +2730,28 @@ def generate_script():
     cleaned, error = validate_script_payload(data)
     if error:
         return jsonify({"error": error}), 400
+    user = auth.get_current_user()
+    # Universal spend cap: never burn a model call on a capped tenant.
+    correlation_id = f"web-{secrets.token_hex(8)}"
+    if user:
+        cap_response = _spend_cap_error_response(user["id"])
+        if cap_response is not None:
+            return cap_response
     try:
         message = client.messages.create(
             model=config.SCRIPT_CLAUDE_MODEL,
             max_tokens=1200,
             messages=[{"role": "user", "content": build_script_prompt(cleaned)}],
         )
+        if user:
+            _record_generation_cost(
+                user["id"], "script_generation", message,
+                config.SCRIPT_CLAUDE_MODEL, correlation_id=correlation_id,
+            )
         raw = _message_text(message)
         opening = _strip_markdown(_extract_section(raw, "OPENING SCRIPT", "OBJECTION HANDLERS"))
         objections = _strip_markdown(_extract_section(raw, "OBJECTION HANDLERS", "VOICEMAIL SCRIPT"))
         voicemail = _strip_markdown(_extract_section(raw, "VOICEMAIL SCRIPT", None))
-        user = auth.get_current_user()
         if user:
             db.record_tool_usage(user["id"], "cold_call_scripts", "generated")
         return jsonify({"opening": opening, "objections": objections, "voicemail": voicemail})

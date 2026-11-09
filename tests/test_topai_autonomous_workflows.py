@@ -316,5 +316,5 @@ def test_ask_topai_interpret_executes_note(two_users, monkeypatch):
         {"lead_id": lead_id},
     )
     assert result["status"] == "executed"
-    assert result["confirmation_token"] is None
+    assert "confirmation_token" not in result
     assert "900000" in (db.get_lead(lead_id, u1).get("notes") or "")

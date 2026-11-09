@@ -6,3 +6,5 @@ build/
 frontend/ask-topai-realtime/node_modules/
 
 .venv/
+backups/
+*.dump

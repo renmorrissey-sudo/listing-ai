@@ -411,7 +411,8 @@ def _ensure_sms_follow_up(user_id, lead_id, analysis):
     return result
 
 
-def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_out=False):
+def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_out=False,
+                              correlation_id=None):
     """
     Claude analysis of an inbound SMS. Stores insight + CRM captures.
     Routine replies are auto-executed by sms_ai_agent; this function does not send.
@@ -478,9 +479,49 @@ def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_
         result["error"] = "not_configured"
         return result
 
+    # Universal spend cap (launch blocker 5): never burn a coach
+    # (Anthropic) call on a capped tenant. Fail safe — no model call,
+    # and the inbound is flagged for manual review exactly like a
+    # failed analysis, so nothing is silently dropped. This gate covers
+    # BOTH the direct path (sms_ai_agent / inbound webhook) and the
+    # harness SMS handler, which both funnel through this function.
+    try:
+        from harness.costs import is_spend_cap_tripped
+
+        _cap_tripped = is_spend_cap_tripped(user_id)
+    except Exception:
+        _cap_tripped = False  # fail open on an unreadable ledger
+    if _cap_tripped:
+        insight_id = db.create_lead_insight(
+            lead_id,
+            user_id,
+            inbound_id,
+            {
+                "summary": "Lead replied. Monthly AI spend limit reached; review manually.",
+                "intent": "unknown",
+                "next_best_step": "Review the inbound message and reply manually.",
+                "recommended_action": "Open the conversation and draft a reply.",
+                "suggested_reply": "",
+                "home_value_pitch": None,
+                "confidence_score": 0.0,
+                "requires_manual_review": True,
+                "escalation_topics": [],
+                "raw_json": None,
+            },
+            model=config.CLAUDE_MODEL,
+        )
+        crm_db.apply_coach_queue_flags(
+            user_id, lead_id, {"requires_manual_review": True}, insight_id=insight_id
+        )
+        result["insight_id"] = insight_id
+        result["error"] = "spend_cap_reached"
+        return result
+
     try:
         analysis = sms_coach.analyze_inbound_reply(
-            build_inbound_reply_analysis_prompt(lead, conversation, inbound_body)
+            build_inbound_reply_analysis_prompt(lead, conversation, inbound_body),
+            user_id=user_id,
+            correlation_id=correlation_id,
         )
     except sms_coach.SmsCoachError:
         logger.warning("Claude inbound analysis failed inbound_id=%s", inbound_id)
