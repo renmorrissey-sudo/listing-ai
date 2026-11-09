@@ -75,8 +75,109 @@ def _count(user_id, sql, params):
         return 0
 
 
+# Human labels for the harness modes. The /harness page and the JSON API
+# both derive their mode display from this mapping applied to the SAME
+# authoritative mode value (``harness_settings.mode`` via
+# ``_harness_settings`` / ``policy.get_settings``) -- never from a
+# hardcoded string, and never from a second source. A stored mode outside
+# the known set is normalized to drafts_only upstream, so "live" (or any
+# other stray value) can never render as a "Live" label.
+MODE_LABELS = {
+    "drafts_only": "Drafts Only",
+    "supervised": "Supervised",
+    "authorized": "Authorized",
+}
+
+
+def _mode_label(mode):
+    """Human label for a mode value; unknown values fail to Drafts Only."""
+    return MODE_LABELS.get(mode, "Drafts Only")
+
+
+def _sms_auto_reply_configured():
+    """Platform-level SMS auto-reply readiness (env flag + Claude key).
+
+    This is a platform fact, not a per-tenant setting: it says whether
+    the auto-reply path *could* run at all, not whether this tenant's
+    sends are allowed -- that is decided by mode/paused + the policy
+    gate. Never raises.
+    """
+    try:
+        from sms_ai_agent import auto_reply_configured
+
+        return bool(auto_reply_configured())
+    except Exception:
+        return False
+
+
+def _voice_configured():
+    """Whether the Vapi voice provider has credentials configured.
+
+    Platform-level only. There is no per-tenant voice on/off switch:
+    voice tools are gated by the same harness policy gate as SMS, so in
+    Drafts Only they can only draft, never execute. Never raises.
+    """
+    try:
+        from voice_provider import get_voice_provider
+
+        return bool(get_voice_provider().is_configured())
+    except Exception:
+        return False
+
+
+def _outbound_activity(user_id):
+    """Recorded outbound activity for the tenant, last 60 days.
+
+    Counts come from stored records only -- never from assumptions or
+    from zero successful deliveries. SMS sends are counted twice, from
+    two independent sources that must agree in the healthy case: the
+    harness audit rows the SMS handler writes (``sms_auto_reply_sent`` /
+    ``send_failed`` / ``blocked`` / ``drafted``) and the ``sms_messages``
+    rows actually marked sent. Voice calls are counted from the
+    ``voice_calls`` rows actually created. Missing tables degrade to 0.
+    """
+    since_60d = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+    return {
+        "sms_sent_60d": _count(
+            user_id,
+            "SELECT COUNT(*) AS n FROM harness_audit WHERE user_id = ? AND action = 'sms_auto_reply_sent' AND created_at >= ?",
+            (user_id, since_60d),
+        ),
+        "sms_send_failed_60d": _count(
+            user_id,
+            "SELECT COUNT(*) AS n FROM harness_audit WHERE user_id = ? AND action = 'sms_auto_reply_send_failed' AND created_at >= ?",
+            (user_id, since_60d),
+        ),
+        "sms_blocked_60d": _count(
+            user_id,
+            "SELECT COUNT(*) AS n FROM harness_audit WHERE user_id = ? AND action = 'sms_auto_reply_blocked' AND created_at >= ?",
+            (user_id, since_60d),
+        ),
+        "sms_drafted_60d": _count(
+            user_id,
+            "SELECT COUNT(*) AS n FROM harness_audit WHERE user_id = ? AND action = 'sms_auto_reply_drafted' AND created_at >= ?",
+            (user_id, since_60d),
+        ),
+        "sms_messages_sent_60d": _count(
+            user_id,
+            "SELECT COUNT(*) AS n FROM sms_messages WHERE user_id = ? AND direction = 'outbound' AND status = 'sent' AND created_at >= ?",
+            (user_id, since_60d),
+        ),
+        "calls_placed_60d": _count(
+            user_id,
+            "SELECT COUNT(*) AS n FROM voice_calls WHERE user_id = ? AND direction = 'outbound' AND created_at >= ?",
+            (user_id, since_60d),
+        ),
+    }
+
+
 def get_harness_status(user_id):
     """Read-only status dict for one tenant. Never raises for missing tables.
+
+    This is the SINGLE authoritative status source: both the JSON API
+    (``GET /api/harness/status``) and the ``/harness`` page render from
+    this dict, so the two can never disagree. ``mode`` is the stored mode
+    value, ``mode_label`` its human label from ``MODE_LABELS``.
 
     ``job_counts`` (M4) reports four overlapping lenses on the tenant's
     harness_jobs, not a partition: a job can count in more than one.
@@ -85,6 +186,14 @@ def get_harness_status(user_id):
     (attempts > 0, awaiting retry); ``retried`` = claimed at least twice
     (attempts >= 2, i.e. actually retried after a failure);
     ``dead_letter`` = terminal failures that will never be retried.
+
+    Channel state is explicit and separate from the mode: ``sms`` reports
+    the platform-level auto-reply readiness plus whether sending is
+    paused -- there is NO separate per-channel SMS pause flag; the
+    harness-wide ``paused`` pauses ALL automated sending, including SMS.
+    ``voice`` reports only whether Vapi is configured; voice tools are
+    gated by the same policy gate as SMS. ``outbound_activity`` is
+    recorded activity (see ``_outbound_activity``).
     """
     mode, paused, ai_enabled = _harness_settings(user_id)
     pending_approvals = _count(
@@ -127,12 +236,21 @@ def get_harness_status(user_id):
     )
     return {
         "mode": mode,
+        "mode_label": _mode_label(mode),
         "paused": paused,
         "ai_enabled": ai_enabled,
         "pending_approvals": pending_approvals,
         "pending_jobs": pending_jobs,
         "job_counts": job_counts,
         "jobs_24h": jobs_24h,
+        "sms": {
+            "auto_reply_configured": _sms_auto_reply_configured(),
+            "paused": paused,
+        },
+        "voice": {
+            "configured": _voice_configured(),
+        },
+        "outbound_activity": _outbound_activity(user_id),
     }
 
 
@@ -242,12 +360,16 @@ def harness_status_page():
         active_nav="ai-automation",
         product_name=config.PRODUCT_NAME,
         mode=status["mode"],
+        mode_label=status["mode_label"],
         paused=status["paused"],
         ai_enabled=status["ai_enabled"],
         pending_approvals=status["pending_approvals"],
         pending_jobs=status["pending_jobs"],
         job_counts=status["job_counts"],
         jobs_24h=status["jobs_24h"],
+        sms=status["sms"],
+        voice=status["voice"],
+        outbound_activity=status["outbound_activity"],
         approvals=approvals,
         recent_audit=recent_audit,
         spend_cents=spend_cents,
