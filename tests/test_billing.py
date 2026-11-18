@@ -174,6 +174,21 @@ def test_checkout_limits_payment_methods_to_card_and_link(monkeypatch):
     assert "klarna" not in create.call_args.kwargs["payment_method_types"]
 
 
+def test_checkout_starts_14_day_free_trial(monkeypatch):
+    monkeypatch.setattr(config, "STRIPE_SECRET_KEY", "sk_test_123")
+    monkeypatch.setattr(config, "STRIPE_PRICE_ID", "price_1UcoFrBKSi4KGHsxQhjVr9dK")
+    monkeypatch.setattr(config, "STRIPE_PUBLISHABLE_KEY", "pk_test_abc")
+    user = {"id": 9, "email": "a@example.com", "stripe_customer_id": "cus_abc"}
+    with patch("stripe.checkout.Session.create", return_value=MagicMock()) as create:
+        stripe_billing.create_subscription_checkout_session(
+            user,
+            success_url="https://example.com/ok",
+            cancel_url="https://example.com/cancel",
+            idempotency_key="subchk_trial_key",
+        )
+    assert create.call_args.kwargs["subscription_data"]["trial_period_days"] == 14
+
+
 def test_successful_subscription_webhook(app_client, two_users, monkeypatch):
     _billing_ok(monkeypatch)
     u1, _ = two_users
