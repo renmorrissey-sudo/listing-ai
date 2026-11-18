@@ -412,6 +412,226 @@ def _approval_error(error):
     return jsonify({"error": "Approval is no longer pending."}), 409
 
 
+@harness_bp.route("/api/harness/settings/mode", methods=["POST"])
+@auth.subscription_required
+def api_set_harness_mode():
+    """Set a tenant's harness mode. Admin-only, audited.
+
+    Body: ``{"mode": "<drafts_only|supervised|authorized>", "user_id": <optional>}``.
+    ``user_id`` defaults to the caller; an admin may set any tenant's
+    mode, anyone else gets 403 even for their own account — mode is
+    never self-service (a tenant who wants to stop automation uses
+    the pause toggle instead). In staging the stored mode is still
+    recorded, but ``get_settings`` reports it as drafts_only (the
+    staging mode lock); the response carries both values so the UI
+    cannot mistake a stored mode for the effective one.
+    """
+    from harness.policy import is_harness_admin, set_mode
+
+    user = auth.get_current_user()
+    if not user:
+        return jsonify({"error": "Please log in to continue."}), 401
+    if not is_harness_admin(user):
+        return jsonify({"error": "Mode changes require a harness administrator."}), 403
+    body = request.get_json(silent=True) or {}
+    mode = body.get("mode")
+    target_user_id = body.get("user_id") or user["id"]
+    try:
+        target_user_id = int(target_user_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid user."}), 400
+    settings, error = set_mode(
+        target_user_id, mode, actor="admin", actor_user_id=user["id"]
+    )
+    if error == "invalid_mode":
+        return jsonify({"error": "Invalid mode."}), 400
+    if error == "invalid_user":
+        return jsonify({"error": "User not found."}), 404
+    if error or settings is None:
+        return jsonify({"error": "Could not change mode."}), 500
+    return jsonify(
+        {
+            "mode": settings.get("mode"),
+            "stored_mode": str(mode or "").strip().lower(),
+            "paused": bool(settings.get("paused")),
+            "ai_enabled": bool(settings.get("ai_enabled", True)),
+            "user_id": target_user_id,
+        }
+    )
+
+
+@harness_bp.route("/api/harness/settings/pause", methods=["POST"])
+@auth.subscription_required
+def api_set_harness_paused():
+    """Pause / resume harness automation for a tenant. Audited.
+
+    Body: ``{"paused": true|false, "user_id": <optional>}``.
+    ``user_id`` defaults to the caller. A tenant may pause only their
+    own account; an admin may pause any tenant. ``paused`` must be a
+    JSON boolean — anything else is a 400.
+    """
+    from harness.policy import is_harness_admin, set_paused
+
+    user = auth.get_current_user()
+    if not user:
+        return jsonify({"error": "Please log in to continue."}), 401
+    body = request.get_json(silent=True) or {}
+    paused = body.get("paused")
+    if not isinstance(paused, bool):
+        return jsonify({"error": "paused must be true or false."}), 400
+    target_user_id = body.get("user_id") or user["id"]
+    try:
+        target_user_id = int(target_user_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid user."}), 400
+    if target_user_id != user["id"] and not is_harness_admin(user):
+        return (
+            jsonify({"error": "You can only pause your own account."}),
+            403,
+        )
+    actor = "admin" if is_harness_admin(user) else "user"
+    settings, error = set_paused(
+        target_user_id, paused, actor=actor, actor_user_id=user["id"]
+    )
+    if error == "invalid_paused":
+        return jsonify({"error": "paused must be true or false."}), 400
+    if error == "invalid_user":
+        return jsonify({"error": "User not found."}), 404
+    if error or settings is None:
+        return jsonify({"error": "Could not change pause state."}), 500
+    return jsonify(
+        {
+            "mode": settings.get("mode"),
+            "paused": bool(settings.get("paused")),
+            "ai_enabled": bool(settings.get("ai_enabled", True)),
+            "user_id": target_user_id,
+        }
+    )
+
+
+# --- SMS suppression list + governed removal (Phase II Batch 1, item 5) ------
+
+
+@harness_bp.route("/api/sms/suppression", methods=["GET"])
+@auth.subscription_required
+def api_list_suppressions():
+    """List the current tenant's suppressed numbers."""
+    import tenant_sms_db as tdb
+
+    user = auth.get_current_user()
+    if not user:
+        return jsonify({"error": "Please log in to continue."}), 401
+    return jsonify({"suppressions": tdb.list_suppressions(user["id"])})
+
+
+@harness_bp.route("/api/sms/suppression/removals", methods=["GET"])
+@auth.subscription_required
+def api_list_suppression_removals():
+    """List suppression-removal requests.
+
+    A tenant sees their own requests. A harness admin with
+    ``?scope=all`` sees every tenant's (pending by default);
+    ``?status=pending|approved|rejected`` filters.
+    """
+    import tenant_sms_db as tdb
+
+    from harness.policy import is_harness_admin
+
+    user = auth.get_current_user()
+    if not user:
+        return jsonify({"error": "Please log in to continue."}), 401
+    status = (request.args.get("status") or "").strip().lower() or None
+    if status and status not in ("pending", "approved", "rejected"):
+        return jsonify({"error": "Invalid status."}), 400
+    scope_all = (request.args.get("scope") or "").strip().lower() == "all"
+    if scope_all and not is_harness_admin(user):
+        return jsonify({"error": "Listing all requests requires a harness administrator."}), 403
+    user_id = None if scope_all else user["id"]
+    return jsonify(
+        {"removals": tdb.list_suppression_removals(user_id, status=status)}
+    )
+
+
+@harness_bp.route("/api/sms/suppression/removals", methods=["POST"])
+@auth.subscription_required
+def api_request_suppression_removal():
+    """Request removal of one of the tenant's suppressed numbers.
+
+    Body: ``{"phone_number": "<E.164>", "reason": "<why it should come off>"}``.
+    Creates a pending request (migration 036) — nothing is removed
+    here. Removal happens only when a harness admin approves it via
+    the review route, and the reviewer must differ from the requester.
+    """
+    import tenant_sms_db as tdb
+
+    from sms_validation import validate_e164_phone
+
+    user = auth.get_current_user()
+    if not user:
+        return jsonify({"error": "Please log in to continue."}), 401
+    body = request.get_json(silent=True) or {}
+    phone, phone_error = validate_e164_phone(body.get("phone_number") or "")
+    if phone_error:
+        return jsonify({"error": phone_error}), 400
+    req, error = tdb.request_suppression_removal(
+        user["id"], phone, requested_by=user["id"], reason=body.get("reason") or ""
+    )
+    if error == "reason_required":
+        return jsonify({"error": "A reason is required to request removal."}), 400
+    if error == "not_suppressed":
+        return jsonify({"error": "That number is not on your suppression list."}), 400
+    if error == "already_pending":
+        return jsonify({"error": "A removal request for that number is already pending.", "removal": req}), 409
+    if error or req is None:
+        return jsonify({"error": "Could not create the removal request."}), 500
+    return jsonify({"removal": req}), 201
+
+
+@harness_bp.route("/api/sms/suppression/removals/<int:request_id>/review", methods=["POST"])
+@auth.subscription_required
+def api_review_suppression_removal(request_id):
+    """Approve or reject a pending suppression-removal request. Admin-only.
+
+    Body: ``{"approve": true|false, "note": "<optional>"}``. The
+    reviewer must differ from the requester (two-person rule) — an
+    admin cannot approve their own request (409 ``self_review``).
+    On approval the suppression row is deleted and the decision is
+    written to the SMS audit trail; on rejection the number stays
+    suppressed.
+    """
+    import tenant_sms_db as tdb
+
+    from harness.policy import is_harness_admin
+
+    user = auth.get_current_user()
+    if not user:
+        return jsonify({"error": "Please log in to continue."}), 401
+    if not is_harness_admin(user):
+        return jsonify({"error": "Reviewing removal requests requires a harness administrator."}), 403
+    body = request.get_json(silent=True) or {}
+    approve = body.get("approve")
+    if not isinstance(approve, bool):
+        return jsonify({"error": "approve must be true or false."}), 400
+    req, error = tdb.review_suppression_removal(
+        request_id,
+        reviewer_user_id=user["id"],
+        approve=approve,
+        note=body.get("note") or "",
+    )
+    if error == "not_found":
+        return jsonify({"error": "Removal request not found."}), 404
+    if error == "already_reviewed":
+        return jsonify({"error": "That request has already been reviewed."}), 409
+    if error == "self_review":
+        return (
+            jsonify({"error": "You cannot review your own removal request — a second administrator must review it."}),
+            409,
+        )
+    if error or req is None:
+        return jsonify({"error": "Could not review the removal request."}), 500
+    return jsonify({"removal": req})
+
+
 @harness_bp.route("/api/harness/approvals", methods=["GET"])
 @auth.subscription_required
 def api_list_approvals():
@@ -451,6 +671,16 @@ def api_reject_approval(approval_id):
         return _approval_error(error)
     # Rejection enqueues nothing: no job, no send, ever.
     return jsonify({"approval": approval})
+
+
+def _is_harness_admin(user):
+    """Whether the signed-in user may change harness modes."""
+    try:
+        from harness.policy import is_harness_admin
+
+        return bool(is_harness_admin(user))
+    except Exception:
+        return False
 
 
 @harness_bp.route("/harness", methods=["GET"])
@@ -498,6 +728,7 @@ def harness_status_page():
         mode_label=status["mode_label"],
         paused=status["paused"],
         ai_enabled=status["ai_enabled"],
+        is_harness_admin=_is_harness_admin(user),
         pending_approvals=status["pending_approvals"],
         pending_jobs=status["pending_jobs"],
         job_counts=status["job_counts"],

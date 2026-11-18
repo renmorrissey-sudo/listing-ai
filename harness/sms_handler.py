@@ -717,3 +717,404 @@ def process_sms_auto_reply_job(job):
         "approval_id": None,
         "retryable": False,
     }
+
+def _decide_manual_policy(user_id, lead, to_number, mode, paused, correlation_id=None):
+    """Gate decision for a manual (human-typed) test send.
+
+    Mirrors :func:`_decide_policy` but without coach analysis: the human
+    is the author of the text, so there are no escalation topics from
+    analysis and no draft to review. Consent, suppression, quiet hours,
+    rate limits, the spend cap and the mode rules all apply exactly as
+    for an auto-reply. Returns ``(decision, reason, rate_limited)``.
+    """
+    if paused:
+        return "DRAFT", "paused", False
+    if mode == "drafts_only":
+        return "DRAFT", "mode_drafts_only", False
+    try:
+        from harness.policy import decide
+    except Exception:
+        logger.warning("harness.policy unavailable; defaulting to DRAFT tenant=%s", user_id)
+        return "DRAFT", "policy_unavailable", False
+    phone = (lead or {}).get("phone_number") or to_number or ""
+    suppressed = False
+    try:
+        import tenant_sms_db as tdb
+
+        suppressed = bool(phone and tdb.is_suppressed(user_id, phone))
+    except Exception:
+        suppressed = False
+    quiet_hours = False
+    try:
+        from sms_quiet_hours import in_quiet_hours
+
+        quiet_hours = bool(in_quiet_hours(user_id, phone=phone, lead=lead))
+    except Exception:
+        quiet_hours = False
+    rate_limited = _is_rate_limited(user_id, phone)
+    context = {
+        "mode": mode,
+        "paused": paused,
+        "consent_status": (lead or {}).get("sms_consent_status") or "",
+        "opted_out": (lead or {}).get("opt_out_status") == "opted_out",
+        "suppressed": suppressed,
+        "quiet_hours": quiet_hours,
+        "rate_limited": rate_limited,
+        "escalation_topics": [],
+        "template_approved": False,
+        "correlation_id": correlation_id,
+    }
+    try:
+        result = decide(user_id, "send_sms", "send_sms", context, correlation_id=correlation_id)
+    except Exception:
+        logger.exception("harness.policy.decide failed tenant=%s", user_id)
+        return "DRAFT", "policy_error", rate_limited
+    if isinstance(result, (tuple, list)) and len(result) == 2:
+        decision, reason = result
+        decision = str(decision or "DRAFT").upper()
+        reason = str(reason or "")[:500]
+    elif isinstance(result, dict):
+        decision = str(result.get("decision") or result.get("gate_decision") or "DRAFT").upper()
+        reason = str(result.get("reason") or result.get("gate_reason") or "")[:500]
+    else:
+        decision = str(result or "DRAFT").upper()
+        reason = ""
+    if decision not in {"ALLOW", "DRAFT", "BLOCK", "DEFER"}:
+        return "DRAFT", "policy_unknown_decision", rate_limited
+    return decision, reason or "policy_decision", rate_limited
+
+
+def _send_manual_non_lead(user_id, message_id, to_number, body, correlation_id=None):
+    """Send a manual test SMS to a non-lead number. Returns (sent, reason).
+
+    Mirrors the old ``POST /sms/test`` non-lead path (toll-free check,
+    trial-destination check, tenant sender, provider send, cost
+    recording) — now executed by the worker after the gate ALLOWs,
+    never inline in the request handler.
+    """
+    import config
+
+    from sms_authorization import (
+        check_telnyx_toll_free_send_allowed,
+        check_telnyx_trial_destination,
+        require_tenant_sender,
+    )
+    from sms_provider import sms_status_callback_url
+    from sms_providers.base import SmsProviderError
+    from sms_providers.factory import get_sms_provider
+
+    toll_ok, toll_err = check_telnyx_toll_free_send_allowed()
+    if not toll_ok:
+        return False, str(toll_err or "toll_free_not_allowed")
+    trial_ok, trial_err = check_telnyx_trial_destination(to_number)
+    if not trial_ok:
+        return False, str(trial_err or "trial_destination_not_allowed")
+    sender, sender_err = require_tenant_sender(user_id)
+    if sender_err:
+        return False, str(sender_err)
+    provider = get_sms_provider()
+    if not provider.is_configured():
+        return False, "provider_not_configured"
+    try:
+        result = provider.send_sms(
+            to_number,
+            body,
+            status_callback=sms_status_callback_url(),
+            from_number=sender.get("sender_number"),
+        )
+    except SmsProviderError as exc:
+        db.update_sms_message_send_result(
+            message_id, status="failed", error_message=str(exc)
+        )
+        return False, str(exc)[:500]
+    except Exception:
+        logger.exception("manual SMS send failed tenant=%s", user_id)
+        db.update_sms_message_send_result(
+            message_id,
+            status="failed",
+            error_message="SMS could not be sent due to an internal application error.",
+        )
+        return False, "send_error"
+    db.update_sms_message_send_result(
+        message_id,
+        provider_message_id=result["provider_message_id"],
+        status=result.get("status") or "queued",
+    )
+    try:
+        from harness.costs import record_sms_send
+
+        record_sms_send(
+            user_id,
+            provider=config.SMS_PROVIDER,
+            tool="sms_test_send",
+            result=result,
+            correlation_id=correlation_id or f"sms-test:{message_id}",
+        )
+    except Exception:
+        logger.warning("manual SMS cost recording failed tenant=%s", user_id)
+    try:
+        db.record_tool_usage(user_id, "ai_sms", "test_sent")
+    except Exception:
+        pass
+    return True, str(result.get("status") or "queued")
+
+
+def process_manual_sms_send_job(job):
+    """Handle one ``manual_sms_send`` harness job (POST /sms/test).
+
+    The endpoint only validates and enqueues; this job owns the send
+    decision. The message text and destination are loaded from the
+    draft ``sms_messages`` row the endpoint created (the job payload
+    carries only ids — payloads are redacted, so the text must never
+    travel in them).
+
+    Result keys mirror :func:`process_sms_auto_reply_job`: ok, sent,
+    decision, reason, approval_id, retryable.
+
+    DRAFT (drafts_only / paused) creates NO approval row: an approval
+    cannot execute without an inbound message id
+    (``harness.validation.validate_sms_reply_draft`` requires one), so
+    a manual-send approval would be dead on arrival. The draft
+    ``sms_messages`` row preserves the text for the tenant to send
+    later; the audit row records why nothing sent.
+    """
+    job = job or {}
+    job_id = job.get("id")
+    user_id = job.get("user_id")
+    correlation_id = job.get("correlation_id")
+    payload = _payload_dict(job)
+    message_id = payload.get("message_id")
+    lead_id = payload.get("lead_id")
+    to_number = payload.get("to") or payload.get("to_number") or ""
+
+    if not user_id or not message_id:
+        return {
+            "ok": False,
+            "sent": False,
+            "decision": None,
+            "reason": "missing_fields",
+            "approval_id": None,
+            "retryable": False,
+        }
+    try:
+        row = db.get_sms_message(message_id, user_id)
+    except Exception:
+        row = None
+    if not row:
+        return {
+            "ok": False,
+            "sent": False,
+            "decision": None,
+            "reason": "message_not_found",
+            "approval_id": None,
+            "retryable": False,
+        }
+    body = str(row.get("message_body") or "").strip()
+    to_number = str(row.get("phone_number") or to_number or "").strip()
+    if not body or not to_number:
+        return {
+            "ok": False,
+            "sent": False,
+            "decision": None,
+            "reason": "missing_fields",
+            "approval_id": None,
+            "retryable": False,
+        }
+
+    lead = None
+    if lead_id:
+        from harness.validation import ValidationError, validate_lead_reference
+
+        try:
+            lead = validate_lead_reference(user_id, lead_id, required=True)
+        except ValidationError as exc:
+            return {
+                "ok": False,
+                "sent": False,
+                "decision": None,
+                "reason": exc.code,
+                "approval_id": None,
+                "retryable": False,
+            }
+        if not payload.get("compliance_confirmed"):
+            _audit(
+                user_id,
+                action="manual_sms_blocked",
+                gate_decision="BLOCK",
+                gate_reason="consent_not_confirmed",
+                mode=get_harness_mode(user_id)[0],
+                target_type="lead",
+                target_id=lead_id,
+                job_id=job_id,
+                correlation_id=correlation_id,
+            )
+            return {
+                "ok": True,
+                "sent": False,
+                "decision": "BLOCK",
+                "reason": "consent_not_confirmed",
+                "approval_id": None,
+                "retryable": False,
+            }
+
+    mode, paused, _ai_enabled = get_harness_mode(user_id)
+    if paused or mode == "drafts_only":
+        reason = "paused" if paused else "mode_drafts_only"
+        _audit(
+            user_id,
+            action="manual_sms_drafted",
+            gate_decision="DRAFT",
+            gate_reason=reason,
+            mode=mode,
+            target_type="lead" if lead else None,
+            target_id=lead_id,
+            job_id=job_id,
+            correlation_id=correlation_id,
+        )
+        return {
+            "ok": True,
+            "sent": False,
+            "decision": "DRAFT",
+            "reason": reason,
+            "approval_id": None,
+            "retryable": False,
+        }
+
+    decision, gate_reason, rate_limited = _decide_manual_policy(
+        user_id, lead, to_number, mode, paused, correlation_id=correlation_id
+    )
+    # Hard rule, re-checked immediately before any send path.
+    if decision == "ALLOW" and (mode == "drafts_only" or paused):
+        decision, gate_reason = "DRAFT", "allow_overridden_drafts_only_or_paused"
+
+    if decision == "ALLOW":
+        if lead is not None:
+            from sms_outbound import send_authorized_sms
+
+            _result, err, _status = send_authorized_sms(
+                user_id,
+                lead_id,
+                body,
+                source_page="sms_test",
+                compliance_confirmed=True,
+                message_id=message_id,
+            )
+            if err:
+                _audit(
+                    user_id,
+                    action="manual_sms_send_failed",
+                    gate_decision="ALLOW",
+                    gate_reason=str(err)[:500],
+                    mode=mode,
+                    target_type="lead",
+                    target_id=lead_id,
+                    job_id=job_id,
+                    correlation_id=correlation_id,
+                )
+                return {
+                    "ok": False,
+                    "sent": False,
+                    "decision": "ALLOW",
+                    "reason": str(err)[:500],
+                    "approval_id": None,
+                    "retryable": False,
+                }
+            sent = True
+            send_reason = gate_reason
+        else:
+            sent, send_reason = _send_manual_non_lead(
+                user_id, message_id, to_number, body, correlation_id
+            )
+            if not sent:
+                _audit(
+                    user_id,
+                    action="manual_sms_send_failed",
+                    gate_decision="ALLOW",
+                    gate_reason=send_reason,
+                    mode=mode,
+                    target_type=None,
+                    target_id=None,
+                    job_id=job_id,
+                    correlation_id=correlation_id,
+                )
+                return {
+                    "ok": False,
+                    "sent": False,
+                    "decision": "ALLOW",
+                    "reason": send_reason,
+                    "approval_id": None,
+                    "retryable": False,
+                }
+        _audit(
+            user_id,
+            action="manual_sms_sent",
+            gate_decision="ALLOW",
+            gate_reason=gate_reason,
+            mode=mode,
+            target_type="lead" if lead else None,
+            target_id=lead_id,
+            job_id=job_id,
+            correlation_id=correlation_id,
+        )
+        return {
+            "ok": True,
+            "sent": sent,
+            "decision": "ALLOW",
+            "reason": send_reason,
+            "approval_id": None,
+            "retryable": False,
+            "message_id": message_id,
+        }
+
+    # BLOCK / DEFER: audit, flag for human attention when there is a
+    # lead, no send. A DEFER caused by a tripped rate limit is
+    # transient — return retryable so the worker re-queues with
+    # backoff; other DEFER causes (quiet hours) settle completed.
+    if decision == "DEFER" and rate_limited:
+        _audit(
+            user_id,
+            action="manual_sms_deferred",
+            gate_decision="DEFER",
+            gate_reason=gate_reason,
+            mode=mode,
+            target_type="lead" if lead else None,
+            target_id=lead_id,
+            job_id=job_id,
+            correlation_id=correlation_id,
+        )
+        if lead is not None:
+            _needs_attention(user_id, lead_id, message_id, "manual_sms_deferred")
+        return {
+            "ok": False,
+            "sent": False,
+            "decision": "DEFER",
+            "reason": gate_reason,
+            "approval_id": None,
+            "retryable": True,
+        }
+    _audit(
+        user_id,
+        action="manual_sms_blocked" if decision == "BLOCK" else "manual_sms_deferred",
+        gate_decision=decision,
+        gate_reason=gate_reason,
+        mode=mode,
+        target_type="lead" if lead else None,
+        target_id=lead_id,
+        job_id=job_id,
+        correlation_id=correlation_id,
+    )
+    if lead is not None:
+        _needs_attention(
+            user_id,
+            lead_id,
+            message_id,
+            "manual_sms_blocked" if decision == "BLOCK" else "manual_sms_deferred",
+        )
+    return {
+        "ok": True,
+        "sent": False,
+        "decision": decision,
+        "reason": gate_reason,
+        "approval_id": None,
+        "retryable": False,
+    }
