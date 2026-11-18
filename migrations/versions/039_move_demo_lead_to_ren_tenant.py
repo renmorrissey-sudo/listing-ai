@@ -35,7 +35,7 @@ def _ren_user_id(conn):
     ).fetchone()
     if row is None:
         raise RuntimeError("039: user not found: " + EMAIL)
-    return row[0]
+    return row["id"]
 
 
 def _guard(conn, ren_id):
@@ -44,14 +44,14 @@ def _guard(conn, ren_id):
     ).fetchone()
     if lead is None:
         raise RuntimeError("039: lead %s not found" % LEAD_ID)
-    phone = lead[0]
+    phone = lead["phone_number"]
     clash = conn.execute(
         "SELECT id FROM leads WHERE user_id = %s AND phone_number = '%s'"
         % (ren_id, phone)
     ).fetchone()
     if clash is not None:
         raise RuntimeError(
-            "039: lead %s already exists under Ren's tenant for %s" % (clash[0], phone)
+            "039: lead %s already exists under Ren's tenant for %s" % (clash["id"], phone)
         )
 
 
@@ -77,7 +77,7 @@ def _verify_postgres(conn):
     row = conn.execute(
         "SELECT user_id FROM leads WHERE id = %s" % LEAD_ID
     ).fetchone()
-    if row is None or row[0] != ren_id:
+    if row is None or row["user_id"] != ren_id:
         raise RuntimeError("039_move_demo_lead_to_ren_tenant failed: lead not moved")
 
 
