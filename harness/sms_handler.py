@@ -302,9 +302,23 @@ def _decide_policy(user_id, lead, analysis, draft, mode, paused, correlation_id=
     except Exception:
         quiet_hours = False
     rate_limited = _is_rate_limited(user_id, phone)
+    # Human takeover (Phase II inbox, M2): when a human has taken over
+    # this lead's conversation, the gate drafts instead of auto-sending
+    # (policy step 5). Read from harness_conversations; a failed read
+    # defaults to False so normal gating still applies.
+    human_takeover = False
+    try:
+        from harness.inbox import is_human_takeover
+
+        lead_id = (lead or {}).get("id")
+        if lead_id:
+            human_takeover = bool(is_human_takeover(user_id, lead_id))
+    except Exception:
+        human_takeover = False
     context = {
         "mode": mode,
         "paused": paused,
+        "human_takeover": human_takeover,
         "consent_status": (lead or {}).get("sms_consent_status") or "",
         "opted_out": (lead or {}).get("opt_out_status") == "opted_out",
         "suppressed": suppressed,
