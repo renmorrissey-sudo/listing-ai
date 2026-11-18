@@ -742,3 +742,143 @@ def harness_status_page():
         recent_audit=recent_audit,
         spend_cents=spend_cents,
     )
+
+
+# --- Unified inbox (Phase II Priority 2, M2) --------------------------------
+#
+# GET /harness/inbox renders the subscriber inbox: SMS conversations per
+# lead (most recent first), the pending approval queue, unread state,
+# search/filter, and a per-conversation human-takeover flag. The page
+# itself is login_required (like /harness); the JSON APIs below are
+# subscription_required (like the other harness APIs). Every query is
+# user_id-scoped — a tenant touching another tenant's conversation sees
+# it as not found and never learns it exists.
+#
+# Approval text on this page comes from the single stored draft:
+# list_pending_approvals -> serialize_approval reads draft_json's
+# draft_reply verbatim. The template renders that value and nothing
+# else — no re-derived or cached copy.
+
+
+@harness_bp.route("/harness/inbox", methods=["GET"])
+@auth.login_required
+def harness_inbox_page():
+    """Subscriber inbox page (GET /harness/inbox)."""
+    from harness import inbox as inbox_mod
+
+    user = auth.get_current_user()
+    if not user:
+        return jsonify({"error": "Please log in to continue."}), 401
+    user_id = user["id"]
+    query = (request.args.get("q") or "").strip() or None
+    unread_only = request.args.get("unread") in {"1", "true", "yes"}
+    lead_id_raw = request.args.get("lead_id")
+    selected = None
+    selected_lead_id = None
+    if lead_id_raw:
+        try:
+            selected_lead_id = int(lead_id_raw)
+        except (TypeError, ValueError):
+            selected_lead_id = None
+    conversations = inbox_mod.list_sms_conversations(
+        user_id, limit=50, query=query, unread_only=unread_only
+    )
+    if selected_lead_id:
+        selected = inbox_mod.get_conversation(user_id, selected_lead_id)
+        if selected is not None:
+            # Opening a thread marks it read, clearing its unread badge.
+            inbox_mod.mark_conversation_read(user_id, selected_lead_id)
+            selected = inbox_mod.get_conversation(user_id, selected_lead_id)
+    approvals = list_pending_approvals(user_id)
+    return render_template(
+        "harness_inbox.html",
+        active_nav="ai-automation",
+        product_name=config.PRODUCT_NAME,
+        conversations=conversations,
+        selected=selected,
+        selected_lead_id=selected_lead_id,
+        approvals=approvals,
+        query=query or "",
+        unread_only=unread_only,
+    )
+
+
+@harness_bp.route("/api/harness/inbox/conversations", methods=["GET"])
+@auth.subscription_required
+def api_list_inbox_conversations():
+    """List the signed-in tenant's SMS conversations (JSON)."""
+    from harness import inbox as inbox_mod
+
+    user = auth.get_current_user()
+    if not user:
+        return jsonify({"error": "Please log in to continue."}), 401
+    query = (request.args.get("q") or "").strip() or None
+    unread_only = request.args.get("unread") in {"1", "true", "yes"}
+    return jsonify(
+        {
+            "conversations": inbox_mod.list_sms_conversations(
+                user["id"], limit=50, query=query, unread_only=unread_only
+            )
+        }
+    )
+
+
+@harness_bp.route(
+    "/api/harness/inbox/conversations/<int:lead_id>", methods=["GET"]
+)
+@auth.subscription_required
+def api_get_inbox_conversation(lead_id):
+    """One conversation thread (JSON); 404 when not owned by the tenant."""
+    from harness import inbox as inbox_mod
+
+    user = auth.get_current_user()
+    if not user:
+        return jsonify({"error": "Please log in to continue."}), 401
+    conversation = inbox_mod.get_conversation(user["id"], lead_id)
+    if conversation is None:
+        return jsonify({"error": "Conversation not found."}), 404
+    return jsonify({"conversation": conversation})
+
+
+@harness_bp.route(
+    "/api/harness/inbox/conversations/<int:lead_id>/takeover",
+    methods=["POST"],
+)
+@auth.subscription_required
+def api_set_inbox_takeover(lead_id):
+    """Set or clear the human-takeover flag for one conversation.
+
+    Body: {"active": true|false}. The change is audited
+    (harness_takeover_set / harness_takeover_cleared). 404 when the
+    lead is not owned by the signed-in tenant.
+    """
+    from harness import inbox as inbox_mod
+
+    user = auth.get_current_user()
+    if not user:
+        return jsonify({"error": "Please log in to continue."}), 401
+    body = request.get_json(silent=True) or {}
+    active = body.get("active")
+    if not isinstance(active, bool):
+        return jsonify({"error": "Body must include active (true/false)."}), 400
+    state = inbox_mod.set_human_takeover(user["id"], lead_id, active)
+    if state is None:
+        return jsonify({"error": "Conversation not found."}), 404
+    return jsonify({"conversation": state})
+
+
+@harness_bp.route(
+    "/api/harness/inbox/conversations/<int:lead_id>/read", methods=["POST"]
+)
+@auth.subscription_required
+def api_mark_inbox_conversation_read(lead_id):
+    """Mark one conversation read (sets last_read_at to now)."""
+    from harness import inbox as inbox_mod
+
+    user = auth.get_current_user()
+    if not user:
+        return jsonify({"error": "Please log in to continue."}), 401
+    state = inbox_mod.mark_conversation_read(user["id"], lead_id)
+    if state is None:
+        return jsonify({"error": "Conversation not found."}), 404
+    return jsonify({"conversation": state})

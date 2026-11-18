@@ -11,8 +11,10 @@ IS in the release: Ren authorized it on 2026-11-09 for defect-2
 remediation (staging migration testing only; production migration is
 NOT authorized yet). Migration 036 (sms_suppression_removals, the
 governed suppression-removal request table from Phase II Batch 1) is
-also in the release. The runner list therefore ends at 036 (34
-modules), with 033/034 still excluded.
+also in the release. Migration 042 (harness_conversations, the
+per-conversation inbox state table from Phase II Priority 2) is also
+in the release. The runner list therefore ends at 042 (35 modules),
+with 033/034 still excluded.
 
 These tests pin what the release DOES still guarantee on the 029
 column set for model/correlation_id, and pin the two known
@@ -43,10 +45,10 @@ from harness.jobs import claim_jobs, enqueue_job
 from migrations.runner import MIGRATION_MODULES
 
 
-def test_runner_list_ends_at_036_without_033_034():
-    """Migration 036 is listed; 033/034 remain excluded from the release."""
-    assert MIGRATION_MODULES[-1].endswith("036_sms_suppression_removals")
-    assert len(MIGRATION_MODULES) == 34
+def test_runner_list_ends_at_042_without_033_034():
+    """Migration 042 is listed; 033/034 remain excluded from the release."""
+    assert MIGRATION_MODULES[-1].endswith("042_harness_conversations")
+    assert len(MIGRATION_MODULES) == 35
     assert not any("033_" in m or "034_" in m for m in MIGRATION_MODULES)
 
 
