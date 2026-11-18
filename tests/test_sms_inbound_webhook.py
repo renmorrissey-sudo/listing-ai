@@ -77,8 +77,7 @@ def _post_inbound(
     with patch.object(config, "TWILIO_AUTH_TOKEN", token), \
          patch.object(config, "TWILIO_PHONE_NUMBER", twilio_phone), \
          patch.object(config, "TWILIO_MESSAGING_SERVICE_SID", MSID), \
-         patch.object(config, "APP_URL", app_url), \
-         patch("sms_inbound._schedule_coach"):
+         patch.object(config, "APP_URL", app_url):
         return client.post(
             path,
             data=params,
@@ -334,12 +333,13 @@ def test_inbound_ai_auto_sends_reply(app_client, two_users):
         i["lead_id"] != lead_id for i in db.list_pending_insights(u1)
     )
 
-    with patch("sms_inbound._schedule_coach"):
-        res = _post_inbound(
-            app_client,
-            body="Another reply",
-            message_sid="SMcoach002",
-        )
+    # The Twilio path now enqueues the durable sms_auto_reply job inline
+    # (no daemon thread), so this POST also leaves one pending job.
+    res = _post_inbound(
+        app_client,
+        body="Another reply",
+        message_sid="SMcoach002",
+    )
     assert res.status_code == 200
 
 

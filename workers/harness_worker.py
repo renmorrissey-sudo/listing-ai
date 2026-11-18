@@ -358,6 +358,10 @@ def dispatch_job(job):
         from harness.sms_handler import process_sms_auto_reply_job
 
         return _run_known_handler(jobs, job, process_sms_auto_reply_job, kind)
+    if kind == "manual_sms_send":
+        from harness.sms_handler import process_manual_sms_send_job
+
+        return _run_known_handler(jobs, job, process_manual_sms_send_job, kind)
     if kind == "scheduled_follow_up":
         from harness.followup import process_scheduled_follow_up_job
 

@@ -9,7 +9,9 @@ migration-bearing release.
 Migration 035 (harness_costs.cost_micros + harness_spend_reservations)
 IS in the release: Ren authorized it on 2026-11-09 for defect-2
 remediation (staging migration testing only; production migration is
-NOT authorized yet). The runner list therefore ends at 035 (33
+NOT authorized yet). Migration 036 (sms_suppression_removals, the
+governed suppression-removal request table from Phase II Batch 1) is
+also in the release. The runner list therefore ends at 036 (34
 modules), with 033/034 still excluded.
 
 These tests pin what the release DOES still guarantee on the 029
@@ -41,10 +43,10 @@ from harness.jobs import claim_jobs, enqueue_job
 from migrations.runner import MIGRATION_MODULES
 
 
-def test_runner_list_ends_at_035_without_033_034():
-    """Migration 035 is listed; 033/034 remain excluded from the release."""
-    assert MIGRATION_MODULES[-1].endswith("035_harness_cost_precise_micros")
-    assert len(MIGRATION_MODULES) == 33
+def test_runner_list_ends_at_036_without_033_034():
+    """Migration 036 is listed; 033/034 remain excluded from the release."""
+    assert MIGRATION_MODULES[-1].endswith("036_sms_suppression_removals")
+    assert len(MIGRATION_MODULES) == 34
     assert not any("033_" in m or "034_" in m for m in MIGRATION_MODULES)
 
 

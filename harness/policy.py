@@ -419,6 +419,150 @@ def get_settings(user_id) -> dict:
     return _apply_staging_mode_lock(settings)
 
 
+# --- Admins and settings changes --------------------------------------------
+
+def is_harness_admin(user) -> bool:
+    """True when ``user`` (a user dict with an email) is a harness admin.
+
+    Admins are the operator allowlist in env ``HARNESS_ADMIN_EMAILS``
+    (comma-separated emails, case-insensitive), read at call time so
+    tests can set it with ``monkeypatch.setenv``. There is no admin
+    role in the users table; this allowlist is the only definition.
+    Mode changes are admin-only; pausing is self-service (any tenant
+    may pause their own account) plus admin for any tenant.
+    """
+    if not user:
+        return False
+    import os
+
+    allowed = {
+        part.strip().lower()
+        for part in str(os.environ.get("HARNESS_ADMIN_EMAILS") or "").split(",")
+        if part.strip()
+    }
+    email = str((user or {}).get("email") or "").strip().lower()
+    return bool(email) and email in allowed
+
+
+def _settings_row(user_id):
+    import db
+
+    with db.get_db() as conn:
+        row = conn.execute(
+            "SELECT mode, paused, ai_enabled FROM harness_settings WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def _update_settings(user_id, *, mode=None, paused=None):
+    """Update one column of a tenant's harness_settings row.
+
+    Seeds the safe defaults first (via :func:`get_settings`) when the
+    row does not exist yet, so the UPDATE always lands on a real row.
+    Returns the stored row dict, or None when the DB is unavailable.
+    """
+    import db
+    from datetime import datetime, timezone
+
+    if _settings_row(user_id) is None:
+        get_settings(user_id)
+    now = datetime.now(timezone.utc).isoformat()
+    sets = []
+    params = []
+    if mode is not None:
+        sets.append("mode = ?")
+        params.append(mode)
+    if paused is not None:
+        sets.append("paused = ?")
+        params.append(1 if paused else 0)
+    if not sets:
+        return _settings_row(user_id)
+    sets.append("updated_at = ?")
+    params.append(now)
+    params.append(user_id)
+    try:
+        with db.get_db() as conn:
+            conn.execute(
+                f"UPDATE harness_settings SET {', '.join(sets)} WHERE user_id = ?",
+                tuple(params),
+            )
+    except Exception as exc:
+        logger.warning("harness settings update failed: %s", exc)
+        return None
+    return _settings_row(user_id)
+
+
+def set_mode(user_id, mode, *, actor="admin", actor_user_id=None):
+    """Set a tenant's harness mode. Returns ``(settings, error)``.
+
+    ``error`` is None on success, else ``"invalid_mode"`` (mode not in
+    :data:`MODES`) or ``"invalid_user"`` (no such user). The change is
+    written to the audit log (action ``harness_mode_changed``) with
+    the old -> new mode. ``settings`` is the fresh effective settings
+    from :func:`get_settings` — in staging the mode lock still applies,
+    so a stored ``authorized`` reads back as ``drafts_only`` there.
+    """
+    import db
+
+    new_mode = str(mode or "").strip().lower()
+    if new_mode not in MODES:
+        return None, "invalid_mode"
+    if db.get_user_by_id(user_id) is None:
+        return None, "invalid_user"
+    before = _settings_row(user_id)
+    old_mode = str((before or {}).get("mode") or "drafts_only").strip().lower()
+    stored = _update_settings(user_id, mode=new_mode)
+    if stored is None:
+        return None, "invalid_user"
+    try:
+        from harness.audit import record_audit
+
+        record_audit(
+            user_id,
+            actor,
+            "harness_mode_changed",
+            mode=new_mode,
+            gate_reason=f"mode {old_mode} -> {new_mode} (by {actor} user {actor_user_id})",
+        )
+    except Exception as exc:
+        logger.warning("harness mode-change audit failed: %s", exc)
+    return get_settings(user_id), None
+
+
+def set_paused(user_id, paused, *, actor="user", actor_user_id=None):
+    """Set a tenant's harness pause flag. Returns ``(settings, error)``.
+
+    ``error`` is None on success, else ``"invalid_paused"`` (``paused``
+    is not a bool) or ``"invalid_user"`` (no such user). The change is
+    audited (action ``harness_pause_changed``). Pausing drafts all
+    automated sending and writes for the tenant until resumed.
+    """
+    import db
+
+    if not isinstance(paused, bool):
+        return None, "invalid_paused"
+    if db.get_user_by_id(user_id) is None:
+        return None, "invalid_user"
+    before = _settings_row(user_id)
+    old_paused = bool((before or {}).get("paused"))
+    stored = _update_settings(user_id, paused=paused)
+    if stored is None:
+        return None, "invalid_user"
+    try:
+        from harness.audit import record_audit
+
+        record_audit(
+            user_id,
+            actor,
+            "harness_pause_changed",
+            gate_reason=f"paused {old_paused} -> {paused} (by {actor} user {actor_user_id})",
+        )
+    except Exception as exc:
+        logger.warning("harness pause-change audit failed: %s", exc)
+    return get_settings(user_id), None
+
+
 # --- Gate -------------------------------------------------------------------
 
 def _normalize(value) -> str:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import threading
 from datetime import datetime, timezone
 
 import config
@@ -232,8 +231,31 @@ def process_inbound_sms(payload: dict, *, defer_coach: bool = True, app=None) ->
 
     if keyword == "opt_out":
         import external_leads_db as xdb
+        import tenant_sms_db as tdb
 
         xdb.apply_opt_out_consent(lead_id, owner_id, source="sms_keyword")
+        # Suppression unification (Phase II Batch 1): the Twilio STOP
+        # path must write sms_suppression_list like Telnyx and
+        # SimpleTexting do, so the gate blocks this number on every
+        # provider — not just on the consent flag. Also cancel pending
+        # campaign jobs for the number, as the other two providers do.
+        tdb.add_suppression(
+            owner_id, from_number, reason="opted_out",
+            source="sms_keyword", lead_id=lead_id,
+        )
+        with db.get_db() as conn:
+            conn.execute(
+                """
+                UPDATE sms_campaign_jobs
+                SET status = 'opted_out', updated_at = ?
+                WHERE user_id = ? AND phone_number = ? AND status IN ('pending', 'claimed')
+                """,
+                (now, owner_id, from_number),
+            )
+        tdb.append_sms_audit(
+            owner_id, "STOP_received", lead_id=lead_id,
+            metadata={"source": "sms_keyword"},
+        )
         crm_db.add_lead_activity(
             lead_id,
             owner_id,
@@ -324,19 +346,29 @@ def process_inbound_sms(payload: dict, *, defer_coach: bool = True, app=None) ->
             lead_id,
         )
 
-    # Claude analysis + autonomous reply are deferred so Twilio gets a fast ack.
+    # Claude analysis + autonomous reply are enqueued so Twilio gets a
+    # fast ack: the durable job insert is one cheap DB write, and the
+    # opted-out coach step is a pure DB write (no model call). There is
+    # no daemon thread — a crashed process loses nothing, unlike the
+    # old _schedule_coach thread (removed in Phase II Batch 1).
     opted_out_flag = keyword == "opt_out"
     if defer_coach:
-        _schedule_coach(
-            app,
-            owner_id,
-            lead_id,
-            inbound_id,
-            store_body,
-            opted_out=opted_out_flag,
-            receiving_number=to_number,
-            correlation_id=correlation_id,
-        )
+        if opted_out_flag:
+            analyze_inbound_and_coach(
+                owner_id, lead_id, inbound_id, store_body, opted_out=True
+            )
+        else:
+            from sms_ai_agent import schedule_inbound_ai
+
+            schedule_inbound_ai(
+                app,
+                owner_id,
+                lead_id,
+                inbound_id,
+                store_body,
+                to_number,
+                correlation_id=correlation_id,
+            )
     elif opted_out_flag:
         analyze_inbound_and_coach(
             owner_id, lead_id, inbound_id, store_body, opted_out=True
@@ -347,40 +379,6 @@ def process_inbound_sms(payload: dict, *, defer_coach: bool = True, app=None) ->
         process_inbound_ai(owner_id, lead_id, inbound_id, store_body, to_number)
 
     return result
-
-
-def _schedule_coach(app, user_id, lead_id, inbound_id, body, opted_out=False, receiving_number=None,
-                    correlation_id=None):
-    def run():
-        try:
-            if opted_out:
-                if app is not None:
-                    with app.app_context():
-                        analyze_inbound_and_coach(
-                            user_id, lead_id, inbound_id, body, opted_out=True
-                        )
-                else:
-                    analyze_inbound_and_coach(
-                        user_id, lead_id, inbound_id, body, opted_out=True
-                    )
-                return
-            from sms_ai_agent import process_inbound_ai, schedule_inbound_ai
-
-            if app is not None:
-                schedule_inbound_ai(
-                    app, user_id, lead_id, inbound_id, body, receiving_number,
-                    correlation_id=correlation_id,
-                )
-            else:
-                process_inbound_ai(user_id, lead_id, inbound_id, body, receiving_number)
-        except Exception:
-            logger.exception(
-                "Deferred inbound AI failed inbound_id=%s lead_id=%s",
-                inbound_id,
-                lead_id,
-            )
-
-    threading.Thread(target=run, name=f"sms-ai-{inbound_id}", daemon=True).start()
 
 
 def _ensure_sms_follow_up(user_id, lead_id, analysis):

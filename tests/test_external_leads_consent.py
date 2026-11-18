@@ -270,11 +270,50 @@ def test_send_paths_denied_when_blocked(app_client, two_users, monkeypatch):
     err = (res.get_json() or {}).get("error", "").lower()
     assert any(x in err for x in ("consent", "certif", "terms", "activated", "sender", "blocked"))
 
+    # POST /sms/test no longer sends inline (Phase II Batch 1, item 3):
+    # it validates, creates a draft row and enqueues one manual_sms_send
+    # job, returning 202. The denial now happens in the worker — this
+    # tenant accepted no SMS terms and has no sender, so drive the
+    # worker and prove the job settles without any provider send.
     res_test = app_client.post(
         "/sms/test",
         json={"to": "+15551230008", "message": "test ping", "compliance_confirmed": True},
     )
-    assert res_test.status_code in {400, 403}
+    assert res_test.status_code == 202
+    body = res_test.get_json() or {}
+    assert body.get("queued") is True
+    job_id = body.get("job_id")
+    assert job_id
+
+    import config as cfg2
+
+    from harness.policy import set_mode
+    from sms_providers.mock import clear_sent_messages, sent_messages
+    from workers.harness_worker import run_once
+
+    monkeypatch.setattr(cfg2, "HARNESS_MOCK_PROVIDERS", True)
+    clear_sent_messages()
+    with db.get_db() as conn:
+        conn.execute("DELETE FROM harness_jobs WHERE id != ?", (job_id,))
+    # Authorized mode, so the job reaches the send attempt instead of
+    # drafting on the mode default: the denial must come from the
+    # tenant's missing SMS terms / sender, never on wall-clock state.
+    set_mode(u1, "authorized")
+    with patch("sms_quiet_hours.in_quiet_hours", return_value=False), patch(
+        "sms_authorization._rate_limited", return_value=False
+    ), patch("tenant_sms_db.is_suppressed", return_value=False):
+        assert run_once() is True
+    assert sent_messages() == []
+    with db.get_db() as conn:
+        job_row = dict(
+            conn.execute(
+                "SELECT * FROM harness_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+        )
+    assert job_row["status"] == "dead_letter"
+    from harness.audit import list_audit
+
+    assert "manual_sms_send_failed" in [r["action"] for r in list_audit(u1)]
 
 
 def test_malformed_csv_and_phone(two_users):
