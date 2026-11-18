@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Inbox - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+</head>
+<body>
+  {% set page_tagline = 'Inbox' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <h1>Inbox</h1>
+    <p class="muted">SMS conversations for your account, most recent first. Open a conversation to read the thread and take it over from the AI; pending approvals are listed below with the exact stored draft text.</p>
+
+    <h2>Conversations</h2>
+    <div class="card">
+      <form method="get" action="/harness/inbox">
+        <label for="inbox-search">Search by lead name or phone:</label>
+        <input type="text" id="inbox-search" name="q" value="{{ query }}" placeholder="Name or phone" />
+        <label><input type="checkbox" name="unread" value="1" {% if unread_only %}checked{% endif %} /> Unread only</label>
+        <button type="submit">Search</button>
+        {% if query or unread_only %}<a href="/harness/inbox">Clear</a>{% endif %}
+      </form>
+    </div>
+
+    {% if conversations %}
+    <div class="card">
+      <ul>
+        {% for conv in conversations %}
+        <li>
+          <a href="/harness/inbox?lead_id={{ conv.lead_id }}{% if query %}&amp;q={{ query }}{% endif %}{% if unread_only %}&amp;unread=1{% endif %}"><strong>{{ conv.lead_name or conv.lead_phone }}</strong> &middot; {{ conv.lead_phone }}</a>
+          {% if conv.unread_count > 0 %}<strong>({{ conv.unread_count }} unread)</strong>{% endif %}
+          {% if conv.human_takeover %}<strong>[human takeover]</strong>{% endif %}
+          <span class="muted">&middot; {{ conv.message_count }} message{{ 's' if conv.message_count != 1 else '' }} &middot; last {{ conv.last_message_at }}</span>
+          {% if conv.last_message_preview %}<br /><span class="muted">{{ conv.last_message_preview }}</span>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% else %}
+    <p class="muted">No conversations{% if query or unread_only %} match this filter{% endif %}.</p>
+    {% endif %}
+
+    {% if selected %}
+    <h2>Conversation: {{ selected.lead.name or selected.lead.phone_number }}</h2>
+    <div class="card">
+      <ul>
+        <li>Phone: <strong>{{ selected.lead.phone_number }}</strong></li>
+        <li>Status: <strong>{{ selected.lead.status }}</strong></li>
+        <li>SMS consent: <strong>{{ selected.lead.sms_consent_status }}</strong></li>
+        <li>Opt-out: <strong>{{ selected.lead.opt_out_status }}</strong></li>
+        <li>Human takeover: <strong>{{ 'yes' if selected.lead.human_takeover else 'no' }}</strong></li>
+        {% if selected.lead.unread_count > 0 %}<li>Unread: <strong>{{ selected.lead.unread_count }}</strong></li>{% endif %}
+      </ul>
+      <p>
+        <button type="button" id="inbox-takeover-toggle" data-lead-id="{{ selected.lead.lead_id }}" data-current-takeover="{{ 'true' if selected.lead.human_takeover else 'false' }}">{% if selected.lead.human_takeover %}Resume AI automation{% else %}Take over this conversation{% endif %}</button>
+        <span class="muted inbox-takeover-status" aria-live="polite"></span>
+      </p>
+      <p class="muted">{% if selected.lead.human_takeover %}A human has taken over this conversation: the AI will draft replies for your review and never send automatically, even in Authorized mode.{% else %}While the AI handles this conversation, routine replies send automatically in Authorized mode (still re-checked against consent, opt-out, quiet hours and rate limits). Take it over to draft everything instead.{% endif %}</p>
+      {% if selected.messages %}
+      <ul>
+        {% for msg in selected.messages %}
+        <li><strong>{{ msg.direction }}</strong> &middot; {{ msg.created_at }}<br />{{ msg.message_body }}</li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="muted">No messages in this thread.</p>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <h2>Pending approvals</h2>
+    {% if approvals %}
+    <div class="card">
+      {% for approval in approvals %}
+      <div class="approval" data-approval-id="{{ approval.id }}">
+        <p><strong>{{ approval.kind }}</strong> &middot; lead {{ approval.lead_id }} &middot; created {{ approval.created_at }}{% if approval.expires_at %} &middot; expires {{ approval.expires_at }}{% endif %}</p>
+        {# The draft text below is the approval row's stored draft_reply,
+           verbatim from draft_json — the single source of truth. It is
+           never re-derived or replaced by any other copy. #}
+        {% if approval.draft_reply %}
+        <blockquote>{{ approval.draft_reply }}</blockquote>
+        {% endif %}
+        <p>
+          <button type="button" class="approval-approve" data-approval-id="{{ approval.id }}">Approve &amp; send</button>
+          <button type="button" class="approval-reject" data-approval-id="{{ approval.id }}">Reject</button>
+        </p>
+        <p class="muted approval-status" aria-live="polite"></p>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted">No pending approvals.</p>
+    {% endif %}
+  </main>
+  {% include 'subscriber_footer.html' %}
+  <script>
+    (function () {
+      function postAction(id, action, reason) {
+        var statusEl = document.querySelector(
+          '.approval[data-approval-id="' + id + '"] .approval-status'
+        );
+        if (statusEl) statusEl.textContent = 'Working…';
+        return fetch('/api/harness/approvals/' + id + '/' + action, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(reason ? {reason: reason} : {})
+        }).then(function (resp) {
+          if (!resp.ok) {
+            return resp.json().then(function (data) {
+              throw new Error((data && data.error) || ('Request failed (' + resp.status + ')'));
+            });
+          }
+          return resp.json();
+        }).then(function () {
+          window.location.reload();
+        }).catch(function (err) {
+          if (statusEl) statusEl.textContent = err.message;
+        });
+      }
+      document.querySelectorAll('.approval-approve').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          postAction(btn.getAttribute('data-approval-id'), 'approve');
+        });
+      });
+      document.querySelectorAll('.approval-reject').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var reason = window.prompt('Reason for rejecting (optional):', '') || '';
+          postAction(btn.getAttribute('data-approval-id'), 'reject', reason || undefined);
+        });
+      });
+      var takeoverBtn = document.getElementById('inbox-takeover-toggle');
+      if (takeoverBtn) {
+        takeoverBtn.addEventListener('click', function () {
+          var leadId = takeoverBtn.getAttribute('data-lead-id');
+          var currentlyTakenOver = takeoverBtn.getAttribute('data-current-takeover') === 'true';
+          var statusEl = document.querySelector('.inbox-takeover-status');
+          if (statusEl) statusEl.textContent = 'Working…';
+          fetch('/api/harness/inbox/conversations/' + leadId + '/takeover', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({active: !currentlyTakenOver})
+          }).then(function (resp) {
+            if (!resp.ok) {
+              return resp.json().then(function (data) {
+                throw new Error((data && data.error) || ('Request failed (' + resp.status + ')'));
+              });
+            }
+            return resp.json();
+          }).then(function () {
+            window.location.reload();
+          }).catch(function (err) {
+            if (statusEl) statusEl.textContent = err.message;
+          });
+        });
+      }
+    })();
+  </script>
+</body>
+</html>
