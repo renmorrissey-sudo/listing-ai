@@ -854,9 +854,11 @@ def create_subscription_checkout_session(
     cancel_url: str,
     idempotency_key: str | None = None,
 ):
-    """Create a Stripe Checkout Session for subscription. Does not charge until paid.
+    """Create a Stripe Checkout Session for subscription.
 
-    Primary payment options are limited to card and Link (no Klarna / Cash App / Amazon Pay).
+    Starts the configured free trial (config.SUBSCRIPTION_TRIAL_DAYS); does not
+    charge until the trial ends. Primary payment options are limited to card
+    and Link (no Klarna / Cash App / Amazon Pay).
     """
     import registration_gate
 
@@ -875,6 +877,7 @@ def create_subscription_checkout_session(
         metadata={"user_id": str(user["id"])},
         allow_promotion_codes=True,
         subscription_data={
+            "trial_period_days": config.SUBSCRIPTION_TRIAL_DAYS,
             "payment_settings": subscription_payment_settings(),
             "metadata": {"user_id": str(user["id"])},
         },
@@ -1226,7 +1229,7 @@ def billing_summary(user) -> dict:
     local_status = ((user or {}).get("subscription_status") or "none").lower()
     summary = {
         "plan_name": "TopAI Pro",
-        "price_label": getattr(config, "SUBSCRIPTION_PRICE", "$49/month"),
+        "price_label": getattr(config, "SUBSCRIPTION_PRICE", "$149/month"),
         "local_status": local_status,
         "stripe_status": local_status,
         "status_label": _status_label(local_status),

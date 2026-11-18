@@ -125,7 +125,7 @@ def inject_business_context():
         "registration_cta_href": "/subscribe" if can_signup else "/private-beta",
         "registration_cta_label": "Subscribe" if can_signup else "Private beta",
         "registration_promo_label": (
-            "Get 50% off your first month" if can_signup else "Private beta"
+            "Start your 14-day free trial" if can_signup else "Private beta"
         ),
         "private_beta_supporting": registration_gate.PRIVATE_BETA_SUPPORTING,
     }
