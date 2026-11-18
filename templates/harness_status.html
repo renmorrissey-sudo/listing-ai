@@ -19,7 +19,7 @@
        is chosen from the authoritative mode value, so it can never claim
        Drafts Only while the account runs another mode, or live automation
        while it runs Drafts Only. #}
-    <p class="muted">Read-only status for the AI harness.{% if paused %} Automation is currently paused: all automated sending and writes are drafted for review until it is unpaused.{% elif mode == 'drafts_only' %} This account runs in Drafts Only mode: the AI drafts replies for your review and never sends automatically. Approving a draft below queues it for sending; the send is re-checked against consent, opt-out, quiet hours and rate limits at send time.{% elif mode == 'supervised' %} This account runs in Supervised mode: only approved-template sends execute automatically; everything else is drafted for your review.{% elif mode == 'authorized' %} This account runs in Authorized mode: routine sends and writes execute automatically, still re-checked against consent, opt-out, quiet hours and rate limits at send time.{% endif %} There are no mode controls on this page.</p>
+    <p class="muted">Read-only status for the AI harness.{% if paused %} Automation is currently paused: all automated sending and writes are drafted for review until it is unpaused.{% elif mode == 'drafts_only' %} This account runs in Drafts Only mode: the AI drafts replies for your review and never sends automatically. Approving a draft below queues it for sending; the send is re-checked against consent, opt-out, quiet hours and rate limits at send time.{% elif mode == 'supervised' %} This account runs in Supervised mode: only approved-template sends execute automatically; everything else is drafted for your review.{% elif mode == 'authorized' %} This account runs in Authorized mode: routine sends and writes execute automatically, still re-checked against consent, opt-out, quiet hours and rate limits at send time.{% endif %} Use the controls below to pause or resume automation, and — for harness administrators — to change this account's mode.</p>
     <div class="card">
       <ul>
         <li>Mode: <strong>{{ mode_label }}</strong> ({{ mode }}){% if paused %} — paused: nothing sends automatically while paused{% elif mode == 'drafts_only' %} — nothing sends without your approval{% elif mode == 'supervised' %} — only approved-template sends execute automatically{% elif mode == 'authorized' %} — routine sends and writes execute automatically{% endif %}</li>
@@ -46,6 +46,28 @@
         <li>AI spend this month: <strong>${{ '%.2f' % (spend_cents / 100) }}</strong></li>
         {% endif %}
       </ul>
+    </div>
+
+    <h2>Controls</h2>
+    <div class="card">
+      <p>
+        <button type="button" id="harness-pause-toggle" data-current-paused="{{ 'true' if paused else 'false' }}">{% if paused %}Resume automation{% else %}Pause automation{% endif %}</button>
+        <span class="muted harness-control-status" aria-live="polite"></span>
+      </p>
+      <p class="muted">Pausing drafts all automated sending and writes for this account until resumed. Any tenant can pause their own account; the change is written to the audit log.</p>
+      {% if is_harness_admin %}
+      <p>
+        <label for="harness-mode-select">Mode:</label>
+        <select id="harness-mode-select">
+          <option value="drafts_only" {% if mode == 'drafts_only' %}selected{% endif %}>Drafts Only</option>
+          <option value="supervised" {% if mode == 'supervised' %}selected{% endif %}>Supervised</option>
+          <option value="authorized" {% if mode == 'authorized' %}selected{% endif %}>Authorized</option>
+        </select>
+        <button type="button" id="harness-mode-save">Save mode</button>
+        <span class="muted harness-mode-status" aria-live="polite"></span>
+      </p>
+      <p class="muted">Mode changes are administrator-only and are written to the audit log. In staging, a stored Authorized or Supervised mode is still reported and gated as Drafts Only.</p>
+      {% endif %}
     </div>
 
     <h2>SMS</h2>
@@ -168,6 +190,48 @@
           postAction(btn.getAttribute('data-approval-id'), 'reject', reason || undefined);
         });
       });
+      function postSettings(url, body, statusEl) {
+        if (statusEl) statusEl.textContent = 'Working…';
+        return fetch(url, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body)
+        }).then(function (resp) {
+          if (!resp.ok) {
+            return resp.json().then(function (data) {
+              throw new Error((data && data.error) || ('Request failed (' + resp.status + ')'));
+            });
+          }
+          return resp.json();
+        }).then(function () {
+          window.location.reload();
+        }).catch(function (err) {
+          if (statusEl) statusEl.textContent = err.message;
+        });
+      }
+      var pauseBtn = document.getElementById('harness-pause-toggle');
+      if (pauseBtn) {
+        pauseBtn.addEventListener('click', function () {
+          var currentlyPaused = pauseBtn.getAttribute('data-current-paused') === 'true';
+          postSettings(
+            '/api/harness/settings/pause',
+            {paused: !currentlyPaused},
+            document.querySelector('.harness-control-status')
+          );
+        });
+      }
+      var modeSaveBtn = document.getElementById('harness-mode-save');
+      if (modeSaveBtn) {
+        modeSaveBtn.addEventListener('click', function () {
+          var select = document.getElementById('harness-mode-select');
+          if (!select) return;
+          postSettings(
+            '/api/harness/settings/mode',
+            {mode: select.value},
+            document.querySelector('.harness-mode-status')
+          );
+        });
+      }
     })();
   </script>
 </body>

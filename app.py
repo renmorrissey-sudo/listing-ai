@@ -125,7 +125,7 @@ def inject_business_context():
         "registration_cta_href": "/subscribe" if can_signup else "/private-beta",
         "registration_cta_label": "Subscribe" if can_signup else "Private beta",
         "registration_promo_label": (
-            "Get 50% off your first month" if can_signup else "Private beta"
+            "Start your 14-day free trial" if can_signup else "Private beta"
         ),
         "private_beta_supporting": registration_gate.PRIVATE_BETA_SUPPORTING,
     }
@@ -1878,15 +1878,23 @@ def send_sms_message():
 @auth.subscription_required
 @limiter.limit("5 per minute", key_func=_user_rate_limit_key)
 def sms_test_send():
-    """Secure server-side test send. Lead phones still require certification + authorization."""
+    """Manual test send, gated by the harness policy and delivered via a
+    durable job. Nothing sends inline in this handler: it validates the
+    payload, creates a draft message row, enqueues one
+    ``manual_sms_send`` job and returns 202 with the job id. The worker
+    re-checks the gate (mode, consent, suppression, quiet hours, rate
+    limits, spend cap) immediately before any send; in Drafts Only (or
+    paused) the job drafts and sends nothing. A manual double-submit
+    (same destination + text within the same minute) enqueues once —
+    the idempotency key dedupes it to the first job.
+    """
     user = auth.get_current_user()
     data = request.get_json(silent=True)
     cleaned, error = validate_sms_test_payload(data)
     if error:
         return jsonify({"ok": False, "error": error}), 400
 
-    from sms_authorization import can_send_sms, check_telnyx_toll_free_send_allowed, require_tenant_sender
-    from sms_outbound import send_authorized_sms
+    from sms_authorization import check_telnyx_toll_free_send_allowed, check_telnyx_trial_destination
 
     toll_ok, toll_err = check_telnyx_toll_free_send_allowed()
     if not toll_ok:
@@ -1899,90 +1907,85 @@ def sms_test_send():
                 "ok": False,
                 "error": "Confirm contact SMS consent certification before sending to a CRM lead.",
             }), 400
-        result, err, status = send_authorized_sms(
-            user["id"],
-            existing_lead["id"],
-            cleaned["message"],
-            source_page="sms_test",
-            compliance_confirmed=True,
-            skip_quiet_hours=True,
-        )
-        if err:
-            return jsonify({"ok": False, "error": err, **(result or {})}), status
-        return jsonify({"ok": True, **result, "to": cleaned["to"]}), status
-
-    # Also enforce trial for non-lead test destinations
-    from sms_authorization import check_telnyx_trial_destination
-
-    trial_ok, trial_err = check_telnyx_trial_destination(cleaned["to"])
-    if not trial_ok:
-        return jsonify({"ok": False, "error": trial_err, "provider": "telnyx"}), 403
-
-    sender, sender_err = require_tenant_sender(user["id"])
-    if sender_err:
-        return jsonify({"ok": False, "error": sender_err}), 403
-    # Universal spend cap (launch blocker 5): a test send is still a
-    # billable provider send - a capped tenant sends nothing.
-    cap_response = _spend_cap_error_response(user["id"])
-    if cap_response is not None:
-        return cap_response
-    provider = get_sms_provider()
-    if not provider.is_configured():
-        return jsonify({"ok": False, "error": "SMS provider is not configured."}), 503
+        lead_id = existing_lead["id"]
+        lead_name = existing_lead.get("name") or "SMS Test"
+        lead_type = existing_lead.get("lead_type")
+    else:
+        # Trial destinations only for non-lead test numbers; leads are
+        # real contacts and are not trial-checked (as before).
+        trial_ok, trial_err = check_telnyx_trial_destination(cleaned["to"])
+        if not trial_ok:
+            return jsonify({"ok": False, "error": trial_err, "provider": "telnyx"}), 403
+        lead_id = None
+        lead_name = "SMS Test"
+        lead_type = "test"
 
     message_id = db.create_sms_message(
         user_id=user["id"],
         persona_id=None,
         provider=config.SMS_PROVIDER,
         data={
-            "lead_name": "SMS Test",
+            "lead_name": lead_name,
             "phone_number": cleaned["to"],
+            "lead_type": lead_type,
             "message_body": cleaned["message"],
-            "lead_type": "test",
             "desired_outcome": "verify SMS connectivity",
         },
         status="draft",
+        lead_id=lead_id,
+        direction="outbound",
+        consent_status="confirmed" if lead_id else "unknown",
+        opt_out_status=(existing_lead or {}).get("opt_out_status") or "active",
+    )
+
+    # Enqueue the send; fail closed (503, nothing sent, nothing silently
+    # dropped) when the durable queue itself is unavailable.
+    import hashlib
+
+    from harness.jobs import enqueue_job
+
+    minute_bucket = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
+    message_hash = hashlib.sha256(cleaned["message"].encode("utf-8")).hexdigest()[:16]
+    idempotency_key = (
+        f"manual-sms:{user['id']}:{cleaned['to']}:{message_hash}:{minute_bucket}"
     )
     try:
-        result = provider.send_sms(
-            cleaned["to"],
-            cleaned["message"],
-            status_callback=sms_status_callback_url(),
-            from_number=sender.get("sender_number"),
+        job_id = enqueue_job(
+            user["id"],
+            "manual_sms_send",
+            {
+                "message_id": message_id,
+                "lead_id": lead_id,
+                "to": cleaned["to"],
+                "compliance_confirmed": bool(data.get("compliance_confirmed")),
+                "source_page": "sms_test",
+            },
+            idempotency_key=idempotency_key,
+            correlation_id=f"sms-test:{message_id}",
         )
-        db.update_sms_message_send_result(
-            message_id,
-            provider_message_id=result["provider_message_id"],
-            status=result.get("status") or "queued",
-        )
-        # Universal cost recording: the test send is billable.
-        try:
-            from harness.costs import record_sms_send
-
-            record_sms_send(
-                user["id"],
-                provider=config.SMS_PROVIDER,
-                tool="sms_test_send",
-                result=result,
-                correlation_id=f"sms-test:{message_id}",
-            )
-        except Exception:
-            logger.warning("sms test-send cost recording failed")
-        db.record_tool_usage(user["id"], "ai_sms", "test_sent")
-        return jsonify({
-            "ok": True,
-            "status": result.get("status") or "queued",
-            "provider_message_id": result["provider_message_id"],
-            "to": cleaned["to"],
-        }), 201
-    except SmsProviderError as exc:
-        db.update_sms_message_send_result(message_id, status="failed", error_message=str(exc))
-        return jsonify(exc.to_public_dict() | {"ok": False}), 503
     except Exception:
-        logger.exception("SMS test send failed with unexpected error")
-        safe = "SMS could not be sent due to an internal application error."
-        db.update_sms_message_send_result(message_id, status="failed", error_message=safe)
-        return jsonify({"ok": False, "error": safe}), 500
+        logger.exception("SMS test send enqueue failed tenant=%s", user["id"])
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "Could not queue the send. Nothing was sent; please try again.",
+                }
+            ),
+            503,
+        )
+    return (
+        jsonify(
+            {
+                "ok": True,
+                "queued": True,
+                "job_id": job_id,
+                "message_id": message_id,
+                "to": cleaned["to"],
+            }
+        ),
+        202,
+    )
 
 
 @app.route("/webhooks/telnyx/messaging", methods=["POST"])

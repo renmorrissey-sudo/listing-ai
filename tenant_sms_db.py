@@ -235,6 +235,193 @@ def add_suppression(user_id, phone_number, *, reason="opted_out", source="system
         return cur.lastrowid
 
 
+def list_suppressions(user_id):
+    """Every suppressed number for a tenant, newest first."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, user_id, phone_number, reason, source, lead_id, created_at
+            FROM sms_suppression_list
+            WHERE user_id = ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (user_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def remove_suppression(user_id, phone_number):
+    """Delete one suppression row. Returns True when a row was removed.
+
+    Not exposed as a route and never called directly by a request
+    handler: the only caller is :func:`review_suppression_removal`,
+    on approval of a removal request, so every removal is
+    human-reviewed, approval-gated and audited. START never calls
+    this — an opt-in does not clear suppression.
+    """
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            DELETE FROM sms_suppression_list
+            WHERE user_id = ? AND phone_number = ?
+            """,
+            (user_id, phone_number),
+        )
+        return cur.rowcount > 0
+
+
+def request_suppression_removal(user_id, phone_number, *, requested_by, reason):
+    """Request removal of one of the tenant's suppressed numbers.
+
+    Returns ``(request_dict, None)`` on success, ``(existing_or_None, error)``
+    on failure. ``error`` is one of ``"reason_required"``,
+    ``"not_suppressed"`` (the number is not on this tenant's list) or
+    ``"already_pending"`` (a pending request already exists for it —
+    the existing request is returned so the caller can surface it).
+    The request is written to ``sms_suppression_removals`` (migration
+    036) and to the SMS audit trail (``suppression_removal_requested``).
+    Nothing is removed here — removal happens only on approval.
+    """
+    reason = (reason or "").strip()
+    if not reason:
+        return None, "reason_required"
+    if not is_suppressed(user_id, phone_number):
+        return None, "not_suppressed"
+    now = _now()
+    with get_db() as conn:
+        existing = conn.execute(
+            """
+            SELECT * FROM sms_suppression_removals
+            WHERE user_id = ? AND phone_number = ? AND status = 'pending'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (user_id, phone_number),
+        ).fetchone()
+        if existing:
+            return dict(existing), "already_pending"
+        cur = conn.execute(
+            """
+            INSERT INTO sms_suppression_removals
+                (user_id, phone_number, reason, requested_by, requested_at, status)
+            VALUES (?, ?, ?, ?, ?, 'pending')
+            """,
+            (user_id, phone_number, reason, requested_by, now),
+        )
+        request_id = cur.lastrowid
+        row = conn.execute(
+            "SELECT * FROM sms_suppression_removals WHERE id = ?", (request_id,)
+        ).fetchone()
+    append_sms_audit(
+        user_id,
+        "suppression_removal_requested",
+        actor_user_id=requested_by,
+        metadata={
+            "phone": phone_number,
+            "reason": reason,
+            "request_id": request_id,
+        },
+    )
+    return dict(row), None
+
+
+def list_suppression_removals(user_id=None, *, status=None):
+    """Removal requests, newest first.
+
+    ``user_id=None`` lists every tenant's requests (admin view);
+    otherwise only that tenant's. ``status`` filters to one of
+    ``pending`` / ``approved`` / ``rejected`` when given.
+    """
+    sql = "SELECT * FROM sms_suppression_removals"
+    params = []
+    clauses = []
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY requested_at DESC, id DESC"
+    with get_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def review_suppression_removal(request_id, *, reviewer_user_id, approve, note=None):
+    """Approve or reject a pending removal request.
+
+    Returns ``(request_dict, None)`` on success, ``(None, error)`` on
+    failure. ``error`` is one of ``"not_found"``,
+    ``"already_reviewed"`` (status is no longer pending) or
+    ``"self_review"`` — the two-person rule: the reviewer must differ
+    from the requester, so nobody approves their own removal.
+
+    On approval the suppression row is deleted (via
+    :func:`remove_suppression`) and both ``suppression_removal_approved``
+    and ``suppression_removed`` are written to the SMS audit trail. On
+    rejection only ``suppression_removal_rejected`` is written and the
+    number stays suppressed.
+    """
+    now = _now()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM sms_suppression_removals WHERE id = ?", (request_id,)
+        ).fetchone()
+        if not row:
+            return None, "not_found"
+        req = dict(row)
+        if req["status"] != "pending":
+            return None, "already_reviewed"
+        if int(req["requested_by"]) == int(reviewer_user_id):
+            return None, "self_review"
+        new_status = "approved" if approve else "rejected"
+        conn.execute(
+            """
+            UPDATE sms_suppression_removals
+            SET status = ?, reviewed_by = ?, reviewed_at = ?, review_note = ?
+            WHERE id = ?
+            """,
+            (new_status, reviewer_user_id, now, (note or "").strip() or None, request_id),
+        )
+        updated = conn.execute(
+            "SELECT * FROM sms_suppression_removals WHERE id = ?", (request_id,)
+        ).fetchone()
+    tenant_id = req["user_id"]
+    phone = req["phone_number"]
+    if approve:
+        removed = remove_suppression(tenant_id, phone)
+        append_sms_audit(
+            tenant_id,
+            "suppression_removal_approved",
+            actor_user_id=reviewer_user_id,
+            metadata={
+                "phone": phone,
+                "request_id": request_id,
+                "note": (note or "").strip() or None,
+            },
+        )
+        if removed:
+            append_sms_audit(
+                tenant_id,
+                "suppression_removed",
+                actor_user_id=reviewer_user_id,
+                metadata={"phone": phone, "request_id": request_id},
+            )
+    else:
+        append_sms_audit(
+            tenant_id,
+            "suppression_removal_rejected",
+            actor_user_id=reviewer_user_id,
+            metadata={
+                "phone": phone,
+                "request_id": request_id,
+                "note": (note or "").strip() or None,
+            },
+        )
+    return dict(updated), None
+
+
 # --- Attestations ---
 
 

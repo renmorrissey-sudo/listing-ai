@@ -88,8 +88,12 @@ _raw_subscription_price = _env_strip("SUBSCRIPTION_PRICE") or ""
 if _raw_subscription_price.startswith("$") and "/month" in _raw_subscription_price.lower():
     SUBSCRIPTION_PRICE = _raw_subscription_price
 else:
-    SUBSCRIPTION_PRICE = "$49/month"
-TRIAL_OFFER = "Get 50% off your first month with promo code TRIAL50 — this is a discount, not a free trial"
+    SUBSCRIPTION_PRICE = "$149/month"
+TRIAL_OFFER = "Start with a 14-day free trial — no charge until the trial ends."
+# Free-trial length (days) applied to new subscriptions at checkout. The Stripe
+# price itself carries no trial (dashboard-created prices have no trial field),
+# so the trial is set on the Checkout Session's subscription_data instead.
+SUBSCRIPTION_TRIAL_DAYS = 14
 BILLING_FREQUENCY = "Billed monthly"
 
 # Transactional email (password reset). Prefer SendGrid; SMTP is fallback.

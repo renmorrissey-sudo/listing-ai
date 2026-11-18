@@ -34,8 +34,8 @@ def test_get_subscribe_returns_200_html(app_client):
     assert "Subscribe" in html
     assert config.SUBSCRIPTION_PRICE.split("/")[0] in html or "$49" in html
     assert "Billed monthly" in html
-    assert "TRIAL50" in html or "50% off" in html
-    assert "not a free trial" in html.lower() or "discount" in html.lower()
+    assert "14-day" in html and "free trial" in html.lower()
+    assert "no charge until the trial ends" in html.lower()
     assert 'name="email"' in html
     assert 'name="password"' in html
     assert 'name="confirm_password"' in html

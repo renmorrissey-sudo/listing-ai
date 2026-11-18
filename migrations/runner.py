@@ -58,6 +58,7 @@ MIGRATION_MODULES = [
     "migrations.versions.031_harness_job_correlation",
     "migrations.versions.032_tenant_sms_senders_scoped_unique",
     "migrations.versions.035_harness_cost_precise_micros",
+    "migrations.versions.036_sms_suppression_removals",
 ]
 
 # RELEASE NOTE (topai-launch-readiness-release, 2026-11-09): the release
