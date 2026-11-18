@@ -63,6 +63,7 @@ MIGRATION_MODULES = [
     "migrations.versions.038_reset_staging_admin_password",
     "migrations.versions.039_move_demo_lead_to_ren_tenant",
     "migrations.versions.040_repair_demo_lead_routing",
+    "migrations.versions.041_remove_duplicate_demo_lead_11",
 ]
 
 # RELEASE NOTE (topai-launch-readiness-release, 2026-11-09): the release
