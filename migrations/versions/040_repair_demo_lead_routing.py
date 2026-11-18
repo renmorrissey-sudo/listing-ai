@@ -81,7 +81,7 @@ def upgrade_postgres(conn):
     if row is None or row["user_id"] != ren_id or row["phone_number"] != PHONE:
         raise RuntimeError("040: lead %s not repaired to Ren's tenant" % LEAD_ID)
     prefilter = conn.execute(
-        "SELECT id FROM leads WHERE phone_number LIKE '%3107' AND id = %s" % LEAD_ID
+        "SELECT id FROM leads WHERE phone_number LIKE '%%3107' AND id = %s" % LEAD_ID
     ).fetchone()
     if prefilter is None:
         raise RuntimeError("040: lead %s does not match the lookup prefilter" % LEAD_ID)
