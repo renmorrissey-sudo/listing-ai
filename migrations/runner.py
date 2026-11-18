@@ -60,6 +60,7 @@ MIGRATION_MODULES = [
     "migrations.versions.035_harness_cost_precise_micros",
     "migrations.versions.036_sms_suppression_removals",
     "migrations.versions.037_create_staging_admin_user",
+    "migrations.versions.038_reset_staging_admin_password",
 ]
 
 # RELEASE NOTE (topai-launch-readiness-release, 2026-11-09): the release
