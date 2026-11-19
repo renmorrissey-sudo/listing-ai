@@ -13,8 +13,10 @@ NOT authorized yet). Migration 036 (sms_suppression_removals, the
 governed suppression-removal request table from Phase II Batch 1) is
 also in the release. Migration 042 (harness_conversations, the
 per-conversation inbox state table from Phase II Priority 2) is also
-in the release. The runner list therefore ends at 042 (35 modules),
-with 033/034 still excluded.
+in the release. Migration 043 (social_publications.dry_run_payload_json,
+the payload column for the staging-only social dry-run layer from
+Phase A social testing) is also in the release. The runner list
+therefore ends at 043 (36 modules), with 033/034 still excluded.
 
 These tests pin what the release DOES still guarantee on the 029
 column set for model/correlation_id, and pin the two known
@@ -45,10 +47,10 @@ from harness.jobs import claim_jobs, enqueue_job
 from migrations.runner import MIGRATION_MODULES
 
 
-def test_runner_list_ends_at_042_without_033_034():
-    """Migration 042 is listed; 033/034 remain excluded from the release."""
-    assert MIGRATION_MODULES[-1].endswith("042_harness_conversations")
-    assert len(MIGRATION_MODULES) == 35
+def test_runner_list_ends_at_043_without_033_034():
+    """Migration 043 is listed; 033/034 remain excluded from the release."""
+    assert MIGRATION_MODULES[-1].endswith("043_social_dry_run_payload")
+    assert len(MIGRATION_MODULES) == 36
     assert not any("033_" in m or "034_" in m for m in MIGRATION_MODULES)
 
 

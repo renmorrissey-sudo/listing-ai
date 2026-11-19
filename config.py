@@ -255,6 +255,14 @@ TIKTOK_CLIENT_SECRET = _env_strip("TIKTOK_CLIENT_SECRET") or ""
 # Flip to true only after TikTok's unaudited-app user cap is lifted via app audit.
 TIKTOK_AUDIT_APPROVED = _env_bool("TIKTOK_AUDIT_APPROVED", False)
 
+# Social dry-run mode (Phase A social testing): when true, the social
+# dry-run layer (social_dry_run.py) records the exact payload that WOULD
+# be sent to a provider plus an audit row, without calling any provider.
+# It is only honoured in staging — social_dry_run.is_dry_run_enabled()
+# refuses to enable it anywhere else, so a production deploy can never
+# dry-run (and never mistake a dry-run for a publish).
+SOCIAL_DRY_RUN = _env_bool("SOCIAL_DRY_RUN", False)
+
 # Skip subscription checks locally when Stripe is not configured.
 SUBSCRIPTION_REQUIRED = _env("SUBSCRIPTION_REQUIRED", "true").lower() == "true"
 if not STRIPE_SECRET_KEY and APP_ENV in {"development", "test"}:
