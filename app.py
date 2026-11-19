@@ -2724,6 +2724,34 @@ def listings_post_retry(generation_id, provider):
     return jsonify(result)
 
 
+@app.route("/listings/<int:generation_id>/post/dry-run", methods=["POST"])
+@auth.subscription_required
+@limiter.limit("20 per minute", key_func=_user_rate_limit_key)
+def listings_post_dry_run(generation_id):
+    """Staging-only social dry-run: record the exact payload each channel
+    WOULD send, without calling any provider. Refuses (403) outside
+    staging — see social_dry_run.is_dry_run_enabled()."""
+    from social_dry_run import SocialDryRunNotAvailable, dry_run_publish
+
+    user = auth.get_current_user()
+    data = request.get_json(silent=True) or {}
+    try:
+        result = dry_run_publish(
+            user["id"],
+            generation_id,
+            operation_id=data.get("operation_id"),
+            connection_ids=data.get("connection_ids"),
+        )
+    except SocialDryRunNotAvailable as exc:
+        return jsonify({"error": str(exc)}), 403
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except Exception:
+        logger.exception("Listing social dry-run failed for generation %s", generation_id)
+        return jsonify({"error": "Couldn't dry-run this post. Please try again."}), 500
+    return jsonify(result)
+
+
 @app.route("/generate-script", methods=["POST"])
 @auth.subscription_required
 @limiter.limit("10 per minute", key_func=_user_rate_limit_key)
