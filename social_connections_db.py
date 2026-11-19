@@ -307,17 +307,35 @@ def update_publication_result(
     provider_post_url=None,
     error_code=None,
     error_summary=None,
+    dry_run_payload_json=None,
 ):
+    """Record a publication outcome. `dry_run_payload_json` is only
+    written when the caller passes it (social dry-run rows); a normal
+    publish outcome never touches the column, so a recorded dry-run
+    payload cannot be clobbered by a later status update."""
     published_at = _iso(_now()) if status == "published" else None
+    if dry_run_payload_json is None:
+        with get_db() as conn:
+            conn.execute(
+                """
+                UPDATE social_publications SET
+                    status = ?, provider_post_id = ?, provider_post_url = ?,
+                    error_code = ?, error_summary = ?, published_at = ?
+                WHERE id = ?
+                """,
+                (status, provider_post_id, provider_post_url, error_code, error_summary, published_at, publication_id),
+            )
+        return
     with get_db() as conn:
         conn.execute(
             """
             UPDATE social_publications SET
                 status = ?, provider_post_id = ?, provider_post_url = ?,
-                error_code = ?, error_summary = ?, published_at = ?
+                error_code = ?, error_summary = ?, published_at = ?,
+                dry_run_payload_json = ?
             WHERE id = ?
             """,
-            (status, provider_post_id, provider_post_url, error_code, error_summary, published_at, publication_id),
+            (status, provider_post_id, provider_post_url, error_code, error_summary, published_at, dry_run_payload_json, publication_id),
         )
 
 
@@ -343,13 +361,20 @@ def latest_publications_by_provider(user_id, listing_generation_id):
 
 
 def publications_for_generations(user_id, listing_generation_ids):
-    """{generation_id: {provider: status}} for a batch of generations (archive list view)."""
+    """{generation_id: {provider: status}} for a batch of generations (archive list view).
+
+    Dry-run rows (status 'dry_run') are excluded: a dry-run is a test
+    record, not a publication, and must never mask a real 'published' /
+    'failed' status in the archive view. Dry-run rows remain visible via
+    list_publications_for_generation / latest_publications_by_provider.
+    """
     if not user_id or not listing_generation_ids:
         return {}
     placeholders = ",".join("?" for _ in listing_generation_ids)
     with get_db() as conn:
         rows = conn.execute(
             f"SELECT * FROM social_publications WHERE user_id = ? "
+            f"AND status != 'dry_run' "
             f"AND listing_generation_id IN ({placeholders}) ORDER BY id ASC",
             [user_id] + list(listing_generation_ids),
         ).fetchall()
