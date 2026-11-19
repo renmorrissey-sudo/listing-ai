@@ -295,3 +295,118 @@ def test_filter_leads_external_only_matches_on_sqlite(two_users):
     assert lid_ext in external_ids
     assert lid_id in external_ids
     assert lid_plain not in external_ids
+
+
+# --- Inbox harness_conversations boolean binding (2026-11-18) ----------------
+# The inbox conversation page 500'd on staging (Postgres) with
+# psycopg.errors.DatatypeMismatch: column "human_takeover" is of type boolean
+# but expression is of type smallint. harness/inbox.py _upsert_state bound
+# 1/0 for the BOOLEAN column; SQLite accepts that, Postgres does not. The fix
+# binds via db_backend.bind_bool (bool for Postgres, 0/1 for SQLite). This
+# test drives the real _upsert_state through CompatConnection(engine="postgres")
+# with a fake that raises exactly like psycopg when a non-bool is bound to the
+# boolean column — on both the INSERT and the UPDATE path.
+
+
+class _PgBoolValidatingCursor:
+    """Mimic psycopg: an int bound to a BOOLEAN column raises DatatypeMismatch."""
+
+    def __init__(self, select_row=None):
+        self._select_row = select_row
+        self.statements = []
+
+    def execute(self, sql, params=None):
+        if params:
+            # Keep the pyformat check from _PgFormatValidatingCursor.
+            sql % tuple(params)
+        self.statements.append((sql, params))
+        upper = (sql or "").strip().upper()
+        if "HARNESS_CONVERSATIONS" in upper and params:
+            if upper.startswith("INSERT"):
+                # (user_id, lead_id, human_takeover, last_read_at, created_at, updated_at)
+                value = params[2]
+            elif upper.startswith("UPDATE"):
+                # (human_takeover, last_read_at, updated_at, user_id, lead_id)
+                value = params[0]
+            else:
+                value = None
+            if value is not None and not isinstance(value, bool):
+                raise TypeError(
+                    'column "human_takeover" is of type boolean but expression '
+                    f"is of type smallint (got {value!r})"
+                )
+        return self
+
+    def fetchone(self):
+        return self._select_row
+
+    def fetchall(self):
+        return [self._select_row] if self._select_row is not None else []
+
+    @property
+    def rowcount(self):
+        return 1
+
+
+class _PgBoolValidatingRaw:
+    def __init__(self, select_row=None):
+        self._cursor = _PgBoolValidatingCursor(select_row)
+
+    def execute(self, sql, params=None):
+        return self._cursor.execute(sql, params)
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        pass
+
+
+@contextmanager
+def _postgres_bool_db(select_row=None):
+    conn = CompatConnection(_PgBoolValidatingRaw(select_row), "postgres")
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def test_inbox_upsert_binds_bool_for_postgres(two_users, monkeypatch):
+    """Regression: _upsert_state must bind a bool (not 0/1) for human_takeover.
+
+    bind_bool is engine-aware (bool for Postgres, 0/1 for SQLite), so the
+    test runs with config.DB_ENGINE forced to "postgres" — the production
+    engine — and the fake raises exactly like psycopg if an int is bound.
+    """
+    import config
+    from harness import inbox as inbox_mod
+
+    monkeypatch.setattr(config, "DB_ENGINE", "postgres")
+    u1, _ = two_users
+    lead_id = 12345
+
+    # INSERT path: the SELECT finds no row, so _upsert_state inserts.
+    with _postgres_bool_db() as conn:
+        state = inbox_mod._upsert_state(
+            conn, u1, lead_id, human_takeover=True, last_read_at="2026-11-18T00:00:00+00:00"
+        )
+        assert state["human_takeover"] is True
+        state = inbox_mod._upsert_state(conn, u1, lead_id, last_read_at="2026-11-18T01:00:00+00:00")
+        assert state["human_takeover"] is False
+
+    # UPDATE path: the SELECT returns an existing row, so _upsert_state updates.
+    existing = {
+        "id": 7,
+        "human_takeover": 0,
+        "last_read_at": None,
+        "created_at": "2026-11-18T00:00:00+00:00",
+        "updated_at": "2026-11-18T00:00:00+00:00",
+    }
+    with _postgres_bool_db(select_row=existing) as conn:
+        state = inbox_mod._upsert_state(conn, u1, lead_id, human_takeover=False)
+        assert state["human_takeover"] is False
+        state = inbox_mod._upsert_state(conn, u1, lead_id, human_takeover=True)
+        assert state["human_takeover"] is True
