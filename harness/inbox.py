@@ -33,6 +33,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from db_backend import bind_bool
+
 logger = logging.getLogger(__name__)
 
 _PREVIEW_CHARS = 120
@@ -292,7 +294,7 @@ def _upsert_state(conn, user_id, lead_id, *, human_takeover=None, last_read_at=N
             (
                 user_id,
                 lead_id,
-                1 if human_takeover else 0,
+                bind_bool(human_takeover),
                 last_read_at,
                 now,
                 now,
@@ -318,7 +320,7 @@ def _upsert_state(conn, user_id, lead_id, *, human_takeover=None, last_read_at=N
         SET human_takeover = ?, last_read_at = ?, updated_at = ?
         WHERE user_id = ? AND lead_id = ?
         """,
-        (1 if new_takeover else 0, new_read, now, user_id, lead_id),
+        (bind_bool(new_takeover), new_read, now, user_id, lead_id),
     )
     return {
         "lead_id": int(lead_id),
