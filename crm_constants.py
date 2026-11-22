@@ -6,10 +6,12 @@ LEAD_STATUSES = [
     ("new", "New"),
     ("attempting_contact", "Attempting Contact"),
     ("contacted", "Contacted"),
+    ("qualifying", "Qualifying"),
     ("qualified", "Qualified"),
     ("appointment_scheduled", "Appointment Scheduled"),
     ("appointment_completed", "Appointment Completed"),
     ("nurture", "Nurture"),
+    ("unqualified", "Unqualified"),
     ("under_contract", "Active Client"),
     ("closed_won", "Closed Won"),
     ("closed_lost", "Closed Lost"),
@@ -27,11 +29,11 @@ LEGACY_STATUS_MAP = {
 PIPELINE_STAGES = [
     ("new", "New", {"new"}),
     ("contacting", "Contacting", {"attempting_contact", "contacted"}),
-    ("engaged", "Engaged", {"nurture"}),
+    ("engaged", "Engaged", {"nurture", "qualifying"}),
     ("qualified", "Qualified", {"qualified"}),
     ("appointment", "Appointment", {"appointment_scheduled", "appointment_completed"}),
     ("active_client", "Active Client", {"under_contract"}),
-    ("closed", "Closed", {"closed_won", "closed_lost", "do_not_contact"}),
+    ("closed", "Closed", {"closed_won", "closed_lost", "do_not_contact", "unqualified"}),
 ]
 
 PRIORITIES = ["low", "normal", "high", "urgent"]

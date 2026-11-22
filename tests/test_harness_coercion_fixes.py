@@ -112,9 +112,23 @@ def test_set_lead_status_rejects_invalid(two_users):
 def test_set_lead_status_accepts_valid_and_alias(two_users):
     u1, _ = two_users
     lead_id = _make_lead(u1)
+    lead, error = crm_db.set_lead_status(u1, lead_id, "contacted")
+    assert error is None
+    assert lead["status"] == "contacted"
+    lead, error = crm_db.set_lead_status(u1, lead_id, "replied")
+    assert error is None
+    assert lead["status"] == "contacted"
+    # Phase III-2: machine states are refused here even though they
+    # are valid statuses — they follow the qualification rules
+    # ("hot" is the legacy alias for "qualified", so it is refused
+    # the same way).
     lead, error = crm_db.set_lead_status(u1, lead_id, "qualified")
-    assert error is None
-    assert lead["status"] == "qualified"
+    assert lead is None
+    assert error == (
+        "Set qualification fields instead — status follows the qualification rules."
+    )
     lead, error = crm_db.set_lead_status(u1, lead_id, "hot")
-    assert error is None
-    assert lead["status"] == "qualified"
+    assert lead is None
+    assert error == (
+        "Set qualification fields instead — status follows the qualification rules."
+    )

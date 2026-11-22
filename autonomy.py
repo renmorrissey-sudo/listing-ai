@@ -53,12 +53,16 @@ SMS_ESCALATION_BLOCK = frozenset(
 
 # Statuses TopAI may apply from clear evidence. Final/irreversible states stay
 # agent-owned unless a dedicated compliance path (opt-out) already ran.
+# Phase III-2: "qualified" is NOT routine — the model can no longer
+# silently write it (it was in this set before III-2). "nurture" stays
+# listed but is only ever applied through the qualification evaluator
+# (see apply_inbound_side_effects); "qualifying"/"unqualified" are
+# never routine.
 ROUTINE_LEAD_STATUSES = frozenset(
     {
         "new",
         "attempting_contact",
         "contacted",
-        "qualified",
         "appointment_scheduled",
         "nurture",
     }
@@ -209,17 +213,83 @@ def apply_inbound_side_effects(user_id, lead_id, analysis: dict | None, *, sourc
 
     intent = str(analysis.get("intent") or "").lower()
     if any(k in intent for k in ("not interested", "no longer interested", "stop pursuing")):
-        crm_db.set_lead_status(user_id, lead_id, "nurture", from_automation=True)
-        applied.append("status")
+        # Phase III-2: "not interested" is evidence, not a status write.
+        # The evaluator decides the state — nurture, or unqualified
+        # when the unqualified rule fires. A transition the table does
+        # not allow (e.g. contacted -> nurture, which skips qualifying)
+        # is left unwritten rather than forced.
+        from harness.qualification import evaluate_lead, request_status_change
+
+        evaluation = evaluate_lead(user_id, lead_id)
+        if evaluation:
+            derived = evaluation["derived_state"]
+            current = evaluation["current_state"]
+            if derived != current:
+                _updated, _err = request_status_change(
+                    user_id, lead_id, derived, actor="system",
+                    trigger="system_rule",
+                    gate_reason=(
+                        "not-interested intent; evaluator yields "
+                        f"{derived} (score {evaluation['score']})"
+                    ),
+                )
+                if not _err:
+                    applied.append("status")
+                    lead = db.get_lead(lead_id, user_id) or lead
+        if "status" not in applied:
+            current = normalize_lead_status((db.get_lead(lead_id, user_id) or lead).get("status"))
+            if current in {"new", "attempting_contact"} and (lead.get("opt_out_status") or "") != "opted_out":
+                crm_db.set_lead_status(user_id, lead_id, "contacted", from_automation=True)
+                applied.append("status")
     else:
-        suggested = allowed_auto_status(analysis.get("suggested_lead_status") or "")
+        suggested_raw = normalize_lead_status(analysis.get("suggested_lead_status") or "")
         current = normalize_lead_status(lead.get("status"))
-        if suggested and suggested != current and current not in FINAL_LEAD_STATUSES:
-            crm_db.set_lead_status(user_id, lead_id, suggested, from_automation=True)
-            applied.append("status")
-        elif current in {"new", "attempting_contact"} and (lead.get("opt_out_status") or "") != "opted_out":
-            crm_db.set_lead_status(user_id, lead_id, "contacted", from_automation=True)
-            applied.append("status")
+        status_applied = False
+        if suggested_raw in {"qualified", "unqualified", "qualifying", "nurture"}:
+            # Phase III-2: a suggested machine state only applies if
+            # the evaluator yields it — otherwise it stays a
+            # suggestion and nothing is written. (Checked against the
+            # raw suggestion, not allowed_auto_status: 'qualified' /
+            # 'unqualified' / 'qualifying' are deliberately not routine
+            # statuses, so the routine gate would hide them from the
+            # evaluator entirely.)
+            from harness.qualification import evaluate_lead, request_status_change
+
+            evaluation = evaluate_lead(user_id, lead_id)
+            if evaluation and evaluation["derived_state"] == suggested_raw and suggested_raw != current:
+                _updated, _err = request_status_change(
+                    user_id, lead_id, suggested_raw, actor="ai",
+                    trigger="system_rule",
+                    gate_reason=(
+                        "model-suggested status matches evaluator: "
+                        f"{suggested_raw} (score {evaluation['score']})"
+                    ),
+                )
+                if not _err:
+                    applied.append("status")
+                    status_applied = True
+                    lead = db.get_lead(lead_id, user_id) or lead
+        else:
+            suggested = allowed_auto_status(analysis.get("suggested_lead_status") or "")
+            if suggested and suggested != current and current not in FINAL_LEAD_STATUSES:
+                crm_db.set_lead_status(user_id, lead_id, suggested, from_automation=True)
+                applied.append("status")
+                status_applied = True
+        if not status_applied:
+            current = normalize_lead_status((db.get_lead(lead_id, user_id) or lead).get("status"))
+            if current in {"new", "attempting_contact"} and (lead.get("opt_out_status") or "") != "opted_out":
+                crm_db.set_lead_status(user_id, lead_id, "contacted", from_automation=True)
+                applied.append("status")
+
+    # Phase III-2: an inbound exchange can flip the +10 "replied"
+    # signal — refresh the stored score cache (best-effort; never
+    # moves state and never re-opens a terminal state).
+    try:
+        from harness.qualification import refresh_qualification_score
+
+        refresh_qualification_score(user_id, lead_id)
+    except Exception:
+        pass
 
     for item in analysis.get("suggested_tasks") or []:
         if not isinstance(item, dict):

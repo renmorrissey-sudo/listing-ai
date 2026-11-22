@@ -127,9 +127,7 @@ def test_voice_tool_can_update_routine_pipeline_status(app_client, two_users):
     for status in [
         "attempting_contact",
         "contacted",
-        "qualified",
         "appointment_scheduled",
-        "nurture",
         "new",
     ]:
         res = app_client.post(
@@ -144,6 +142,24 @@ def test_voice_tool_can_update_routine_pipeline_status(app_client, two_users):
         assert res.status_code == 200
         assert _tool_result(res)["ok"] is True
         assert db.get_lead(lead_id, u1)["status"] == status
+
+    # Phase III-2: qualification machine states follow the
+    # qualification rules — the voice tool cannot write them directly.
+    for status in ["qualified", "nurture"]:
+        res = app_client.post(
+            "/webhook/voice",
+            json=_tool_payload(
+                call_id,
+                "vapi_tools",
+                "update_lead_status",
+                {"lead_id": lead_id, "status": status},
+            ),
+        )
+        assert res.status_code == 200
+        result = _tool_result(res)
+        assert isinstance(result, str)
+        assert "Set qualification fields instead" in result
+        assert db.get_lead(lead_id, u1)["status"] == "new"
 
     for status in [
         "appointment_completed",

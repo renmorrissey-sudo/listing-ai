@@ -123,7 +123,87 @@
         </select>
         <button class="btn" type="button" onclick="setStatus()">Save status</button>
       </div>
+      <p class="muted" style="margin:8px 0 0;font-size:12px;">Qualification states (Qualifying, Qualified, Unqualified, Nurture) follow the qualification rules below — set the fields, not the status dropdown.</p>
     </div>
+
+    {% if qualification %}
+    <div class="card" id="qualification-panel" style="margin-top:16px;">
+      <h2>Qualification</h2>
+      <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center;">
+        <span><strong>Score:</strong> {{ qualification.score }} / 110</span>
+        <span class="pill {% if qualification.band == 'Hot' %}warn{% endif %}">{{ qualification.band }}</span>
+        {% if qualification.qualified %}
+        <span class="pill">Qualified</span>
+        {% else %}
+        <span class="pill">Not qualified</span>
+        {% endif %}
+        <span class="muted">Machine state: {{ status_label(qualification.current_state) }}</span>
+      </div>
+      <p class="muted" style="margin:8px 0 0;font-size:12px;">
+        {% for reason in qualification.qualified_reasons %}{{ reason }}{% if not loop.last %} · {% endif %}{% endfor %}
+      </p>
+      <div class="row" style="margin-top:12px;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+        <label class="muted" style="font-size:12px;">Budget
+          <select id="qual-budget" style="display:block;padding:8px 10px;border:1px solid #e0e4ed;border-radius:8px;">
+            {% for value, label in qualification_options.budget %}
+            <option value="{{ value }}" {% if qualification_fields.budget == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="muted" style="font-size:12px;">Timeline
+          <select id="qual-timeline" style="display:block;padding:8px 10px;border:1px solid #e0e4ed;border-radius:8px;">
+            {% for value, label in qualification_options.timeline %}
+            <option value="{{ value }}" {% if qualification_fields.timeline == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="muted" style="font-size:12px;">Pre-approval
+          <select id="qual-preapproval" style="display:block;padding:8px 10px;border:1px solid #e0e4ed;border-radius:8px;">
+            {% for value, label in qualification_options.preapproval %}
+            <option value="{{ value }}" {% if qualification_fields.preapproval == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="muted" style="font-size:12px;">Motivation
+          <select id="qual-motivation" style="display:block;padding:8px 10px;border:1px solid #e0e4ed;border-radius:8px;">
+            {% for value, label in qualification_options.motivation %}
+            <option value="{{ value }}" {% if qualification_fields.motivation == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button class="btn" type="button" onclick="saveQualification()">Save qualification</button>
+      </div>
+      <table style="margin-top:12px;width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr><th style="text-align:left;padding:4px 8px;border-bottom:1px solid #eef2f7;">Component</th><th style="text-align:left;padding:4px 8px;border-bottom:1px solid #eef2f7;">Value</th><th style="text-align:right;padding:4px 8px;border-bottom:1px solid #eef2f7;">Points</th></tr></thead>
+        <tbody>
+          <tr><td style="padding:4px 8px;">Budget</td><td style="padding:4px 8px;">{{ qualification.breakdown.budget.value }}</td><td style="padding:4px 8px;text-align:right;">{{ qualification.breakdown.budget.points }}</td></tr>
+          <tr><td style="padding:4px 8px;">Timeline</td><td style="padding:4px 8px;">{{ qualification.breakdown.timeline.value }}</td><td style="padding:4px 8px;text-align:right;">{{ qualification.breakdown.timeline.points }}</td></tr>
+          <tr><td style="padding:4px 8px;">Pre-approval</td><td style="padding:4px 8px;">{{ qualification.breakdown.preapproval.value }}</td><td style="padding:4px 8px;text-align:right;">{{ qualification.breakdown.preapproval.points }}</td></tr>
+          <tr><td style="padding:4px 8px;">Motivation</td><td style="padding:4px 8px;">{{ qualification.breakdown.motivation.value }}</td><td style="padding:4px 8px;text-align:right;">{{ qualification.breakdown.motivation.points }}</td></tr>
+          <tr><td style="padding:4px 8px;">Replied to an outreach</td><td style="padding:4px 8px;">{% if qualification.breakdown.replied.value %}Yes{% else %}No{% endif %}</td><td style="padding:4px 8px;text-align:right;">{{ qualification.breakdown.replied.points }}</td></tr>
+          <tr><td style="padding:4px 8px;">Booked / requested a showing or call</td><td style="padding:4px 8px;">{% if qualification.breakdown.booked.value %}Yes{% else %}No{% endif %}</td><td style="padding:4px 8px;text-align:right;">{{ qualification.breakdown.booked.points }}</td></tr>
+          <tr><td style="padding:4px 8px;"><strong>Total</strong></td><td style="padding:4px 8px;"></td><td style="padding:4px 8px;text-align:right;"><strong>{{ qualification.score }}</strong></td></tr>
+        </tbody>
+      </table>
+      {% if qualification_suggestion %}
+      <div style="margin-top:12px;padding:12px 14px;background:#fffbeb;border-radius:10px;border:1px solid #fde68a;">
+        <strong>Suggested qualification</strong>
+        {% if qualification_suggestion.qualification_suggestion.confidence is not none %}
+        <span class="muted">· confidence {{ (qualification_suggestion.qualification_suggestion.confidence * 100)|round(0) }}%</span>
+        {% endif %}
+        <div style="margin-top:6px;font-size:13px;">
+          {% for field, value in qualification_suggestion.qualification_suggestion.fields.items() %}
+          <div>{{ field }}: suggested <strong>{{ value }}</strong> · current {{ qualification_fields[field] }}</div>
+          {% endfor %}
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <button class="btn" type="button" onclick="confirmQualificationSuggestion({{ qualification_suggestion.id }})">Confirm</button>
+          <button class="btn secondary" type="button" onclick="dismissQualificationSuggestion({{ qualification_suggestion.id }})">Dismiss</button>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
 
     <div class="grid-2">
       <div>
@@ -464,6 +544,39 @@
       });
       const data = await res.json();
       if (!res.ok) return showFlash(data.error || 'Failed', true);
+      location.reload();
+    }
+    async function saveQualification() {
+      const body = {
+        budget: document.getElementById('qual-budget').value,
+        timeline: document.getElementById('qual-timeline').value,
+        preapproval: document.getElementById('qual-preapproval').value,
+        motivation: document.getElementById('qual-motivation').value,
+      };
+      const res = await fetch(`/api/crm/leads/${leadId}/qualification`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) return showFlash(data.error || 'Could not save qualification.', true);
+      location.reload();
+    }
+    async function confirmQualificationSuggestion(insightId) {
+      const res = await fetch(`/api/crm/insights/${insightId}/approve-qualification`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) return showFlash(data.error || 'Could not confirm suggestion.', true);
+      location.reload();
+    }
+    async function dismissQualificationSuggestion(insightId) {
+      const res = await fetch(`/api/crm/insights/${insightId}/dismiss-qualification`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) return showFlash(data.error || 'Could not dismiss suggestion.', true);
       location.reload();
     }
     async function saveLeadEmail() {

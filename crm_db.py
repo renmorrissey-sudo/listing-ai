@@ -277,7 +277,8 @@ def update_lead_activity(user_id, activity_id, summary=None, payload=None, event
         return dict(updated) if updated else None
 
 
-def set_lead_status(user_id, lead_id, new_status, actor_user_id=None, from_automation=False):
+def set_lead_status(user_id, lead_id, new_status, actor_user_id=None, from_automation=False,
+                    via_qualification=False):
     # D5: never silently coerce an invalid status to "new" on a write.
     # Legacy aliases still resolve, but an unrecognized status is rejected.
     from crm_constants import LEGACY_STATUS_MAP, LEAD_STATUS_SET
@@ -286,6 +287,15 @@ def set_lead_status(user_id, lead_id, new_status, actor_user_id=None, from_autom
     new_status = LEGACY_STATUS_MAP.get(raw_status, raw_status)
     if new_status not in LEAD_STATUS_SET:
         return None, "Invalid lead status."
+    # Phase III-2: the four qualification machine states follow the
+    # qualification rules — only harness/qualification.py (via
+    # request_status_change) may write them. Direct writes are refused
+    # with a pointer to the qualification fields. Out-of-lane statuses
+    # are untouched by this guard.
+    if new_status in {"qualified", "unqualified", "qualifying", "nurture"} and not via_qualification:
+        return None, (
+            "Set qualification fields instead — status follows the qualification rules."
+        )
     with get_db() as conn:
         lead = conn.execute(
             "SELECT * FROM leads WHERE id = ? AND user_id = ?",
@@ -1593,6 +1603,14 @@ def create_appointment(user_id, data):
             ),
         )
         appt_id = cur.lastrowid
+    # Phase III-2: a booking is a +10 score signal — refresh the stored
+    # qualification score cache (best-effort; never moves state).
+    try:
+        from harness.qualification import refresh_qualification_score
+
+        refresh_qualification_score(user_id, lead_id)
+    except Exception:
+        pass
     add_lead_activity(
         lead_id,
         user_id,
