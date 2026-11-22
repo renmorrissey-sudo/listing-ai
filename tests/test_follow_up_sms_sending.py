@@ -74,6 +74,27 @@ def _mock_env(monkeypatch):
     monkeypatch.setattr(config, "SMS_QUIET_HOURS_END", 0)
 
 
+def _staging_env(monkeypatch):
+    """The live staging combination: Telnyx provider name, mock
+    transport on, toll-free verification unset, no Telnyx API key,
+    trial mode on (config default), no verified test number — exactly
+    what the staging deployment runs. Deliberately NOT simpletexting:
+    the send path keys the Telnyx prerequisites (toll-free
+    verification, provider credentials, trial destination) on the
+    provider NAME while the factory resolves the mock transport, so
+    all three must pass for a mock send. The Telnyx key is forced
+    empty here because the ambient test environment may carry one;
+    staging has none."""
+    monkeypatch.setattr(config, "HARNESS_MOCK_PROVIDERS", True)
+    monkeypatch.setattr(config, "SMS_PROVIDER", "telnyx")
+    monkeypatch.setattr(config, "TELNYX_TOLL_FREE_VERIFICATION_STATUS", "")
+    monkeypatch.setattr(config, "TELNYX_API_KEY", "")
+    monkeypatch.setattr(config, "TELNYX_TRIAL_MODE", True)
+    monkeypatch.setattr(config, "TELNYX_VERIFIED_TEST_NUMBER", "")
+    monkeypatch.setattr(config, "SMS_QUIET_HOURS_START", 0)
+    monkeypatch.setattr(config, "SMS_QUIET_HOURS_END", 0)
+
+
 def _enable_sending(user_id):
     """A verified tenant sender + accepted SMS terms, the two things
     ``send_authorized_sms`` requires before the provider call."""
@@ -472,6 +493,100 @@ def test_drafts_only_approval_executes_exactly_one_mock_send(two_users, monkeypa
     assert len(executed) == 1
     assert _job_row(exec_job_id)["status"] == "succeeded"
     assert _job_result(exec_job_id)["sent"] is True
+
+
+def test_drafts_only_approval_executes_mock_send_staging_telnyx_unverified_tf(
+    two_users, monkeypatch
+):
+    """Staging combination: SMS_PROVIDER=telnyx + mock transport on +
+    toll-free verification unset (+ no Telnyx key, trial mode on) →
+    approval-execute produces exactly one mock send.
+
+    Regression: the live staging daytime run on 2026-11-22 refused
+    this exact approval-execute with approval_blocked "Toll-free
+    messaging verification is not complete." because the send path
+    keys the Telnyx prerequisites on the provider NAME while the
+    factory resolves the mock transport. The waiver must key on the
+    resolved mock transport: this test FAILS on the un-fixed code.
+    """
+    from harness.approvals import approve_approval, enqueue_execute_approval_job
+
+    _staging_env(monkeypatch)
+    u1, _ = two_users
+    _enable_sending(u1)
+    _set_settings(u1, mode="drafts_only", paused=False)
+    lead_id, phone = _make_lead(u1)
+    follow_up_id = _make_follow_up(u1, lead_id)
+    scheduled = _run_due(u1, lead_id, follow_up_id)
+    approval_id = _job_result(scheduled["job_id"])["approval_id"]
+
+    approval, error = approve_approval(u1, approval_id)
+    assert error is None, error
+    assert approval["status"] == "approved"
+    exec_job_id = enqueue_execute_approval_job(u1, approval_id)
+    assert exec_job_id is not None
+    clear_sent_messages()
+    with _gate_open():
+        assert run_once() is True
+    sends = sent_messages()
+    assert len(sends) == 1
+    assert sends[0]["to"] == phone
+    assert sends[0]["body"] == BODY
+    assert _approval_row(approval_id)["status"] == "executed"
+    executed = _audit_rows(u1, action="approval_executed")
+    assert len(executed) == 1
+    assert _job_row(exec_job_id)["status"] == "succeeded"
+    assert _job_result(exec_job_id)["sent"] is True
+
+
+def test_real_telnyx_transport_unverified_tf_still_refused(two_users, monkeypatch):
+    """Guard: real Telnyx transport + toll-free verification unset →
+    approval-execute is still refused with the toll-free error, no
+    send, no mock send. The waiver keys on the resolved mock
+    transport only: a misconfiguration routing to real Telnyx must
+    still hit the check. This test passes both before and after the
+    fix (it pins the existing behavior for real transport).
+
+    A Telnyx API key is set (dummy) so the flow reaches the
+    toll-free check instead of failing earlier on provider
+    credentials.
+    """
+    from harness.approvals import approve_approval, enqueue_execute_approval_job
+
+    monkeypatch.setattr(config, "HARNESS_MOCK_PROVIDERS", False)
+    monkeypatch.setattr(config, "SMS_PROVIDER", "telnyx")
+    monkeypatch.setattr(config, "TELNYX_API_KEY", "KEY_TEST_ONLY")
+    monkeypatch.setattr(config, "TELNYX_TOLL_FREE_VERIFICATION_STATUS", "")
+    monkeypatch.setattr(config, "SMS_QUIET_HOURS_START", 0)
+    monkeypatch.setattr(config, "SMS_QUIET_HOURS_END", 0)
+    u1, _ = two_users
+    _enable_sending(u1)
+    _set_settings(u1, mode="drafts_only", paused=False)
+    lead_id, _ = _make_lead(u1)
+    follow_up_id = _make_follow_up(u1, lead_id)
+    scheduled = _run_due(u1, lead_id, follow_up_id)
+    approval_id = _job_result(scheduled["job_id"])["approval_id"]
+
+    approval, error = approve_approval(u1, approval_id)
+    assert error is None, error
+    assert approval["status"] == "approved"
+    exec_job_id = enqueue_execute_approval_job(u1, approval_id)
+    assert exec_job_id is not None
+    clear_sent_messages()
+    with _gate_open():
+        assert run_once() is True
+    assert sent_messages() == []
+    assert _approval_row(approval_id)["status"] == "blocked"
+    assert _job_row(exec_job_id)["status"] == "succeeded"
+    assert _job_result(exec_job_id)["sent"] is False
+    assert "Toll-free messaging verification is not complete." in _job_result(
+        exec_job_id
+    )["reason"]
+    blocked = _audit_rows(u1, action="approval_blocked")
+    assert len(blocked) == 1
+    assert "Toll-free messaging verification is not complete." in (
+        blocked[0].get("gate_reason") or ""
+    )
 
 
 def test_paused_tenant_drafts_not_sends(two_users, monkeypatch):
