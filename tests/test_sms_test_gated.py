@@ -213,6 +213,9 @@ def test_endpoint_trial_blocks_non_lead_when_telnyx_trial(
     app_client, two_users, monkeypatch
 ):
     _mock_env(monkeypatch)
+    # Real Telnyx transport: the trial gate keys on the resolved
+    # transport, so a mock-transport run would (correctly) waive it.
+    monkeypatch.setattr(config, "HARNESS_MOCK_PROVIDERS", False)
     monkeypatch.setattr(config, "SMS_PROVIDER", "telnyx")
     monkeypatch.setattr(config, "TELNYX_TRIAL_MODE", True)
     monkeypatch.setattr(config, "TELNYX_VERIFIED_TEST_NUMBER", "")
