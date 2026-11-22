@@ -147,6 +147,28 @@ def validate_coach_response(content):
     if suggested_status not in LEAD_STATUS_SET:
         suggested_status = ""
 
+    # Phase III-2: a model qualification suggestion is stored, never
+    # applied. Only known field values are kept; anything else is
+    # dropped, never coerced. It rides in raw_json so the inbound
+    # path persists it on the lead_insights row.
+    qualification_suggestion = None
+    raw_suggestion = data.get("qualification_suggestion")
+    if isinstance(raw_suggestion, dict):
+        from harness.qualification import FIELD_VALUE_SETS
+
+        kept = {}
+        for field_name in ("budget", "timeline", "preapproval", "motivation"):
+            value = str(raw_suggestion.get(field_name) or "").strip().lower()
+            if value and value in FIELD_VALUE_SETS[field_name]:
+                kept[field_name] = value
+        if kept:
+            confidence_q = raw_suggestion.get("confidence")
+            try:
+                confidence_q = float(confidence_q) if confidence_q is not None else None
+            except (TypeError, ValueError):
+                confidence_q = None
+            qualification_suggestion = {"confidence": confidence_q, **kept}
+
     follow_up_at = data.get("suggested_follow_up_at")
     if follow_up_at in ("", "null", None):
         follow_up_at = None
@@ -211,6 +233,7 @@ def validate_coach_response(content):
         "needs_attention_reasons": reasons,
         "captured_note": captured_note or None,
         "property_criteria_updates": incoming_criteria,
+        "qualification_suggestion": qualification_suggestion,
         # Backward-compatible aliases used by Phase 1 persistence
         "next_best_step": recommended,
         "recommended_action": recommended,
@@ -235,6 +258,7 @@ def validate_coach_response(content):
             "appointment_requested": bool(data.get("appointment_requested")),
             "appointment_details": appointment_details,
             "needs_attention_reasons": reasons,
+            "qualification_suggestion": qualification_suggestion,
             "home_value_pitch": str(data.get("home_value_pitch") or "").strip()[:480] or None,
         })[:4000],
     }

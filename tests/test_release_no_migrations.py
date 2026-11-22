@@ -17,8 +17,11 @@ in the release. Migration 043 (social_publications.dry_run_payload_json,
 the payload column for the staging-only social dry-run layer from
 Phase A social testing) is also in the release. Migration 045
 (harness_follow_up_sends, the send ledger for Phase III-1 gated
-follow-up sending + scheduling) is also in the release. The runner
-list therefore ends at 045 (37 modules), with 033/034 still excluded.
+follow-up sending + scheduling) is also in the release. Migration 046
+(leads.qualification_* columns, the four structured qualification
+fields + stored score cache for Phase III-2 lead qualification) is
+also in the release. The runner
+list therefore ends at 046 (38 modules), with 033/034 still excluded.
 
 These tests pin what the release DOES still guarantee on the 029
 column set for model/correlation_id, and pin the two known
@@ -49,10 +52,10 @@ from harness.jobs import claim_jobs, enqueue_job
 from migrations.runner import MIGRATION_MODULES
 
 
-def test_runner_list_ends_at_045_without_033_034():
-    """Migration 045 is listed; 033/034 remain excluded from the release."""
-    assert MIGRATION_MODULES[-1].endswith("045_follow_up_sms_sends")
-    assert len(MIGRATION_MODULES) == 37
+def test_runner_list_ends_at_046_without_033_034():
+    """Migration 046 is listed; 033/034 remain excluded from the release."""
+    assert MIGRATION_MODULES[-1].endswith("046_lead_qualification")
+    assert len(MIGRATION_MODULES) == 38
     assert not any("033_" in m or "034_" in m for m in MIGRATION_MODULES)
 
 

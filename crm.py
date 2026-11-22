@@ -357,6 +357,38 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
     external_source = None
     if lead.get("external_source_id"):
         external_source = xdb.get_external_lead_source(lead["external_source_id"], user["id"])
+    # Phase III-2 qualification: on-read evaluation (live fields +
+    # signals) + the pending model suggestion, if any. Guarded so a
+    # qualification failure never breaks the lead page.
+    qualification = None
+    qualification_suggestion = None
+    from harness.qualification import (
+        FIELD_LABELS,
+        FIELD_VALUE_SETS,
+        QUALIFICATION_FIELDS,
+    )
+
+    qualification_options = {
+        field: [
+            (value, FIELD_LABELS[field][value])
+            for value in FIELD_VALUE_SETS[field]
+        ]
+        for field in QUALIFICATION_FIELDS
+    }
+    try:
+        from harness.qualification import (
+            evaluate_lead,
+            find_pending_qualification_suggestion,
+        )
+
+        qualification = evaluate_lead(user["id"], lead_id)
+        suggestion = find_pending_qualification_suggestion(user["id"], lead_id)
+        if suggestion:
+            qualification_suggestion = suggestion
+    except Exception:
+        logger.warning("Qualification context failed lead_id=%s", lead_id, exc_info=True)
+        qualification = None
+        qualification_suggestion = None
     return {
         "lead": lead,
         "activities": activities,
@@ -370,6 +402,15 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
         "next_task": next_task,
         "next_appointment": next_appointment,
         "statuses": LEAD_STATUSES,
+        "qualification": qualification,
+        "qualification_fields": (qualification or {}).get("fields") or {
+            "budget": "unknown",
+            "timeline": "unknown",
+            "preapproval": "unknown",
+            "motivation": "unknown",
+        },
+        "qualification_suggestion": qualification_suggestion,
+        "qualification_options": qualification_options,
         "task_types": TASK_TYPES,
         "appointment_types": APPOINTMENT_TYPES,
         "appointment_outcomes": APPOINTMENT_OUTCOMES,
@@ -733,6 +774,93 @@ def api_set_lead_status(lead_id):
     if not lead:
         return jsonify({"error": error or "Unable to update status."}), 400
     return jsonify({"ok": True, "lead": lead, "status_label": status_label(lead.get("status"))})
+
+
+@crm_bp.route("/api/crm/leads/<int:lead_id>/qualification", methods=["POST"])
+@auth.subscription_required
+def api_set_lead_qualification(lead_id):
+    """Phase III-2: agent entry of the four qualification fields.
+
+    Tenant-scoped. Invalid values are refused with a field-named
+    error (never silently coerced). The state follows by rule from
+    the fields — the agent never writes a machine state directly.
+    """
+    from harness.qualification import set_qualification_fields
+
+    user = auth.get_current_user()
+    data = request.get_json(silent=True) or {}
+    if not data and request.form:
+        data = request.form.to_dict()
+    fields = {
+        key: data.get(key)
+        for key in ("budget", "timeline", "preapproval", "motivation")
+        if data.get(key) is not None and str(data.get(key)).strip() != ""
+    }
+    result, error = set_qualification_fields(
+        user["id"], lead_id, fields, actor="user", trigger="agent_action",
+    )
+    if error:
+        return jsonify({"error": error}), 400 if "not found" not in error.lower() else 404
+    return jsonify(
+        {
+            "ok": True,
+            "lead": result["lead"],
+            "fields": result["fields"],
+            "score": result["score"],
+            "breakdown": result["breakdown"],
+            "band": result["band"],
+            "qualified": result["qualified"],
+            "qualified_reasons": result["qualified_reasons"],
+            "state": result["current_state"],
+            "derived_state": result["derived_state"],
+            "changed": result["changed"],
+            "transition": result["transition"],
+        }
+    )
+
+
+@crm_bp.route("/api/crm/insights/<int:insight_id>/approve-qualification", methods=["POST"])
+@auth.subscription_required
+def api_approve_qualification_suggestion(insight_id):
+    """Agent confirms a pending qualification suggestion.
+
+    Applies the suggested values through the qualification rules
+    (fields + score + state change together, with audit rows).
+    """
+    from harness.qualification import confirm_qualification_suggestion
+
+    user = auth.get_current_user()
+    result, error = confirm_qualification_suggestion(user["id"], insight_id, actor="user")
+    if error:
+        return jsonify({"error": error}), 400 if "not found" not in error.lower() else 404
+    return jsonify(
+        {
+            "ok": True,
+            "lead": result["lead"],
+            "fields": result["fields"],
+            "score": result["score"],
+            "band": result["band"],
+            "qualified": result["qualified"],
+            "state": result["current_state"],
+            "transition": result["transition"],
+        }
+    )
+
+
+@crm_bp.route("/api/crm/insights/<int:insight_id>/dismiss-qualification", methods=["POST"])
+@auth.subscription_required
+def api_dismiss_qualification_suggestion(insight_id):
+    """Agent dismisses a pending qualification suggestion.
+
+    The insight row is kept for audit; it stops rendering.
+    """
+    from harness.qualification import dismiss_qualification_suggestion
+
+    user = auth.get_current_user()
+    result, error = dismiss_qualification_suggestion(user["id"], insight_id)
+    if error:
+        return jsonify({"error": error}), 400 if "not found" not in error.lower() else 404
+    return jsonify({"ok": True, **result})
 
 
 @crm_bp.route("/api/crm/leads/<int:lead_id>/activities")
@@ -1566,6 +1694,47 @@ def api_approve_suggested_status(insight_id):
     status = data.get("status") or suggestions.get("suggested_lead_status")
     if not status:
         return jsonify({"error": "No suggested status to apply."}), 400
+    normalized = normalize_lead_status(status)
+    if normalized in {"qualified", "unqualified", "qualifying", "nurture"}:
+        # Phase III-2: a suggested machine state is re-evaluated at
+        # apply time — the suggestion may be stale. It applies only
+        # when the evaluator yields it now; otherwise refuse and show
+        # the evaluator's current state.
+        from harness.qualification import apply_derived_state, evaluate_lead
+
+        evaluation = evaluate_lead(user["id"], insight["lead_id"])
+        if not evaluation:
+            return jsonify({"error": "Lead not found."}), 404
+        if evaluation["derived_state"] != normalized:
+            return jsonify(
+                {
+                    "error": (
+                        f"Suggestion is stale: the qualification evaluator now yields "
+                        f"'{evaluation['derived_state']}' (score {evaluation['score']}), "
+                        f"not '{normalized}'."
+                    ),
+                    "current_state": evaluation["derived_state"],
+                    "score": evaluation["score"],
+                }
+            ), 400
+        lead, error = apply_derived_state(
+            user["id"], insight["lead_id"], normalized, actor="user",
+            trigger="agent_action",
+            gate_reason=(
+                f"approved suggestion matches evaluator: {normalized} "
+                f"(score {evaluation['score']})"
+            ),
+        )
+        if error:
+            return jsonify({"error": error}), 400
+        crm_db.add_lead_activity(
+            insight["lead_id"],
+            user["id"],
+            "insight_status_approved",
+            f"Approved Claude status suggestion: {status_label(normalized)}",
+            {"insight_id": insight_id, "status": normalized},
+        )
+        return jsonify({"ok": True, "lead": lead})
     lead, error = crm_db.set_lead_status(
         user["id"], insight["lead_id"], status, actor_user_id=user["id"], from_automation=False
     )

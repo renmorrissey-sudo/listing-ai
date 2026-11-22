@@ -68,6 +68,7 @@ MIGRATION_MODULES = [
     "migrations.versions.043_social_dry_run_payload",
     "migrations.versions.044_reset_staging_admin_password",
     "migrations.versions.045_follow_up_sms_sends",
+    "migrations.versions.046_lead_qualification",
     "migrations.versions.099_assign_telnyx_platform_sender_to_ren_tenant",
 ]
 

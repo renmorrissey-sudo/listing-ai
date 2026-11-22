@@ -249,12 +249,12 @@ def test_closed_won_blocked_in_authorized_mode(two_users):
                 call_id,
                 "vapi_gate",
                 "update_lead_status",
-                {"lead_id": lead_id, "status": "qualified"},
+                {"lead_id": lead_id, "status": "contacted"},
             )
         )
     )
     assert isinstance(result, dict) and result.get("ok") is True
-    assert db.get_lead(lead_id, u1)["status"] == "qualified"
+    assert db.get_lead(lead_id, u1)["status"] == "contacted"
 
 
 def test_draft_lead_email_still_creates_draft_in_drafts_only(two_users):
