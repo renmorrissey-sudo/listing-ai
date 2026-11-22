@@ -1264,3 +1264,228 @@ def test_ask_topai_schedule_follow_up_sms_action(two_users, monkeypatch):
     )
     assert error is not None
     assert "consent" in error.lower()
+
+
+# --- Scheduling-fix regressions (2026-11-22) -------------------------
+#
+# Live staging verification (2026-11-22) hit "Ask TopAI cannot do
+# that yet." on all three scheduling attempts: ``schedule_follow_up_sms``
+# was registered in ask_topai/registry.py WRITE_TOOLS + the model tool
+# schema, but NOT in ask_topai/schemas.py ALLOWED_ACTIONS, so
+# ``sanitize_command`` (and ``parser.validate_model_payload``) rejected
+# it before the handler ran. The 31 tests above call ``execute_command``
+# directly, bypassing sanitize/parser — that is why the suite was green
+# while the live path failed. These tests drive the action through
+# ``sanitize_command`` and the parser entry point instead.
+
+
+def test_sanitize_schedule_follow_up_sms_keeps_arguments():
+    """sanitize_command passes the action with body, scheduled_at,
+    reason, and the lead resolution fields intact and verbatim."""
+    from ask_topai.schemas import ALLOWED_ACTIONS, sanitize_command
+
+    assert "schedule_follow_up_sms" in ALLOWED_ACTIONS
+    scheduled_at = _iso_in(minutes=15)
+    cleaned, err = sanitize_command(
+        {
+            "action": "schedule_follow_up_sms",
+            "arguments": {
+                "lead_name": "Follow-up Lead",
+                "body": BODY,
+                "scheduled_at": scheduled_at,
+                "reason": REASON,
+            },
+        },
+        "Schedule a follow-up SMS to Follow-up Lead",
+    )
+    assert err is None, err
+    assert cleaned is not None
+    assert cleaned["action"] == "schedule_follow_up_sms"
+    args = cleaned["arguments"]
+    assert args["lead_name"] == "Follow-up Lead"
+    assert args["body"] == BODY
+    assert args["scheduled_at"] == scheduled_at
+    assert args["reason"] == REASON
+
+
+def test_sanitize_schedule_follow_up_sms_aliases():
+    """The alias shapes the model actually sends (lead_id vs lead_name,
+    due_at vs scheduled_at, message/text vs body) all survive the
+    sanitize step, normalized to the keys the handler reads."""
+    from ask_topai.schemas import sanitize_command
+
+    scheduled_at = _iso_in(minutes=30)
+    cleaned, err = sanitize_command(
+        {
+            "action": "schedule_follow_up_sms",
+            "arguments": {
+                "lead_id": 42,
+                "message": BODY,
+                "due_at": scheduled_at,
+                "reason": REASON,
+                "follow_up_id": 7,
+            },
+        },
+        "Text the lead in 30 minutes",
+    )
+    assert err is None, err
+    args = cleaned["arguments"]
+    assert args["lead_id"] == 42
+    assert args["body"] == BODY
+    assert args["scheduled_at"] == scheduled_at
+    assert args["reason"] == REASON
+    assert args["follow_up_id"] == 7
+    assert "message" not in args
+    assert "due_at" not in args
+
+    # text alias, and the reason defaults to "Follow up" when absent.
+    cleaned, err = sanitize_command(
+        {
+            "action": "schedule_follow_up_sms",
+            "arguments": {
+                "lead_name": "Follow-up Lead",
+                "text": BODY,
+                "scheduled_at": scheduled_at,
+            },
+        },
+        "Text the lead",
+    )
+    assert err is None, err
+    assert cleaned["arguments"]["body"] == BODY
+    assert cleaned["arguments"]["scheduled_at"] == scheduled_at
+    assert cleaned["arguments"]["reason"] == "Follow up"
+    assert "text" not in cleaned["arguments"]
+
+
+def test_parser_accepts_schedule_follow_up_sms():
+    """The same command passes the parser entry point
+    (``validate_model_payload``), which gates on ALLOWED_ACTIONS
+    before calling sanitize_command — the live path's first gate."""
+    from ask_topai.parser import validate_model_payload
+
+    scheduled_at = _iso_in(minutes=15)
+    result = validate_model_payload(
+        {
+            "status": "ok",
+            "message": "Scheduling the follow-up SMS.",
+            "commands": [
+                {
+                    "action": "schedule_follow_up_sms",
+                    "arguments": {
+                        "lead_name": "Follow-up Lead",
+                        "body": BODY,
+                        "scheduled_at": scheduled_at,
+                        "reason": REASON,
+                    },
+                }
+            ],
+        },
+        "Schedule a follow-up SMS to Follow-up Lead",
+    )
+    assert result["status"] == "ok", result
+    assert len(result["commands"]) == 1
+    command = result["commands"][0]
+    assert command["action"] == "schedule_follow_up_sms"
+    assert command["arguments"]["lead_name"] == "Follow-up Lead"
+    assert command["arguments"]["body"] == BODY
+    assert command["arguments"]["scheduled_at"] == scheduled_at
+    assert command["arguments"]["reason"] == REASON
+
+
+def test_sanitize_then_execute_schedule_follow_up_sms(two_users, monkeypatch):
+    """The sanitized command executes end to end: sanitize_command
+    output feeds execute_command and enqueues the follow-up job —
+    the two halves of the live path joined, not just each in isolation."""
+    from ask_topai.actions import execute_command
+    from ask_topai.schemas import sanitize_command
+
+    _mock_env(monkeypatch)
+    u1, _ = two_users
+    _enable_sending(u1)
+    lead_id, _ = _make_lead(u1)
+    scheduled_at = _iso_in(minutes=15)
+    cleaned, err = sanitize_command(
+        {
+            "action": "schedule_follow_up_sms",
+            "arguments": {
+                "lead_id": lead_id,
+                "body": BODY,
+                "scheduled_at": scheduled_at,
+                "reason": REASON,
+            },
+        },
+        "Schedule a follow-up SMS",
+    )
+    assert err is None, err
+    action, payload, error, _choices = execute_command(u1, cleaned, None)
+    assert action == "schedule_follow_up_sms"
+    assert error is None, error
+    assert payload["job_id"] is not None
+    assert _job_row(payload["job_id"])["kind"] == "follow_up_sms_send"
+
+
+def test_sanitize_unknown_action_still_refused():
+    """The allowlist gate still refuses unknown actions, through both
+    sanitize_command and the parser, with the same message the live
+    path showed for the (then-missing) scheduling action."""
+    from ask_topai.parser import validate_model_payload
+    from ask_topai.schemas import sanitize_command
+
+    cleaned, err = sanitize_command(
+        {"action": "send_sms_now", "arguments": {"body": "hi"}},
+        "Send an SMS now",
+    )
+    assert cleaned is None
+    assert err == "Ask TopAI cannot do that yet."
+
+    result = validate_model_payload(
+        {
+            "status": "ok",
+            "message": "",
+            "commands": [{"action": "teleport_lead", "arguments": {}}],
+        },
+        "Teleport the lead",
+    )
+    assert result["status"] == "unsupported"
+    assert result["commands"] == []
+    assert "Ask TopAI cannot do that yet." in result["message"]
+
+
+def test_sanitize_schedule_follow_up_sms_missing_fields(two_users, monkeypatch):
+    """Missing scheduled_at and missing body each produce a clear
+    error and schedule nothing — no job, no send row."""
+    from ask_topai.actions import execute_command
+    from ask_topai.schemas import sanitize_command
+
+    _mock_env(monkeypatch)
+    u1, _ = two_users
+    _enable_sending(u1)
+    lead_id, _ = _make_lead(u1)
+
+    cleaned, err = sanitize_command(
+        {
+            "action": "schedule_follow_up_sms",
+            "arguments": {"lead_id": lead_id, "body": BODY, "reason": REASON},
+        },
+        "Schedule a follow-up SMS",
+    )
+    assert err == "I need a time to send the follow-up SMS."
+    _action, _payload, error, _choices = execute_command(u1, cleaned, None)
+    assert error is not None
+    assert _send_rows_for_lead(u1, lead_id) == []
+
+    cleaned, err = sanitize_command(
+        {
+            "action": "schedule_follow_up_sms",
+            "arguments": {
+                "lead_id": lead_id,
+                "scheduled_at": _iso_in(minutes=15),
+                "reason": REASON,
+            },
+        },
+        "Schedule a follow-up SMS",
+    )
+    assert err == "Message body is required."
+    _action, _payload, error, _choices = execute_command(u1, cleaned, None)
+    assert error is not None
+    assert _send_rows_for_lead(u1, lead_id) == []
