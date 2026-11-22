@@ -157,7 +157,33 @@ def new_correlation_id():
     return uuid.uuid4().hex
 
 
-def enqueue_job(user_id, kind, payload, idempotency_key=None, correlation_id=None):
+def _normalize_next_attempt_at(value):
+    """Normalize a scheduled-fire time to an ISO string (or None).
+
+    Accepts an aware/naive ``datetime`` (naive is read as UTC) or an
+    ISO-8601 string; anything else raises ``ValueError``.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat()
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            raise ValueError(f"next_attempt_at is not a valid ISO-8601 datetime: {value!r}")
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
+    raise ValueError(
+        f"next_attempt_at must be a datetime or ISO-8601 string, got {type(value).__name__}"
+    )
+
+
+def enqueue_job(user_id, kind, payload, idempotency_key=None, correlation_id=None,
+                next_attempt_at=None):
     """Insert a pending job and return its id.
 
     Idempotent per tenant: when idempotency_key is given and a job with
@@ -167,6 +193,11 @@ def enqueue_job(user_id, kind, payload, idempotency_key=None, correlation_id=Non
     reusing the same key gets a new job of its own, never the other
     tenant's job id. A concurrent duplicate insert (unique-key race) falls
     back to the same scoped lookup instead of raising.
+
+    ``next_attempt_at`` (optional) is the scheduled-fire time: the
+    worker only claims jobs whose ``next_attempt_at`` is NULL or in the
+    past, so a future value parks the job as pending until then. When
+    omitted the job is due immediately, as before.
 
     L4: ``correlation_id`` traces one inbound event through webhook,
     job, policy, audit, and provider execution. When the caller does not
@@ -181,6 +212,7 @@ def enqueue_job(user_id, kind, payload, idempotency_key=None, correlation_id=Non
     now = _now()
     correlation_id = correlation_id or new_correlation_id()
     payload_json = json.dumps(redact_payload(payload or {}))
+    next_attempt_at_iso = _normalize_next_attempt_at(next_attempt_at)
 
     if idempotency_key is not None:
         with db.get_db() as conn:
@@ -199,8 +231,9 @@ def enqueue_job(user_id, kind, payload, idempotency_key=None, correlation_id=Non
                 """
                 INSERT INTO harness_jobs
                     (user_id, kind, payload_json, idempotency_key,
-                     correlation_id, status, attempts, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?)
+                     correlation_id, status, attempts, next_attempt_at,
+                     created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
                 """,
                 (
                     user_id,
@@ -208,6 +241,7 @@ def enqueue_job(user_id, kind, payload, idempotency_key=None, correlation_id=Non
                     payload_json,
                     idempotency_key,
                     correlation_id,
+                    next_attempt_at_iso,
                     now,
                     now,
                 ),
@@ -443,6 +477,67 @@ def fail_job(job_id, error, retryable=True, *, user_id=None):
                     f"fail_job: job {job_id} changed during failure handling"
                 )
     return status
+
+
+def reschedule_job(job_id, next_attempt_at, *, user_id=None):
+    """Move a claimed job back to pending for a future fire time.
+
+    Used by the quiet-hours deferral path (Phase III-1): the job has
+    done its work for this firing by rescheduling itself, so it must
+    NOT burn the retry budget and must NOT take exponential backoff
+    (``fail_job`` would wake it mid-quiet-hours and dead-letter it
+    after 5 attempts). The guarded UPDATE only moves a row that is
+    currently ``claimed`` — the state the worker holds it in — and
+    resets ``attempts`` to 0: a quiet-hours deferral is not a failure,
+    so each rescheduled firing gets a fresh attempt budget. This is a
+    deliberate carve-out, documented here; it applies only to this
+    function, never to ``fail_job``.
+
+    Returns the normalized ISO fire time. Raises ``ValueError`` for an
+    unknown job id, ``PermissionError`` when ``user_id`` is given and
+    the job belongs to another tenant, and ``RuntimeError`` when the
+    job is not currently claimed (e.g. it already settled).
+    """
+    fire_at = _normalize_next_attempt_at(next_attempt_at)
+    if fire_at is None:
+        raise ValueError("reschedule_job: next_attempt_at is required")
+    now = _now()
+    with db.get_db() as conn:
+        if user_id is None:
+            cur = conn.execute(
+                """
+                UPDATE harness_jobs
+                SET status = 'pending', next_attempt_at = ?,
+                    claimed_at = NULL, claimed_by = NULL, attempts = 0,
+                    updated_at = ?
+                WHERE id = ? AND status = 'claimed'
+                """,
+                (fire_at, now, job_id),
+            )
+        else:
+            cur = conn.execute(
+                """
+                UPDATE harness_jobs
+                SET status = 'pending', next_attempt_at = ?,
+                    claimed_at = NULL, claimed_by = NULL, attempts = 0,
+                    updated_at = ?
+                WHERE id = ? AND user_id = ? AND status = 'claimed'
+                """,
+                (fire_at, now, job_id, user_id),
+            )
+        if cur.rowcount == 1:
+            return fire_at
+        row = _row(_get_job_row(conn, job_id))
+        if row is None:
+            raise ValueError(f"reschedule_job: unknown job id {job_id}")
+        if user_id is not None and row.get("user_id") != user_id:
+            raise PermissionError(
+                f"reschedule_job: job {job_id} does not belong to user {user_id}"
+            )
+        raise RuntimeError(
+            f"reschedule_job: job {job_id} is not claimed "
+            f"(status={row.get('status')!r}); refusing to reschedule"
+        )
 
 
 def reclaim_stale_jobs(timeout_seconds=300):
