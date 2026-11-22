@@ -16,6 +16,7 @@ ALLOWED_ACTIONS = frozenset(
         "create_task",
         "update_property_criteria",
         "create_follow_up",
+        "schedule_follow_up_sms",
         "update_lead_status",
         "create_calendar_event",
         "reschedule_calendar_event",
@@ -418,6 +419,42 @@ def sanitize_create_follow_up(arguments: dict, transcript: str) -> tuple[dict, s
     return cleaned, None
 
 
+def sanitize_schedule_follow_up_sms(arguments: dict) -> tuple[dict, str | None]:
+    """Clean an Ask TopAI schedule_follow_up_sms command.
+
+    Aliases are normalized to the keys the handler reads
+    (``execute_schedule_follow_up_sms``): message/text -> body,
+    due_at -> scheduled_at. The ISO scheduled time passes through
+    verbatim — the scheduler parses and clamps it. Missing time or
+    body is a clear error, matching the handler's wording, so nothing
+    is ever scheduled with no time or no text.
+    """
+    lead_id = _clean_int(arguments.get("lead_id"))
+    lead_name = _clean_str(arguments.get("lead_name") or arguments.get("name"), 200)
+    body = _clean_str(
+        arguments.get("body") or arguments.get("message") or arguments.get("text"),
+        1500,
+    )
+    scheduled_at = _clean_str(
+        arguments.get("scheduled_at") or arguments.get("due_at"), 80
+    )
+    reason = _clean_str(arguments.get("reason"), 200) or "Follow up"
+    follow_up_id = _clean_int(arguments.get("follow_up_id"))
+    cleaned = {
+        "lead_id": lead_id,
+        "lead_name": lead_name,
+        "body": body,
+        "scheduled_at": scheduled_at,
+        "reason": reason,
+        "follow_up_id": follow_up_id,
+    }
+    if not scheduled_at:
+        return cleaned, "I need a time to send the follow-up SMS."
+    if not body:
+        return cleaned, "Message body is required."
+    return cleaned, None
+
+
 def sanitize_update_status(arguments: dict) -> tuple[dict, str | None]:
     from autonomy import allowed_auto_status
 
@@ -466,6 +503,8 @@ def sanitize_command(command: dict, transcript: str) -> tuple[dict | None, str |
         cleaned, err = sanitize_update_criteria(arguments, transcript)
     elif action == "create_follow_up":
         cleaned, err = sanitize_create_follow_up(arguments, transcript)
+    elif action == "schedule_follow_up_sms":
+        cleaned, err = sanitize_schedule_follow_up_sms(arguments)
     elif action == "update_lead_status":
         cleaned, err = sanitize_update_status(arguments)
     else:
