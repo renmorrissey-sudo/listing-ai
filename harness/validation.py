@@ -570,3 +570,56 @@ def validate_sms_reply_draft(user_id, draft):
         return cleaned, None
     except ValidationError as exc:
         return None, exc.code
+
+
+def validate_follow_up_sms_draft(user_id, draft):
+    """Validate a ``follow_up_sms`` approval draft for *user_id*.
+
+    Same shape as :func:`validate_sms_reply_draft` but with NO
+    ``inbound_id`` requirement — a follow-up has no inbound message.
+    Checks, in order: lead_id present / integer / exists for this
+    tenant (cross-tenant distinguished); draft_reply present and
+    non-empty (<= 2000 chars); follow_up_id / job_id / message_id,
+    when present, integer-shaped — and follow_up_id, when present,
+    names a CRM follow-up row for this tenant and lead.
+
+    Returns ``(cleaned_draft, error_code)`` — ``error_code`` is ``None``
+    on success. The returned draft is a copy with ids normalised to
+    ``int``.
+    """
+    draft = dict(draft or {})
+    try:
+        lead = validate_lead_reference(user_id, draft.get("lead_id"), required=True)
+        reply = _require_str_field(
+            draft, "draft_reply", "body",
+            code="missing_draft_reply", label="draft reply", limit=_MAX_BODY_CHARS,
+        )
+        cleaned = dict(draft)
+        cleaned["lead_id"] = lead["id"]
+        cleaned["draft_reply"] = reply
+        for field in ("follow_up_id", "job_id", "message_id", "follow_up_send_id"):
+            raw = draft.get(field)
+            if raw in (None, ""):
+                continue
+            value = coerce_id(raw)
+            if value is None:
+                _fail(
+                    f"malformed_{field}",
+                    f"{field} must be an integer, got {raw!r}",
+                )
+            cleaned[field] = value
+        follow_up_id = cleaned.get("follow_up_id")
+        if follow_up_id is not None:
+            with db.get_db() as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM lead_follow_ups WHERE id = ? AND user_id = ? AND lead_id = ?",
+                    (follow_up_id, user_id, lead["id"]),
+                ).fetchone()
+            if row is None:
+                _fail(
+                    "follow_up_not_found",
+                    f"follow-up {follow_up_id} does not exist for this lead",
+                )
+        return cleaned, None
+    except ValidationError as exc:
+        return None, exc.code

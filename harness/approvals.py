@@ -14,9 +14,13 @@
   Approving enqueues exactly one such job (idempotency key
   ``execute-approval-<approval_id>``); rejecting enqueues nothing.
 
-Approval kinds in Phase 1: ``"sms_reply"`` only (``draft_json`` carries
+Approval kinds: ``"sms_reply"`` (Phase 1, ``draft_json`` carries
 ``draft_reply`` + ``lead_id`` + ``inbound_id``, as created by
-``harness.sms_handler``).
+``harness.sms_handler``) and ``"follow_up_sms"`` (Phase III-1,
+``draft_json`` carries ``draft_reply`` + ``lead_id`` + ``message_id``
+— no inbound id; execution sends via ``sms_outbound.
+send_authorized_sms`` with the stored message id, never
+``process_inbound_ai``).
 
 Expiry: a pending approval expires 7 days after ``created_at``
 (``EXPIRY_DAYS``). Migration 029 has no ``expires_at`` column, so expiry
@@ -321,7 +325,7 @@ def approve_approval(user_id, approval_id):
     # suggested status is invalid cannot be approved. The approval stays
     # pending and the failure is audited; nothing is enqueued.
     draft = _draft_dict(row)
-    if row.get("kind") != "sms_reply":
+    if row.get("kind") not in ("sms_reply", "follow_up_sms"):
         _audit(
             user_id,
             action="approval_validation_failed",
@@ -332,9 +336,14 @@ def approve_approval(user_id, approval_id):
             actor="user",
         )
         return serialize_approval(row), "invalid_draft"
-    from harness.validation import validate_sms_reply_draft
+    if row.get("kind") == "follow_up_sms":
+        from harness.validation import validate_follow_up_sms_draft
 
-    _, draft_error = validate_sms_reply_draft(user_id, draft)
+        _, draft_error = validate_follow_up_sms_draft(user_id, draft)
+    else:
+        from harness.validation import validate_sms_reply_draft
+
+        _, draft_error = validate_sms_reply_draft(user_id, draft)
     if draft_error is not None:
         _audit(
             user_id,
@@ -515,6 +524,243 @@ def _mark_blocked(user_id, approval_id, decision, reason):
     )
 
 
+def _follow_up_execution_gate_context(user_id, lead):
+    """Fresh policy-gate context for an approved follow-up send.
+
+    The shared :func:`_execution_gate_context` plus the two fields the
+    follow-up fire-time gate must re-check: ``do_not_contact`` (a lead
+    marked do-not-contact after the draft was created must block) and
+    ``consent_missing`` (consent evidence revoked after scheduling must
+    block). Built separately from the shared context so the sms_reply
+    execution path keeps its established behaviour.
+    """
+    context = _execution_gate_context(user_id, lead)
+    context["do_not_contact"] = (lead or {}).get("status") == "do_not_contact"
+    try:
+        from harness.followup_sends import has_messaging_consent_evidence
+
+        context["consent_missing"] = not has_messaging_consent_evidence(
+            user_id, lead
+        )
+    except Exception:
+        context["consent_missing"] = False
+    return context
+
+
+def _execute_follow_up_sms_approval(user_id, approval_id, row, draft, correlation_id=None):
+    """Execute an approved ``follow_up_sms`` approval.
+
+    Called with the row already claimed (``approved`` -> ``executing``).
+    Sends the EXACT stored draft via ``sms_outbound.send_authorized_sms``
+    with the stored ``message_id`` — never ``process_inbound_ai`` (a
+    follow-up has no inbound message). The policy gate is re-checked
+    with a fresh lead read before any send; a non-ALLOW verdict marks
+    the approval ``blocked``. If the stored message row is already
+    sent, the approval is recorded executed without sending again.
+    """
+    from harness.validation import validate_follow_up_sms_draft
+
+    cleaned_draft, draft_error = validate_follow_up_sms_draft(user_id, draft)
+    if draft_error is not None:
+        reason = f"validation_failed: {draft_error}"
+        _mark_blocked(user_id, approval_id, "BLOCK", reason)
+        return {
+            "ok": True,
+            "sent": False,
+            "decision": "BLOCK",
+            "reason": reason,
+            "approval_id": approval_id,
+            "retryable": False,
+        }
+    lead_id = cleaned_draft["lead_id"]
+    message_id = cleaned_draft.get("message_id")
+    lead = db.get_lead(lead_id, user_id)
+    if not lead:
+        _mark_blocked(user_id, approval_id, "BLOCK", "lead_missing")
+        return {
+            "ok": True,
+            "sent": False,
+            "decision": "BLOCK",
+            "reason": "lead_missing",
+            "approval_id": approval_id,
+            "retryable": False,
+        }
+    if not message_id:
+        _mark_blocked(user_id, approval_id, "BLOCK", "message_not_found")
+        return {
+            "ok": True,
+            "sent": False,
+            "decision": "BLOCK",
+            "reason": "message_not_found",
+            "approval_id": approval_id,
+            "retryable": False,
+        }
+
+    # Already sent (another path sent the stored row): exactly-once
+    # holds; record executed, do not send again.
+    try:
+        sms_row = db.get_sms_message(message_id, user_id)
+    except Exception:
+        sms_row = None
+    if sms_row and (
+        sms_row.get("status") in {"sent", "delivered", "queued", "mock_sent"}
+        or sms_row.get("provider_message_id")
+    ):
+        _set_status(user_id, approval_id, "executed")
+        _audit(
+            user_id,
+            action="approval_executed",
+            approval_id=approval_id,
+            correlation_id=correlation_id,
+            mode=_mode(user_id),
+            gate_decision="ALLOW",
+            gate_reason="already_sent",
+            actor="system",
+        )
+        return {
+            "ok": True,
+            "sent": False,
+            "decision": "ALLOW",
+            "reason": "already_sent",
+            "approval_id": approval_id,
+            "retryable": False,
+            "message_id": message_id,
+        }
+
+    # Execution-time policy re-check with a fresh lead read.
+    try:
+        from harness.policy import decide
+
+        decision, gate_reason = decide(
+            user_id, "send_sms", "send_sms",
+            _follow_up_execution_gate_context(user_id, lead),
+        )
+    except Exception:
+        logger.exception(
+            "follow-up approval execution policy check failed tenant=%s approval=%s",
+            user_id,
+            approval_id,
+        )
+        _mark_blocked(user_id, approval_id, "BLOCK", "policy_error")
+        return {
+            "ok": True,
+            "sent": False,
+            "decision": "BLOCK",
+            "reason": "policy_error",
+            "approval_id": approval_id,
+            "retryable": False,
+        }
+    decision = str(decision or "BLOCK").upper()
+    if decision != "ALLOW":
+        reason = gate_reason or f"policy_{decision.lower()}"
+        _mark_blocked(user_id, approval_id, decision, reason)
+        return {
+            "ok": True,
+            "sent": False,
+            "decision": decision,
+            "reason": reason,
+            "approval_id": approval_id,
+            "retryable": False,
+        }
+
+    body = str(cleaned_draft.get("draft_reply") or "").strip()
+    if not body:
+        _mark_blocked(user_id, approval_id, "BLOCK", "empty_draft")
+        return {
+            "ok": True,
+            "sent": False,
+            "decision": "BLOCK",
+            "reason": "empty_draft",
+            "approval_id": approval_id,
+            "retryable": False,
+        }
+    try:
+        from sms_outbound import send_authorized_sms
+
+        result, err, _status = send_authorized_sms(
+            user_id,
+            lead_id,
+            body,
+            source_page="follow_up_sms_approval",
+            compliance_confirmed=True,
+            message_id=message_id,
+            message_purpose="real_estate_follow_up",
+            schedule_if_quiet=False,
+            cost_tool="follow_up_sms_send",
+        )
+    except Exception as exc:
+        logger.exception(
+            "follow-up approval execution send failed tenant=%s approval=%s",
+            user_id,
+            approval_id,
+        )
+        _set_status(user_id, approval_id, "approved")
+        return {
+            "ok": False,
+            "sent": False,
+            "decision": "ALLOW",
+            "reason": f"send_error: {exc}"[:500],
+            "approval_id": approval_id,
+            "retryable": True,
+        }
+    if err:
+        reason = str(err)[:500]
+        if reason in DETERMINISTIC_DECLINE_REASONS or any(
+            marker in reason.lower()
+            for marker in (
+                "opted out", "suppression", "consent", "certif",
+                "not permitted", "revoked", "trial destination",
+                "toll-free", "not verified", "quiet hours",
+            )
+        ):
+            _mark_blocked(user_id, approval_id, "BLOCK", reason)
+            return {
+                "ok": True,
+                "sent": False,
+                "decision": "BLOCK",
+                "reason": reason,
+                "approval_id": approval_id,
+                "retryable": False,
+            }
+        _set_status(user_id, approval_id, "approved")
+        return {
+            "ok": False,
+            "sent": False,
+            "decision": "ALLOW",
+            "reason": reason,
+            "approval_id": approval_id,
+            "retryable": True,
+        }
+    _set_status(user_id, approval_id, "executed")
+    _audit(
+        user_id,
+        action="approval_executed",
+        approval_id=approval_id,
+        correlation_id=correlation_id,
+        mode=_mode(user_id),
+        gate_decision="ALLOW",
+        gate_reason=(result or {}).get("reason") or gate_reason or "sent",
+        actor="system",
+    )
+    logger.info(
+        "follow-up approval executed tenant=%s approval=%s lead=%s message=%s",
+        user_id,
+        approval_id,
+        lead_id,
+        (result or {}).get("provider_message_id"),
+    )
+    return {
+        "ok": True,
+        "sent": True,
+        "decision": "ALLOW",
+        "reason": (result or {}).get("reason") or "sent",
+        "approval_id": approval_id,
+        "retryable": False,
+        "message_id": message_id,
+        "provider_message_id": (result or {}).get("provider_message_id"),
+    }
+
+
 def execute_approved(user_id, approval_id, correlation_id=None):
     """Execute an approved approval. Returns a worker result dict.
 
@@ -604,6 +850,10 @@ def execute_approved(user_id, approval_id, correlation_id=None):
 
     draft = _draft_dict(row)
     kind = row.get("kind")
+    if kind == "follow_up_sms":
+        return _execute_follow_up_sms_approval(
+            user_id, approval_id, row, draft, correlation_id=correlation_id
+        )
     if kind != "sms_reply":
         _mark_blocked(user_id, approval_id, "BLOCK", f"unsupported approval kind: {kind}")
         return {

@@ -31,13 +31,17 @@ def _correlation_id():
     return uuid.uuid4().hex[:12]
 
 
-def _record_sms_cost(user_id, provider_name, result, correlation_id):
+def _record_sms_cost(user_id, provider_name, result, correlation_id, tool="sms_send"):
     """Record one outbound SMS send to the harness cost ledger.
 
     Best-effort wrapper around ``harness.costs.record_sms_send`` —
     never raises, so a recording failure cannot fail a send the
     provider already accepted. Cost is the provider-reported amount
     when Telnyx supplied one, else the per-segment placeholder rate.
+    ``tool`` names the sending surface (``"sms_send"`` by default;
+    Phase III-1 follow-up sends record ``"follow_up_sms_send"`` so the
+    ledger attributes the cost to the follow-up path, with exactly one
+    cost row per send).
     """
     try:
         from harness.costs import record_sms_send
@@ -45,7 +49,7 @@ def _record_sms_cost(user_id, provider_name, result, correlation_id):
         record_sms_send(
             user_id,
             provider=provider_name,
-            tool="sms_send",
+            tool=tool,
             result=result,
             correlation_id=correlation_id,
         )
@@ -127,6 +131,7 @@ def send_authorized_sms(
     message_id=None,
     skip_quiet_hours=False,
     schedule_if_quiet=False,
+    cost_tool="sms_send",
 ):
     """
     Record attestation (if confirmed), authorize, send via active provider.
@@ -534,7 +539,7 @@ def send_authorized_sms(
     # Universal cost recording: the provider accepted the message, so
     # the send is billable — record it (Telnyx-reported amount when
     # supplied, else the per-segment placeholder rate).
-    _record_sms_cost(user_id, provider_name, result, correlation_id)
+    _record_sms_cost(user_id, provider_name, result, correlation_id, tool=cost_tool)
     try:
         db.update_sms_message_send_result(
             message_id,
