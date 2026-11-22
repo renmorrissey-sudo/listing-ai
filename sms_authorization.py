@@ -97,9 +97,35 @@ def is_telnyx_toll_free_verified():
     return get_telnyx_toll_free_verification_status() == "verified"
 
 
+def _resolved_transport_is_mock():
+    """True when the provider resolved for this send is the mock transport.
+
+    Keyed to the RESOLVED provider instance — never to APP_ENV, and
+    never to the HARNESS_MOCK_PROVIDERS flag alone — so a
+    misconfiguration routing to a real provider still hits every
+    Telnyx prerequisite below. Fail-closed: any resolution error
+    means "not mock". Lazy import: sms_providers.telnyx imports this
+    module, so the factory must not be imported at module top.
+    """
+    try:
+        from sms_providers.factory import get_sms_provider
+        from sms_providers.mock import MockSMSProvider
+
+        return isinstance(get_sms_provider(), MockSMSProvider)
+    except Exception:
+        return False
+
+
 def check_telnyx_toll_free_send_allowed():
-    """Return (ok, error_message). Enforced when SMS_PROVIDER=telnyx."""
+    """Return (ok, error_message). Enforced when SMS_PROVIDER=telnyx.
+
+    Waived when the resolved transport for this send is the mock: no
+    real Telnyx send happens, so toll-free verification is vacuous.
+    Real Telnyx transport still runs the check exactly as before.
+    """
     if (config.SMS_PROVIDER or "").lower() != "telnyx":
+        return True, None
+    if _resolved_transport_is_mock():
         return True, None
     if not is_telnyx_toll_free_verified():
         return False, TOLL_FREE_VERIFICATION_BLOCK_MSG
@@ -138,10 +164,18 @@ def is_sms_sending_enabled():
 
 
 def check_telnyx_trial_destination(to_number):
-    """Return (ok, error_message). Only enforces when Telnyx trial mode is on."""
+    """Return (ok, error_message). Only enforces when Telnyx trial mode is on.
+
+    Waived when the resolved transport for this send is the mock: no
+    real Telnyx trial send happens, so the verified-test-number
+    restriction is vacuous. Real Telnyx transport still runs the
+    check exactly as before.
+    """
     if (config.SMS_PROVIDER or "").lower() != "telnyx":
         return True, None
     if not config.TELNYX_TRIAL_MODE:
+        return True, None
+    if _resolved_transport_is_mock():
         return True, None
     verified = (config.TELNYX_VERIFIED_TEST_NUMBER or "").strip()
     if not verified:
@@ -222,6 +256,10 @@ def require_tenant_sender(user_id):
 
 
 def _provider_credentials_ok():
+    if _resolved_transport_is_mock():
+        # The mock transport needs no provider credentials; it is
+        # always configured. Real transports still require theirs.
+        return True
     provider = (config.SMS_PROVIDER or "").lower()
     if provider == "telnyx":
         return bool(config.TELNYX_API_KEY)
