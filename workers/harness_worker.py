@@ -13,9 +13,9 @@ and dispatches by job kind. Reuses the SMS campaign worker's claim / retry
    in ``dead_letter``. This worker has no campaign-completion aggregation
    that could mistake retryable jobs for finished ones.
 
-Job kinds: ``sms_auto_reply``, ``scheduled_follow_up`` and
-``execute_approval``. Unknown kinds fail with ``retryable=False`` so
-they land in ``dead_letter`` -- never silently dropped.
+Job kinds: ``sms_auto_reply``, ``scheduled_follow_up``,
+``follow_up_sms_send`` and ``execute_approval``. Unknown kinds fail with
+``retryable=False`` so they land in ``dead_letter`` -- never silently dropped.
 
 Liveness: the worker writes a durable heartbeat row (``sms_worker_heartbeats``,
 worker_id ``harness-<hostname>-<pid>``) at boot, every loop iteration,
@@ -366,6 +366,10 @@ def dispatch_job(job):
         from harness.followup import process_scheduled_follow_up_job
 
         return _run_known_handler(jobs, job, process_scheduled_follow_up_job, kind)
+    if kind == "follow_up_sms_send":
+        from harness.followup_sends import process_follow_up_sms_send_job
+
+        return _run_known_handler(jobs, job, process_follow_up_sms_send_job, kind)
     if kind == "execute_approval":
         from harness.approvals import process_execute_approval_job
 

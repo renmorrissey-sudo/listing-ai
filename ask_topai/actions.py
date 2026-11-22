@@ -272,6 +272,68 @@ def execute_create_follow_up(user_id, arguments: dict, context: dict | None):
     return payload, None, None
 
 
+def execute_schedule_follow_up_sms(user_id, arguments: dict, context: dict | None):
+    """Schedule a follow-up SMS send (Phase III-1).
+
+    The ONLY scheduling surface for follow-up sends: the coach's
+    follow-up suggestion stays a CRM record and never auto-schedules.
+    The caller supplies the exact body, which is stored verbatim in
+    the pre-created sms_messages draft row and sent verbatim at the
+    scheduled time through the harness gate. Returns the job id and
+    the effective fire time, or a clear error (consent missing, caps
+    hit, bad input) with nothing enqueued.
+    """
+    lead, err, choices = resolve_lead(user_id, arguments, context)
+    if err:
+        return None, err, choices
+    body = (
+        arguments.get("body")
+        or arguments.get("message")
+        or arguments.get("text")
+        or ""
+    )
+    scheduled_at = arguments.get("scheduled_at") or arguments.get("due_at")
+    if not scheduled_at:
+        return None, "I need a time to send the follow-up SMS.", None
+    reason = arguments.get("reason") or "Follow up"
+    follow_up_id = arguments.get("follow_up_id")
+    try:
+        from harness.followup_sends import (
+            FollowUpScheduleError,
+            schedule_follow_up_sms,
+        )
+        from harness.validation import ValidationError
+
+        result = schedule_follow_up_sms(
+            user_id,
+            lead["id"],
+            follow_up_id,
+            body,
+            scheduled_at,
+            reason,
+        )
+    except FollowUpScheduleError as exc:
+        return None, str(exc.message), None
+    except ValidationError as exc:
+        return None, str(exc.message), None
+    add_lead_audit(
+        user_id,
+        lead["id"],
+        f"Ask TopAI — Follow-up SMS scheduled for {lead.get('name')}",
+        {
+            "action": "schedule_follow_up_sms",
+            "source": SOURCE,
+            "scheduled_at": result.get("scheduled_at"),
+            "job_id": result.get("job_id"),
+            "reason": reason,
+        },
+    )
+    payload = dict(result)
+    payload["name"] = lead.get("name")
+    payload["reason"] = reason
+    return payload, None, None
+
+
 def execute_update_status(user_id, arguments: dict, context: dict | None):
     from autonomy import allowed_auto_status
 
@@ -373,6 +435,8 @@ def execute_command(user_id, command: dict, context: dict | None):
         return "update_property_criteria", *execute_update_criteria(user_id, arguments, context)
     if action == "create_follow_up":
         return "create_follow_up", *execute_create_follow_up(user_id, arguments, context)
+    if action == "schedule_follow_up_sms":
+        return "schedule_follow_up_sms", *execute_schedule_follow_up_sms(user_id, arguments, context)
     if action == "update_lead_status":
         return "update_lead_status", *execute_update_status(user_id, arguments, context)
     if action == "create_calendar_event":
@@ -398,6 +462,9 @@ def success_message(action: str, payload) -> str:
     if action == "create_follow_up":
         due = (payload or {}).get("due_at") or ""
         return f"Follow-up scheduled{((' for ' + str(due)[:16].replace('T', ' ')) if due else '')}."
+    if action == "schedule_follow_up_sms":
+        when = str((payload or {}).get("scheduled_at") or "")[:16].replace("T", " ")
+        return f"Follow-up SMS scheduled for {(payload or {}).get('name') or 'the lead'}{(' at ' + when) if when else ''}."
     if action == "update_lead_status":
         return f"Updated {(payload or {}).get('name') or 'lead'} to {((payload or {}).get('status') or 'the new status')}."
     if action == "create_calendar_event":

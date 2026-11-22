@@ -13,6 +13,7 @@ WRITE_TOOLS = frozenset(
         "create_task",
         "update_property_criteria",
         "create_follow_up",
+        "schedule_follow_up_sms",
         "update_lead_status",
         "create_calendar_event",
         "reschedule_calendar_event",
@@ -252,6 +253,35 @@ def anthropic_tools() -> list[dict]:
                     "reason": {"type": "string"},
                     "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
                 }
+            ),
+        },
+        {
+            "name": "schedule_follow_up_sms",
+            "description": (
+                "Schedule a follow-up SMS to a lead for a specific time. "
+                "Use when the agent asks to text a lead later (not now). "
+                "The exact message body must be supplied; it is stored "
+                "verbatim and sent verbatim at the scheduled time through "
+                "the harness gate (consent, quiet hours, spend cap). Does "
+                "NOT send immediately and does NOT auto-schedule from a "
+                "coach suggestion — only an explicit schedule request."
+            ),
+            "input_schema": _obj(
+                {
+                    "lead_id": {"type": "integer"},
+                    "lead_name": {"type": "string"},
+                    "body": {"type": "string", "description": "Exact SMS text to send."},
+                    "scheduled_at": {
+                        "type": "string",
+                        "description": "ISO-8601 datetime when the SMS should send.",
+                    },
+                    "reason": {"type": "string", "description": "Short follow-up reason label."},
+                    "follow_up_id": {
+                        "type": "integer",
+                        "description": "Optional CRM follow-up this send fulfills.",
+                    },
+                },
+                required=["body", "scheduled_at"],
             ),
         },
         {

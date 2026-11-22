@@ -67,6 +67,7 @@ MIGRATION_MODULES = [
     "migrations.versions.042_harness_conversations",
     "migrations.versions.043_social_dry_run_payload",
     "migrations.versions.044_reset_staging_admin_password",
+    "migrations.versions.045_follow_up_sms_sends",
 ]
 
 # RELEASE NOTE (topai-launch-readiness-release, 2026-11-09): the release
