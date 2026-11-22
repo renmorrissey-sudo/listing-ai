@@ -22,9 +22,13 @@ def test_user_isolation(two_users):
 def test_status_change_and_timeline(two_users):
     u1, _ = two_users
     lead_id = _lead(u1)
-    lead, err = crm_db.set_lead_status(u1, lead_id, "qualified")
+    # Phase III-2: machine states (qualified/nurture/...) follow the
+    # qualification rules and cannot be written directly; a
+    # non-machine status still exercises the status-change + timeline
+    # path.
+    lead, err = crm_db.set_lead_status(u1, lead_id, "contacted")
     assert err is None
-    assert normalize_lead_status(lead["status"]) == "qualified"
+    assert normalize_lead_status(lead["status"]) == "contacted"
     activities = crm_db.list_lead_activities(u1, lead_id)
     assert any(a["event_type"] == "status_change" for a in activities)
 
@@ -242,9 +246,9 @@ def test_api_status_and_isolation(app_client, two_users):
     with app_client.session_transaction() as sess:
         sess["user_id"] = u1
 
-    res = app_client.post(f"/api/crm/leads/{lead1}/status", json={"status": "nurture"})
+    res = app_client.post(f"/api/crm/leads/{lead1}/status", json={"status": "contacted"})
     assert res.status_code == 200
-    assert normalize_lead_status(res.get_json()["lead"]["status"]) == "nurture"
+    assert normalize_lead_status(res.get_json()["lead"]["status"]) == "contacted"
 
-    res = app_client.post(f"/api/crm/leads/{lead2}/status", json={"status": "qualified"})
+    res = app_client.post(f"/api/crm/leads/{lead2}/status", json={"status": "contacted"})
     assert res.status_code in (400, 404)

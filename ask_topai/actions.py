@@ -343,6 +343,38 @@ def execute_update_status(user_id, arguments: dict, context: dict | None):
     status = allowed_auto_status(arguments.get("status") or "")
     if not status:
         return None, "That status cannot be applied automatically.", None
+    if status in {"qualified", "unqualified", "qualifying", "nurture"}:
+        # Phase III-2: a qualification-lane target only applies when
+        # the evaluator yields it — the model/agent may not write a
+        # machine state by assertion. The transition table still
+        # applies (no skipping qualifying).
+        from harness.qualification import evaluate_lead, request_status_change
+
+        evaluation = evaluate_lead(user_id, lead["id"])
+        if not evaluation:
+            return None, "Lead not found.", None
+        if evaluation["derived_state"] != status:
+            return None, (
+                f"That status does not follow the qualification rules — "
+                f"the evaluator yields {evaluation['derived_state']} "
+                f"(score {evaluation['score']}). Set qualification fields instead."
+            ), None
+        updated, error = request_status_change(
+            user_id, lead["id"], status, actor="ai", trigger="agent_action",
+            gate_reason=(
+                f"Ask TopAI status matches evaluator: {status} "
+                f"(score {evaluation['score']})"
+            ),
+        )
+        if error:
+            return None, error, None
+        add_lead_audit(
+            user_id,
+            lead["id"],
+            f"Ask TopAI updated {lead.get('name')} to {status}",
+            {"action": "update_lead_status", "source": SOURCE, "status": status},
+        )
+        return updated, None, None
     updated, error = crm_db.set_lead_status(user_id, lead["id"], status, from_automation=True)
     if error:
         return None, error, None

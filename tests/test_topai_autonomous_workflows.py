@@ -191,7 +191,10 @@ def test_ai_captures_lead_context(two_users):
     )
     lead = db.get_lead(lead_id, u1)
     assert "finished basement" in (lead.get("notes") or "")
-    assert lead["status"] == "qualified"
+    # Phase III-2: the model-suggested "qualified" stays a suggestion
+    # — the lead has no qualification fields, so the evaluator does
+    # not yield it. The exchange itself still moves new -> contacted.
+    assert lead["status"] == "contacted"
     tasks = [t for t in crm_db.list_tasks(u1) if t.get("lead_id") == lead_id]
     assert any("CMA" in (t.get("title") or "") for t in tasks)
     autonomy.apply_inbound_side_effects(

@@ -368,8 +368,20 @@ def test_filters_enforced_server_side_and_cross_tenant(app_client, two_users):
     u1, u2 = two_users
     day = _today()
     _lead(u1, name="Mine New", status="new")
-    _lead(u1, name="Mine Qual", status="qualified")
-    other = _lead(u2, name="Other Qual", status="qualified")
+    # Phase III-2: "qualified" follows the qualification rules — these
+    # leads become qualified by setting fields, not by a direct write.
+    from harness.qualification import set_qualification_fields
+
+    hot_fields = {
+        "budget": "500k-1m",
+        "timeline": "soon",
+        "preapproval": "yes",
+        "motivation": "relocating",
+    }
+    mine_qual = _lead(u1, name="Mine Qual", status="new")
+    set_qualification_fields(u1, mine_qual, hot_fields, actor="user")
+    other = _lead(u2, name="Other Qual", status="new")
+    set_qualification_fields(u2, other, hot_fields, actor="user")
 
     _login(app_client, u1)
     res = app_client.get("/crm/leads?status=qualified")
