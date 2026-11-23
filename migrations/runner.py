@@ -63,6 +63,7 @@ MIGRATION_MODULES = [
     "migrations.versions.043_social_dry_run_payload",
     "migrations.versions.045_follow_up_sms_sends",
     "migrations.versions.046_lead_qualification",
+    "migrations.versions.047_outreach_ledger",
 ]
 
 # RELEASE NOTE (topai-launch-readiness-release, 2026-11-09): the release
