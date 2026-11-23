@@ -374,11 +374,12 @@ def parse_requested_window_with_provenance(details, *, timezone_name, now=None):
     ``provenance`` records how the slot was derived so the agent can see
     whether it was stated or guessed: {kind: "exact" | "window" | "day" |
     "missing", raw_text, day, time_text, in_past}. ``kind`` is "exact"
-    when an hour was parsed with no "after"/"afternoon"/"around";
-    "window" when only a window (afternoon/morning/evening/after N) was
-    parsed; "day" when only a day was named; "missing" when nothing was
-    parseable. ``in_past`` flags a parsed slot in the past — the parser
-    never silently rolls it forward to the next day.
+    when an hour was parsed with no "after"/"afternoon"/"around" in the
+    stated time — the coach's window hint field does not count (Phase
+    III-4 fix); "window" when only a window (afternoon/morning/evening/
+    after N) was parsed; "day" when only a day was named; "missing"
+    when nothing was parseable. ``in_past`` flags a parsed slot in the
+    past — the parser never silently rolls it forward to the next day.
     """
     tz = crm_time.resolve_zone(timezone_name)
     now = crm_time.ensure_utc(now or datetime.now()).astimezone(tz)
@@ -447,7 +448,22 @@ def parse_requested_window_with_provenance(details, *, timezone_name, now=None):
         if hour is not None and now.hour > hour:
             local_day += timedelta(days=1)
 
-    exact = hour is not None and "after" not in blob and "afternoon" not in blob and "around" not in blob
+    # Phase III-4 fix: exactness comes from the STATED time, not the
+    # coach's window hint. The details blob carries a "window" field
+    # (e.g. "afternoon") that the coach prompt's example teaches the
+    # model to fill alongside an exact hour — testing the whole blob
+    # downgraded an exact hour to a 3-hour window, and confirm books
+    # the stored slot, so a straight Confirm would have booked a
+    # 3-hour appointment. A vague word only downgrades exactness when
+    # it is in the lead's own words (details "text") or the parsed
+    # time field itself.
+    stated = f"{time_text} {raw_text}".lower()
+    exact = (
+        hour is not None
+        and "after" not in stated
+        and "afternoon" not in stated
+        and "around" not in stated
+    )
     if hour is not None:
         start_local = local_day.replace(hour=hour, minute=minute)
         after = _to_utc(start_local)
