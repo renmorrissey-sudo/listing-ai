@@ -751,6 +751,35 @@ def test_contacted_on_exchange_behaviour_kept(two_users):
 
 
 # ---------------------------------------------------------------------------
+# Phase III-4 fix: the model can no longer silently write
+# appointment_scheduled
+# ---------------------------------------------------------------------------
+
+def test_model_suggested_appointment_scheduled_no_longer_writes(two_users):
+    """Pre-fix, ROUTINE_LEAD_STATUSES contained 'appointment_scheduled'
+    and the inbound path applied a model-suggested booking status
+    directly — bypassing the sms_handler strip (which runs after the
+    coach call returns, while apply_inbound_side_effects runs inside
+    analyze_inbound_and_coach) and the evaluator guard. Now the
+    suggestion is refused and the lead stays put; only the confirm
+    path writes the status. Same treatment as 'qualified' in III-2."""
+    import autonomy
+
+    u1, _ = two_users
+    assert "appointment_scheduled" not in autonomy.ROUTINE_LEAD_STATUSES
+    assert autonomy.allowed_auto_status("appointment_scheduled") is None
+    lead_id = _make_lead(u1, status="contacted")
+    result = autonomy.apply_inbound_side_effects(
+        u1,
+        lead_id,
+        {"intent": "book_appointment", "suggested_lead_status": "appointment_scheduled"},
+        source="ai_sms",
+    )
+    assert _lead(u1, lead_id)["status"] == "contacted"
+    assert "status" not in result["applied"]
+
+
+# ---------------------------------------------------------------------------
 # Suggestion path (model suggestion-only)
 # ---------------------------------------------------------------------------
 

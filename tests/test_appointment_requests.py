@@ -328,6 +328,138 @@ def test_past_slot_flagged_and_never_rolled_forward(two_users, monkeypatch):
     assert error == "slot_in_past", error
 
 
+def test_exact_hour_with_window_hint_parses_exact():
+    """Phase III-4 fix: an exact hour parses exact regardless of the
+    coach's window-hint field. Observed staging shape — details
+    {"day":"wednesday","time":"15:00","window":"afternoon","text":
+    "Can we meet Wednesday at 3pm?"} — parsed as a 3-hour window
+    (kind "window") because the exactness test ran over the whole
+    details blob, which contains "afternoon" from the hint; confirm
+    books the stored slot, so a straight Confirm would have booked a
+    3-hour appointment."""
+    from scheduling import parse_requested_window_with_provenance
+
+    details = {
+        "day": "wednesday",
+        "time": "15:00",
+        "window": "afternoon",
+        "text": "Can we meet Wednesday at 3pm?",
+    }
+    after, before, exact, provenance = parse_requested_window_with_provenance(
+        details, timezone_name="America/Denver"
+    )
+    assert after is not None and before is not None
+    assert exact is True, provenance
+    assert provenance["kind"] == "exact", provenance
+    start = datetime.fromisoformat(after)
+    end = datetime.fromisoformat(before)
+    assert (end - start).total_seconds() == 30 * 60, (after, before)
+    assert start.astimezone(DENVER).hour == 15
+    assert start.astimezone(DENVER).minute == 0
+
+
+def test_exact_hour_with_window_hint_request_holds_30min_slot(two_users, monkeypatch):
+    """End to end for the same defect: the pending request stores the
+    30-minute exact slot (what confirm would book), and the draft is
+    the exact variant — no "(or thereabouts)"."""
+    _staging_mock_config(monkeypatch)
+    u1, _ = two_users
+    lead_id, _phone = _make_lead(u1)
+    day_dt = datetime.now(timezone.utc).astimezone(DENVER) + timedelta(days=2)
+    while day_dt.weekday() >= 5:
+        day_dt += timedelta(days=1)
+    day = day_dt.strftime("%A")
+    analysis = {
+        "appointment_requested": True,
+        "intent": "book_appointment",
+        "appointment_details": {
+            "day": day.lower(),
+            "time": "15:00",
+            "window": "afternoon",
+            "text": f"Can we meet {day.lower()} at 3pm?",
+        },
+    }
+    result = scheduling.create_appointment_request(
+        u1, db.get_lead(lead_id, u1), analysis,
+        source_ref_type="sms", source_ref_id=801,
+        raw_request_text=f"Can we meet {day.lower()} at 3pm?",
+    )
+    assert result["action"] == "requested", result
+    assert result["provenance"]["kind"] == "exact", result["provenance"]
+    assert "or thereabouts" not in (result.get("message") or ""), result
+    request = _requests(u1, lead_id)[0]
+    start = datetime.fromisoformat(request["requested_start_at"])
+    end = datetime.fromisoformat(request["requested_end_at"])
+    assert (end - start).total_seconds() == 30 * 60, request
+    assert start.astimezone(DENVER).hour == 15
+    assert json.loads(request["requested_window_json"])["kind"] == "exact"
+
+
+def test_genuinely_vague_around_still_parses_window():
+    """Guard against over-fixing: the lead's own "around" still
+    downgrades an hour to a window."""
+    from scheduling import parse_requested_window_with_provenance
+
+    details = {
+        "text": "Can we meet tomorrow around 2pm?",
+        "time": "2pm",
+    }
+    after, before, exact, provenance = parse_requested_window_with_provenance(
+        details, timezone_name="America/Denver"
+    )
+    assert exact is False, provenance
+    assert provenance["kind"] == "window", provenance
+    start = datetime.fromisoformat(after)
+    end = datetime.fromisoformat(before)
+    assert (end - start).total_seconds() == 180 * 60, (after, before)
+
+
+def test_genuinely_vague_afternoon_no_hour_still_parses_window():
+    """Guard: an afternoon with no hour is still a window."""
+    from scheduling import parse_requested_window_with_provenance
+
+    details = {
+        "text": "Can we meet tomorrow afternoon?",
+        "window": "afternoon",
+    }
+    after, before, exact, provenance = parse_requested_window_with_provenance(
+        details, timezone_name="America/Denver"
+    )
+    assert exact is False, provenance
+    assert provenance["kind"] == "window", provenance
+
+
+def test_booking_request_leaves_lead_status_unchanged(two_users, monkeypatch):
+    """Phase III-4 fix (c2), request level: the live §7 step-5 inbound
+    carried the coach's suggested status; request creation must leave
+    the lead status where it was while the request is pending — only
+    the confirm path writes appointment_scheduled."""
+    _staging_mock_config(monkeypatch)
+    u1, _ = two_users
+    lead_id, _phone = _make_lead(u1)
+    before = db.get_lead(lead_id, u1)["status"]
+    result = scheduling.create_appointment_request(
+        u1,
+        db.get_lead(lead_id, u1),
+        {
+            "appointment_requested": True,
+            "intent": "book_appointment",
+            "suggested_lead_status": "appointment_scheduled",
+            "appointment_details": {
+                "day": "wednesday",
+                "time": "15:00",
+                "window": "afternoon",
+                "text": "Can we meet Wednesday at 3pm?",
+            },
+        },
+        source_ref_type="sms",
+        source_ref_id=901,
+        raw_request_text="Can we meet Wednesday at 3pm?",
+    )
+    assert result["action"] == "requested", result
+    assert db.get_lead(lead_id, u1)["status"] == before
+
+
 def test_old_book_branches_are_gone():
     """Source-level guard: the auto-book entry points must not exist
     anymore (a re-introduction fails the suite, not a live test)."""
