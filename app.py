@@ -46,6 +46,7 @@ from voice_prompts import build_voice_call_prompt
 from lead_service import (
     VOICE_SOURCE,
     apply_voice_call_webhook_to_lead,
+    normalize_phone_e164,
     record_voice_call_started,
     upsert_crm_lead,
 )
@@ -1301,6 +1302,46 @@ def start_voice_call():
     )
     cleaned["lead_id"] = lead_id
 
+    # Phase III-3 (Q5): voice consults the outreach ledger at
+    # call-start. Reason = normalized call_purpose, empty ->
+    # "voice_follow_up". A hit refuses with 409 + audit + timeline
+    # evidence; the provider is never called. Live verification is
+    # SMS-only; the channel-agnostic property is suite-covered.
+    from harness.outreach_ledger import (
+        check_outreach_allowed,
+        format_prior_outreach,
+        record_outreach,
+        update_outreach_status,
+        write_duplicate_refusal_evidence,
+    )
+
+    _raw_purpose = (cleaned.get("call_purpose") or "").strip()
+    voice_reason_norm = (
+        crm_db.normalize_follow_up_reason(_raw_purpose)
+        if _raw_purpose
+        else "voice_follow_up"
+    )
+    voice_allowed, voice_conflicting, _voice_scope = check_outreach_allowed(
+        user["id"], lead_id, voice_reason_norm
+    )
+    if not voice_allowed:
+        write_duplicate_refusal_evidence(
+            user["id"],
+            lead_id,
+            voice_conflicting,
+            tool="outreach_ledger",
+            action="voice_call_blocked",
+        )
+        return jsonify(
+            {
+                "error": (
+                    "Duplicate outreach refused: "
+                    f"{format_prior_outreach(voice_conflicting)}"
+                ),
+                "lead_id": lead_id,
+            }
+        ), 409
+
     call_id = db.create_voice_call(
         user_id=user["id"],
         persona_id=persona["id"],
@@ -1308,16 +1349,34 @@ def start_voice_call():
         direction="outbound",
         data=cleaned,
     )
+    voice_ledger_id = record_outreach(
+        user["id"],
+        lead_id=lead_id,
+        channel="voice",
+        reason=_raw_purpose or "voice_follow_up",
+        reason_norm=voice_reason_norm,
+        phone_normalized=normalize_phone_e164(cleaned["phone_number"]),
+        status="scheduled",
+        voice_call_id=call_id,
+    )
     prompt = build_voice_call_prompt(persona, cleaned)
     # Universal spend cap: never start a billable Vapi call on a capped tenant.
     cap_response = _spend_cap_error_response(user["id"])
     if cap_response is not None:
+        if voice_ledger_id is not None:
+            update_outreach_status(voice_ledger_id, status="dead_letter")
         return cap_response
     try:
         result = get_voice_provider().start_outbound_call(
             call_id, cleaned, persona, prompt, variable_values=variable_values
         )
         db.update_voice_call_provider(call_id, result["provider_call_id"], "started")
+        if voice_ledger_id is not None:
+            update_outreach_status(
+                voice_ledger_id,
+                status="sent",
+                sent_at=datetime.now(timezone.utc).isoformat(),
+            )
         # Vapi bills per minute; the real duration is unknown at start, so
         # record a 1-minute minimum now (placeholder rate, ESTIMATE) and
         # true up longer calls from the end-of-call webhook.
@@ -1344,6 +1403,8 @@ def start_voice_call():
     except VoiceProviderError as exc:
         logger.warning("Voice call failed to start: %s", type(exc).__name__)
         db.update_voice_call_provider(call_id, None, "failed")
+        if voice_ledger_id is not None:
+            update_outreach_status(voice_ledger_id, status="dead_letter")
         crm_db.add_lead_activity(
             lead_id,
             user["id"],
@@ -1522,6 +1583,27 @@ def sms_lead_detail(lead_id):
     if not lead:
         return jsonify({"error": "Lead not found."}), 404
     return jsonify({"lead": lead})
+
+
+@app.route("/api/crm/leads/<int:lead_id>/outreach-ledger")
+@auth.subscription_required
+def crm_lead_outreach_ledger(lead_id):
+    """Read-only outreach ledger for one lead (Phase III-3, §8.1).
+
+    Returns the tenant-scoped ledger rows for the lead, newest first —
+    the same evidence the duplicate guard consults. No new page; the
+    timeline entries carry the refusal evidence.
+    """
+    from harness.outreach_ledger import list_outreach_for_lead
+
+    user = auth.get_current_user()
+    lead = db.get_lead(lead_id, user["id"])
+    if not lead:
+        return jsonify({"error": "Lead not found."}), 404
+    return jsonify({
+        "lead_id": lead_id,
+        "rows": list_outreach_for_lead(user["id"], lead_id),
+    })
 
 
 @app.route("/sms/leads/<int:lead_id>/messages")

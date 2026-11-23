@@ -69,6 +69,7 @@ MIGRATION_MODULES = [
     "migrations.versions.044_reset_staging_admin_password",
     "migrations.versions.045_follow_up_sms_sends",
     "migrations.versions.046_lead_qualification",
+    "migrations.versions.047_outreach_ledger",
     "migrations.versions.099_assign_telnyx_platform_sender_to_ren_tenant",
 ]
 

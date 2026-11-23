@@ -8,25 +8,10 @@ import crm_db
 import db
 import external_leads_db as xdb
 import tenant_sms_db as tdb
+from lead_service import normalize_phone_e164 as _normalize_phone
 from sms_providers.simpletexting import SimpleTextingSMSProvider
-from sms_validation import validate_e164_phone
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_phone(raw):
-    cleaned, err = validate_e164_phone(raw if str(raw or "").startswith("+") else f"+{raw}")
-    if cleaned:
-        return cleaned
-    # Try US 10-digit
-    digits = "".join(c for c in str(raw or "") if c.isdigit())
-    if len(digits) == 10:
-        cleaned, _ = validate_e164_phone(f"+1{digits}")
-        return cleaned
-    if len(digits) == 11 and digits.startswith("1"):
-        cleaned, _ = validate_e164_phone(f"+{digits}")
-        return cleaned
-    return None
 
 
 def resolve_tenant_from_account_phone(account_phone):
@@ -53,7 +38,7 @@ def handle_inbound(payload: dict, *, app=None):
     if not contact:
         return {"ok": False, "error": "invalid_contact"}, 400
 
-    lead = db.get_lead_by_phone(user_id, contact)
+    lead = db.find_lead_by_phone_normalized(user_id, contact)
     if not lead:
         # Create minimal lead for inbound conversation
         from lead_service import upsert_crm_lead
@@ -207,13 +192,14 @@ def handle_unsubscribe(payload: dict):
         if not targets:
             with db.get_db() as conn:
                 rows = conn.execute(
-                    "SELECT DISTINCT user_id FROM leads WHERE phone_number = ?",
-                    (contact,),
+                    "SELECT DISTINCT user_id FROM leads "
+                    "WHERE phone_normalized = ? OR phone_number = ?",
+                    (contact, contact),
                 ).fetchall()
                 targets = [r["user_id"] for r in rows]
 
     for user_id in targets:
-        lead = db.get_lead_by_phone(user_id, contact)
+        lead = db.find_lead_by_phone_normalized(user_id, contact)
         lead_id = lead["id"] if lead else None
         if lead_id:
             _apply_opt_out(user_id, lead_id, contact, source="simpletexting_unsubscribe")

@@ -452,6 +452,33 @@ def process_inbound_ai(
                 "provider_message_id": provider_message_id,
             },
         )
+        # Phase III-3: record-only ledger entry. The auto-reply and
+        # sms_reply paths NEVER consult the ledger (a customer who
+        # texts in always gets an answer), but the send is recorded so
+        # a later follow-up for the same lead+reason sees it.
+        # reason_norm is namespaced per path ('auto_reply' /
+        # 'sms_reply') so it never collides with follow-up reasons.
+        try:
+            from harness.outreach_ledger import record_outreach
+            from lead_service import normalize_phone_e164
+
+            record_outreach(
+                user_id,
+                lead_id=lead_id,
+                channel="sms",
+                reason="sms_reply" if approved else "auto_reply",
+                reason_norm="sms_reply" if approved else "auto_reply",
+                phone_normalized=normalize_phone_e164(to_number),
+                status="sent",
+                sms_message_id=message_id,
+            )
+        except Exception:
+            logger.warning(
+                "outreach ledger record failed message_id=%s tenant=%s",
+                message_id,
+                user_id,
+                exc_info=True,
+            )
         tdb.append_sms_audit(
             user_id,
             "ai_reply_sent",

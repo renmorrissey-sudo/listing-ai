@@ -21,24 +21,10 @@ import crm_db
 import db
 import external_leads_db as xdb
 import tenant_sms_db as tdb
+from lead_service import normalize_phone_e164 as _normalize_phone
 from sms_providers.telnyx import TelnyxSMSProvider
-from sms_validation import validate_e164_phone
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_phone(raw):
-    cleaned, err = validate_e164_phone(raw if str(raw or "").startswith("+") else f"+{raw}")
-    if cleaned:
-        return cleaned
-    digits = "".join(c for c in str(raw or "") if c.isdigit())
-    if len(digits) == 10:
-        cleaned, _ = validate_e164_phone(f"+1{digits}")
-        return cleaned
-    if len(digits) == 11 and digits.startswith("1"):
-        cleaned, _ = validate_e164_phone(f"+{digits}")
-        return cleaned
-    return None
 
 
 def _event_type(payload):

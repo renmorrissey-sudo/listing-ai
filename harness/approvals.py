@@ -102,6 +102,37 @@ def _now_iso():
     return _now().isoformat()
 
 
+def _set_ledger_status_by_approval(user_id, approval_id, status, **fields):
+    """Mirror a lifecycle transition onto the outreach ledger row for
+    this approval (Phase III-3). No-op with a warning when the row is
+    missing (a pre-047 approval the backfill did not cover) — the
+    approval itself must never fail for a missing ledger row."""
+    try:
+        from harness.outreach_ledger import (
+            get_ledger_row_by_approval,
+            update_outreach_status,
+        )
+
+        row = get_ledger_row_by_approval(user_id, approval_id)
+        if row is None:
+            logger.warning(
+                "outreach ledger row missing approval=%s tenant=%s status=%s",
+                approval_id,
+                user_id,
+                status,
+            )
+            return
+        update_outreach_status(row["id"], status=status, **fields)
+    except Exception:
+        logger.warning(
+            "outreach ledger status update failed approval=%s tenant=%s status=%s",
+            approval_id,
+            user_id,
+            status,
+            exc_info=True,
+        )
+
+
 def _parse_created_at(value):
     """Parse a stored ISO created_at; None when unparseable/missing."""
     if not value:
@@ -607,6 +638,12 @@ def _execute_follow_up_sms_approval(user_id, approval_id, row, draft, correlatio
         or sms_row.get("provider_message_id")
     ):
         _set_status(user_id, approval_id, "executed")
+        # The send did happen (via another path): the ledger row for
+        # this approval is a sent row, so the guard sees it.
+        _set_ledger_status_by_approval(
+            user_id, approval_id, "sent",
+            sent_at=sms_row.get("sent_at") or _now_iso(),
+        )
         _audit(
             user_id,
             action="approval_executed",
@@ -674,6 +711,66 @@ def _execute_follow_up_sms_approval(user_id, approval_id, row, draft, correlatio
             "approval_id": approval_id,
             "retryable": False,
         }
+    # Execute-time duplicate limb (Phase III-3, criterion 1a): a
+    # human-approved send can still be refused at execution when the
+    # twin approval already sent for the same (tenant, lead, reason)
+    # triple within 7 days. Only the sent-within-window limb applies
+    # here — the fire-time check already covered the in-flight limb,
+    # and a 'drafted' row belonging to a live approval is the twin
+    # this limb must NOT block on (this approval IS that twin).
+    # First executor wins; the loser is refused with the prior send
+    # named in the audit row and on the lead timeline.
+    from harness.outreach_ledger import (
+        check_outreach_allowed,
+        format_prior_outreach,
+        get_ledger_row_by_approval,
+        write_duplicate_timeline_entry,
+    )
+
+    _send_row = None
+    _follow_up_send_id = cleaned_draft.get("follow_up_send_id")
+    if _follow_up_send_id is not None:
+        try:
+            with db.get_db() as _conn:
+                _send_row = _conn.execute(
+                    "SELECT * FROM harness_follow_up_sends "
+                    "WHERE id = ? AND user_id = ?",
+                    (_follow_up_send_id, user_id),
+                ).fetchone()
+        except Exception:
+            _send_row = None
+    _reason_norm = None
+    if _send_row is not None:
+        _reason_norm = _send_row.get("reason_norm")
+        if not _reason_norm and _send_row.get("reason"):
+            from crm_db import normalize_follow_up_reason
+
+            _reason_norm = normalize_follow_up_reason(_send_row["reason"])
+    if _reason_norm:
+        _ledger_row = get_ledger_row_by_approval(user_id, approval_id)
+        _allowed, _conflicting, _scope = check_outreach_allowed(
+            user_id,
+            lead_id,
+            _reason_norm,
+            execute_time=True,
+            exclude_ledger_id=_ledger_row["id"] if _ledger_row else None,
+        )
+        if not _allowed:
+            _reason = (
+                f"duplicate_follow_up_send: "
+                f"{format_prior_outreach(_conflicting)}"
+            )[:500]
+            _mark_blocked(user_id, approval_id, "BLOCK", _reason)
+            write_duplicate_timeline_entry(user_id, lead_id, _conflicting)
+            _set_ledger_status_by_approval(user_id, approval_id, "blocked")
+            return {
+                "ok": True,
+                "sent": False,
+                "decision": "BLOCK",
+                "reason": _reason,
+                "approval_id": approval_id,
+                "retryable": False,
+            }
     try:
         from sms_outbound import send_authorized_sms
 
@@ -731,6 +828,12 @@ def _execute_follow_up_sms_approval(user_id, approval_id, row, draft, correlatio
             "approval_id": approval_id,
             "retryable": True,
         }
+    # The ledger row goes to 'sent' BEFORE the approval is marked
+    # executed, so a crash between the two still leaves the guard
+    # correct (Phase III-3).
+    _set_ledger_status_by_approval(
+        user_id, approval_id, "sent", sent_at=_now_iso(),
+    )
     _set_status(user_id, approval_id, "executed")
     _audit(
         user_id,
