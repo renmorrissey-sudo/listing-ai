@@ -238,11 +238,27 @@ def process_inbound_ai(
             details = dict(details)
             details.setdefault("text", inbound_body)
             analysis["appointment_details"] = details
-        sched = scheduling.handle_inbound_scheduling(user_id, lead, analysis)
-        if sched.get("action") in {"scheduled", "rescheduled"}:
+        # Phase III-4: an inbound booking request creates a pending
+        # appointment request — it never books. The request creation is
+        # idempotent on the inbound id, so the handler's earlier call
+        # (drafts_only path) and this call return the same request.
+        # The draft reply is the deterministic confirmation-request
+        # template, never the model's free text and never a booking claim.
+        sched = scheduling.create_appointment_request(
+            user_id,
+            lead,
+            analysis,
+            source_ref_type="sms",
+            source_ref_id=inbound_id,
+            raw_request_text=inbound_body,
+        )
+        if sched.get("action") == "requested":
             analysis["draft_reply"] = sched.get("message") or analysis.get("draft_reply")
             analysis["suggested_reply"] = analysis["draft_reply"]
-            analysis["suggested_lead_status"] = "appointment_scheduled"
+            # No appointment exists yet, so the coach's
+            # appointment_scheduled suggestion must not persist.
+            if analysis.get("suggested_lead_status") == "appointment_scheduled":
+                analysis["suggested_lead_status"] = None
         elif sched.get("action") == "offer" and sched.get("message"):
             analysis["draft_reply"] = sched.get("message")
             analysis["suggested_reply"] = analysis["draft_reply"]

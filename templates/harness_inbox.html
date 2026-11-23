@@ -70,6 +70,40 @@
       <p class="muted">No messages in this thread.</p>
       {% endif %}
     </div>
+    {% if selected.pending_appointment_requests %}
+    <h3>Appointment requests</h3>
+    <div class="card">
+      {% for req in selected.pending_appointment_requests %}
+      <div class="approval appointment-request" {% if req.approval_id %}data-approval-id="{{ req.approval_id }}"{% endif %}>
+        <p><strong>Appointment request #{{ req.id }}</strong> &middot; {{ req.status }}{% if req.lead_confirmed %} &middot; lead confirmed{% endif %} &middot; {{ req.channel or '' }}</p>
+        <p>Slot: <strong>{{ req.slot_label or 'No time parsed — pick a slot below' }}</strong></p>
+        {% if req.confirmation_text %}
+        <p>Confirmation text (sent exactly as shown when you confirm):</p>
+        <blockquote>{{ req.confirmation_text }}</blockquote>
+        {% endif %}
+        {% if req.no_calendar_connected %}
+        <p class="muted">No calendar connected — connect one at <a href="/calendar/connections">Calendar</a> before confirming.</p>
+        {% endif %}
+        {% if req.approval_id and req.requested_start_at %}
+        <p>
+          <button type="button" class="approval-approve" data-approval-id="{{ req.approval_id }}">Confirm &amp; book</button>
+          <button type="button" class="approval-reject" data-approval-id="{{ req.approval_id }}">Decline</button>
+        </p>
+        <p class="muted approval-status" aria-live="polite"></p>
+        {% endif %}
+        {% if req.status == 'conflicted' or not req.requested_start_at %}
+        <form class="reconfirm-form" data-request-id="{{ req.id }}">
+          <label>New slot:
+            <input type="datetime-local" name="slot_start_at" required />
+          </label>
+          <button type="submit" class="btn secondary">Re-confirm with this slot</button>
+          <span class="muted reconfirm-status" aria-live="polite"></span>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
     {% endif %}
 
     <h2>Pending approvals</h2>
@@ -80,12 +114,25 @@
         <p><strong>{{ approval.kind }}</strong> &middot; lead {{ approval.lead_id }} &middot; created {{ approval.created_at }}{% if approval.expires_at %} &middot; expires {{ approval.expires_at }}{% endif %}</p>
         {# The draft text below is the approval row's stored draft_reply,
            verbatim from draft_json — the single source of truth. It is
-           never re-derived or replaced by any other copy. #}
-        {% if approval.draft_reply %}
+           never re-derived or replaced by any other copy. An
+           appointment_request approval carries confirmation_text and
+           the slot instead; confirming books the appointment and sends
+           that exact text. #}
+        {% if approval.kind == 'appointment_request' and approval.draft %}
+        <p>Appointment request #{{ approval.draft.request_id }} &middot; slot {{ approval.draft.slot_start_at or 'no time parsed' }}</p>
+        {% if approval.draft.confirmation_text %}
+        <blockquote>{{ approval.draft.confirmation_text }}</blockquote>
+        <p class="muted">Confirming books the appointment and sends this exact text.</p>
+        {% endif %}
+        {% elif approval.draft_reply %}
         <blockquote>{{ approval.draft_reply }}</blockquote>
         {% endif %}
         <p>
+          {% if approval.kind == 'appointment_request' %}
+          <button type="button" class="approval-approve" data-approval-id="{{ approval.id }}">Confirm &amp; book</button>
+          {% else %}
           <button type="button" class="approval-approve" data-approval-id="{{ approval.id }}">Approve &amp; send</button>
+          {% endif %}
           <button type="button" class="approval-reject" data-approval-id="{{ approval.id }}">Reject</button>
         </p>
         <p class="muted approval-status" aria-live="polite"></p>
@@ -130,6 +177,35 @@
         btn.addEventListener('click', function () {
           var reason = window.prompt('Reason for rejecting (optional):', '') || '';
           postAction(btn.getAttribute('data-approval-id'), 'reject', reason || undefined);
+        });
+      });
+      document.querySelectorAll('.reconfirm-form').forEach(function (form) {
+        form.addEventListener('submit', function (ev) {
+          ev.preventDefault();
+          var statusEl = form.querySelector('.reconfirm-status');
+          var input = form.querySelector('input[name="slot_start_at"]');
+          if (statusEl) statusEl.textContent = 'Working…';
+          var slot = input && input.value ? new Date(input.value).toISOString() : null;
+          if (!slot) {
+            if (statusEl) statusEl.textContent = 'Pick a slot first.';
+            return;
+          }
+          fetch('/api/harness/appointment-requests/' + form.getAttribute('data-request-id') + '/reconfirm', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({slot_start_at: slot})
+          }).then(function (resp) {
+            if (!resp.ok) {
+              return resp.json().then(function (data) {
+                throw new Error((data && data.error) || ('Request failed (' + resp.status + ')'));
+              });
+            }
+            return resp.json();
+          }).then(function () {
+            window.location.reload();
+          }).catch(function (err) {
+            if (statusEl) statusEl.textContent = err.message;
+          });
         });
       });
       var takeoverBtn = document.getElementById('inbox-takeover-toggle');

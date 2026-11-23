@@ -158,7 +158,12 @@ def test_completed_failed_unanswered_appear_and_retries_idempotent(app_client, t
     assert denied_rec.status_code == 404
 
 
-def test_appointment_call_populates_follow_up_and_next_action(app_client, two_users, monkeypatch):
+def test_appointment_call_creates_pending_request_not_status(app_client, two_users, monkeypatch):
+    """Phase III-4: a voice booking request creates a pending
+    appointment request — it never sets appointment_scheduled (no
+    appointment exists) and never books. The follow-through (next
+    action + follow-up date) still populates, and a retry still does
+    not wipe it."""
     u1, _ = two_users
     apply_pending_migrations()
     _profile(u1)
@@ -184,7 +189,13 @@ def test_appointment_call_populates_follow_up_and_next_action(app_client, two_us
     )
     assert res.status_code == 200
     lead = db.get_lead(lead_id, u1)
-    assert lead["status"] == "appointment_scheduled"
+    assert lead["status"] != "appointment_scheduled"
+    from harness.appointment_requests import list_pending_requests
+
+    requests = list_pending_requests(u1, lead_id)
+    assert len(requests) == 1, requests
+    assert requests[0]["channel"] == "voice"
+    assert requests[0]["status"] == "requested"
     assert lead.get("next_action")
     assert "appointment" in lead["next_action"].lower() or "showing" in lead["next_action"].lower()
     assert lead.get("next_follow_up_at")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 
 import crm_db
 import db
@@ -387,12 +388,96 @@ def execute_update_status(user_id, arguments: dict, context: dict | None):
     return updated, None, None
 
 
+def _agent_booking_slot(user_id, arguments: dict, existing=None):
+    """(start_iso, end_iso) for an agent booking, derived the same way
+    :mod:`scheduling` derives it — or (None, None) when no start parses."""
+    import crm_time
+    import scheduling
+
+    start = crm_time.parse_iso_dt(arguments.get("start_at"))
+    if not start:
+        return None, None
+    settings = scheduling.get_settings(user_id)
+    duration = int(
+        arguments.get("duration_minutes") or settings["default_duration_minutes"] or 30
+    )
+    if existing and existing.get("end_at") and existing.get("start_at"):
+        prev_start = crm_time.parse_iso_dt(existing["start_at"])
+        prev_end = crm_time.parse_iso_dt(existing["end_at"])
+        if prev_start and prev_end:
+            duration = max(15, int((prev_end - prev_start).total_seconds() // 60))
+    end = crm_time.parse_iso_dt(arguments.get("end_at")) or (
+        start + timedelta(minutes=duration)
+    )
+    return start.isoformat(), end.isoformat()
+
+
+def _sync_agent_booking(user_id, lead, appt):
+    """Write an agent-created appointment to the connected calendar.
+
+    The agent's own booking does not require a calendar (§8e): no
+    connection means no sync, silently. A sync failure leaves the
+    booking standing — timeline entry + Needs Attention item, no
+    rollback. Returns the external event id (or None).
+    """
+    from harness.appointment_requests import sync_agent_booking_to_calendar
+
+    external_event_id, sync_error = sync_agent_booking_to_calendar(
+        user_id, appt, lead_name=lead.get("name")
+    )
+    if sync_error:
+        crm_db.add_lead_activity(
+            lead["id"],
+            user_id,
+            "appointment_calendar_sync_failed",
+            f"Calendar sync failed: {sync_error}",
+            {
+                "appointment_id": (appt or {}).get("id"),
+                "start_at": (appt or {}).get("start_at"),
+                "external_event_id": None,
+            },
+            actor_user_id=user_id,
+        )
+        crm_db.upsert_needs_attention(
+            user_id,
+            lead["id"],
+            "appointment_sync_failed",
+            priority="high",
+            source_ref_type="appointment",
+            source_ref_id=(appt or {}).get("id"),
+            reason_text=f"Calendar sync failed ({sync_error}) — retry from the appointment.",
+        )
+    return external_event_id
+
+
 def execute_create_calendar_event(user_id, arguments: dict, context: dict | None):
     import scheduling
 
     lead, err, choices = resolve_lead(user_id, arguments, context)
     if err:
         return None, err, choices
+    # Phase III-4: the shared confirm-time collision check (internal
+    # appointments + other pending/confirmed requests + external
+    # calendar when connected) runs before the internal write. An
+    # unreadable external calendar refuses the booking — it never
+    # silently skips the check.
+    slot_start, slot_end = _agent_booking_slot(user_id, arguments)
+    if slot_start and slot_end:
+        try:
+            from harness.appointment_requests import (
+                CalendarUnavailableError,
+                check_agent_booking_collisions,
+            )
+
+            collisions = check_agent_booking_collisions(user_id, slot_start, slot_end)
+        except CalendarUnavailableError as exc:
+            return None, f"Calendar unavailable: {exc} — please retry.", None
+        if collisions:
+            first = collisions[0]
+            return None, (
+                f"That time conflicts with {first['source']} {first['summary']} "
+                f"({first['start_at']})."
+            ), None
     payload = dict(arguments or {})
     payload["lead_id"] = lead["id"]
     appt, error, alternatives = scheduling.create_calendar_event(user_id, payload)
@@ -401,6 +486,7 @@ def execute_create_calendar_event(user_id, arguments: dict, context: dict | None
             labels = ", ".join(scheduling.format_slot_sms(s) for s in alternatives[:3])
             return None, f"{error} Nearby times: {labels}. Which works?", None
         return None, error, None
+    external_event_id = _sync_agent_booking(user_id, lead, appt)
     add_lead_audit(
         user_id,
         lead["id"],
@@ -410,6 +496,7 @@ def execute_create_calendar_event(user_id, arguments: dict, context: dict | None
             "source": SOURCE,
             "appointment_id": (appt or {}).get("id"),
             "start_at": (appt or {}).get("start_at"),
+            "external_event_id": external_event_id,
         },
     )
     return appt, None, None
@@ -433,6 +520,25 @@ def execute_reschedule_calendar_event(user_id, arguments: dict, context: dict | 
         if not existing:
             return None, "Appointment not found.", None
         lead = db.get_lead(existing["lead_id"], user_id)
+    slot_start, slot_end = _agent_booking_slot(user_id, arguments, existing=existing)
+    if slot_start and slot_end:
+        try:
+            from harness.appointment_requests import (
+                CalendarUnavailableError,
+                check_agent_booking_collisions,
+            )
+
+            collisions = check_agent_booking_collisions(
+                user_id, slot_start, slot_end, exclude_appointment_id=appt_id
+            )
+        except CalendarUnavailableError as exc:
+            return None, f"Calendar unavailable: {exc} — please retry.", None
+        if collisions:
+            first = collisions[0]
+            return None, (
+                f"That time conflicts with {first['source']} {first['summary']} "
+                f"({first['start_at']})."
+            ), None
     updated, error, alternatives = scheduling.reschedule_calendar_event(user_id, appt_id, arguments)
     if error:
         if alternatives:
@@ -440,6 +546,7 @@ def execute_reschedule_calendar_event(user_id, arguments: dict, context: dict | 
             return None, f"{error} Nearby times: {labels}. Which works?", None
         return None, error, None
     if lead:
+        external_event_id = _sync_agent_booking(user_id, lead, updated)
         add_lead_audit(
             user_id,
             lead["id"],
@@ -449,6 +556,7 @@ def execute_reschedule_calendar_event(user_id, arguments: dict, context: dict | 
                 "source": SOURCE,
                 "appointment_id": appt_id,
                 "start_at": (updated or {}).get("start_at"),
+                "external_event_id": external_event_id,
             },
         )
     return updated, None, None

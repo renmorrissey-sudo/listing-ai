@@ -632,6 +632,34 @@ def api_review_suppression_removal(request_id):
     return jsonify({"removal": req})
 
 
+def _enrich_appointment_requests(user_id, requests):
+    """Add the display fields the inbox confirm card needs: the slot
+    label and the exact confirmation text the agent approves (verbatim
+    — the same text the confirm action sends)."""
+    from harness.appointment_requests import (
+        build_booking_confirmation_text,
+        format_slot_label,
+    )
+
+    try:
+        timezone_name = db.get_user_timezone(user_id)
+    except Exception:
+        timezone_name = None
+    enriched = []
+    for req in requests or []:
+        item = dict(req)
+        item["slot_label"] = format_slot_label(
+            req.get("requested_start_at"), timezone_name
+        )
+        item["confirmation_text"] = (
+            build_booking_confirmation_text(req.get("requested_start_at"), timezone_name)
+            if req.get("requested_start_at")
+            else ""
+        )
+        enriched.append(item)
+    return enriched
+
+
 @harness_bp.route("/api/harness/approvals", methods=["GET"])
 @auth.subscription_required
 def api_list_approvals():
@@ -671,6 +699,37 @@ def api_reject_approval(approval_id):
         return _approval_error(error)
     # Rejection enqueues nothing: no job, no send, ever.
     return jsonify({"approval": approval})
+
+
+@harness_bp.route(
+    "/api/harness/appointment-requests/<int:request_id>/reconfirm", methods=["POST"]
+)
+@auth.subscription_required
+def api_reconfirm_appointment_request(request_id):
+    """Create a fresh ``appointment_request`` approval for a request,
+    optionally with a new slot (the agent picks the exact slot at
+    confirm time for window / missing-time requests, or after a
+    collision refusal). A slot override records the new slot on the
+    same request row. 404 when the request does not belong to the
+    tenant — a probe never learns it exists."""
+    from harness.appointment_requests import create_confirm_approval
+
+    user = auth.get_current_user()
+    if not user:
+        return jsonify({"error": "Please log in to continue."}), 401
+    body = request.get_json(silent=True) or {}
+    slot_start_at = body.get("slot_start_at") if isinstance(body, dict) else None
+    slot_end_at = body.get("slot_end_at") if isinstance(body, dict) else None
+    approval_id, error = create_confirm_approval(
+        user["id"], request_id, slot_start_at=slot_start_at, slot_end_at=slot_end_at
+    )
+    if error:
+        if error == "not_found":
+            return jsonify({"error": "Appointment request not found."}), 404
+        if error == "confirm_in_progress":
+            return jsonify({"error": "A confirm is already in progress."}), 409
+        return jsonify({"error": error}), 400
+    return jsonify({"approval_id": approval_id})
 
 
 def _is_harness_admin(user):
@@ -789,6 +848,13 @@ def harness_inbox_page():
             # Opening a thread marks it read, clearing its unread badge.
             inbox_mod.mark_conversation_read(user_id, selected_lead_id)
             selected = inbox_mod.get_conversation(user_id, selected_lead_id)
+            # Pending appointment requests ride on the conversation so
+            # the confirm card renders with the exact text to approve.
+            from harness.appointment_requests import list_pending_requests
+
+            selected["pending_appointment_requests"] = _enrich_appointment_requests(
+                user_id, list_pending_requests(user_id, selected_lead_id)
+            )
     approvals = list_pending_approvals(user_id)
     return render_template(
         "harness_inbox.html",
@@ -837,6 +903,11 @@ def api_get_inbox_conversation(lead_id):
     conversation = inbox_mod.get_conversation(user["id"], lead_id)
     if conversation is None:
         return jsonify({"error": "Conversation not found."}), 404
+    from harness.appointment_requests import list_pending_requests
+
+    conversation["pending_appointment_requests"] = _enrich_appointment_requests(
+        user["id"], list_pending_requests(user["id"], lead_id)
+    )
     return jsonify({"conversation": conversation})
 
 

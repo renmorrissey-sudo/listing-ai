@@ -266,6 +266,8 @@ NEEDS_ATTENTION_REASONS = {
     "consent_review_required": "Consent review required",
     "call_failed": "AI call failed or did not connect",
     "review_call_outcome": "Review AI call outcome",
+    "calendar_connection_expired": "Calendar connection expired — reconnect",
+    "appointment_sync_failed": "Calendar sync failed — retry from the appointment",
 }
 
 PROTECTED_RESOLVE_REASONS = {"opt_out", "delivery_failed", "sensitive_topic", "consent_review_required"}
