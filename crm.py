@@ -358,8 +358,13 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
     if lead.get("external_source_id"):
         external_source = xdb.get_external_lead_source(lead["external_source_id"], user["id"])
     # Phase III-2 qualification: on-read evaluation (live fields +
-    # signals) + the pending model suggestion, if any. Guarded so a
-    # qualification failure never breaks the lead page.
+    # signals) + the pending model suggestion, if any. The two lookups
+    # are guarded separately so a suggestion failure drops only the
+    # suggestion — the evaluated context (score, band, form) still
+    # renders. (A bare '%' in the suggestion query's LIKE pattern
+    # broke on Postgres in live verification round 1 and the old
+    # single guard hid the whole panel; the pattern itself is now
+    # escaped in find_pending_qualification_suggestion.)
     qualification = None
     qualification_suggestion = None
     from harness.qualification import (
@@ -376,18 +381,22 @@ def _lead_detail_template_kwargs(user, lead_id, *, outcome_draft=None, form_erro
         for field in QUALIFICATION_FIELDS
     }
     try:
-        from harness.qualification import (
-            evaluate_lead,
-            find_pending_qualification_suggestion,
-        )
+        from harness.qualification import evaluate_lead
 
         qualification = evaluate_lead(user["id"], lead_id)
+    except Exception:
+        logger.warning("Qualification evaluation failed lead_id=%s", lead_id, exc_info=True)
+        qualification = None
+    try:
+        from harness.qualification import find_pending_qualification_suggestion
+
         suggestion = find_pending_qualification_suggestion(user["id"], lead_id)
         if suggestion:
             qualification_suggestion = suggestion
     except Exception:
-        logger.warning("Qualification context failed lead_id=%s", lead_id, exc_info=True)
-        qualification = None
+        logger.warning(
+            "Qualification suggestion lookup failed lead_id=%s", lead_id, exc_info=True
+        )
         qualification_suggestion = None
     return {
         "lead": lead,
