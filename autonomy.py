@@ -58,12 +58,19 @@ SMS_ESCALATION_BLOCK = frozenset(
 # listed but is only ever applied through the qualification evaluator
 # (see apply_inbound_side_effects); "qualifying"/"unqualified" are
 # never routine.
+# Phase III-4 fix: "appointment_scheduled" is NOT routine either — a
+# model-suggested booking status was written straight from the coach
+# analysis by apply_inbound_side_effects, bypassing the sms_handler
+# strip (which runs after the coach call returns, while
+# apply_inbound_side_effects runs inside analyze_inbound_and_coach)
+# and the evaluator guard. Only the confirm path writes it
+# (crm_db.set_lead_status in harness/appointment_requests
+# .confirm_request). It was in this set before the fix.
 ROUTINE_LEAD_STATUSES = frozenset(
     {
         "new",
         "attempting_contact",
         "contacted",
-        "appointment_scheduled",
         "nurture",
     }
 )

@@ -42,7 +42,9 @@ def test_policy_auto_execute_vs_block():
     assert policy.confirmation_mode("delete_lead") == policy.MODE_SPOKEN_CONFIRMATION
     assert autonomy.should_auto_execute_tool("create_task") is True
     assert autonomy.allowed_auto_status("closed_lost") is None
-    assert autonomy.allowed_auto_status("appointment_scheduled") == "appointment_scheduled"
+    # Phase III-4 fix: a model suggestion may no longer write
+    # "appointment_scheduled" — only the confirm path writes it.
+    assert autonomy.allowed_auto_status("appointment_scheduled") is None
 
 
 def test_inbound_ai_sends_automatically_without_review(two_users, monkeypatch):
