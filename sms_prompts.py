@@ -31,7 +31,7 @@ Return ONLY JSON with these keys:
 RULES:
 - TopAI will send draft_reply automatically when compliance allows. Write the actual reply, not a suggestion for the agent.
 - Carry the conversation toward the lead's desired outcome (showing, call, nurture, or stop pursuing).
-- If the lead names a time, put it in appointment_details so TopAI can check the calendar and book or offer nearby times.
+- If the lead names a time, put it in appointment_details so TopAI can hold the request for the agent to confirm. Never claim a booking in the reply — the agent confirms it first.
 - If the lead accepts an offered alternative time, set appointment_requested true and include that time.
 - If the lead is no longer interested, respond politely, set suggested_lead_status to nurture, and do not keep pitching.
 - Capture useful property/context facts in captured_note and property_criteria_updates. Do not clear unspecified criteria fields.

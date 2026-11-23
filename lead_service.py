@@ -605,20 +605,32 @@ def apply_voice_call_webhook_to_lead(user_id, call_row, normalized):
     status_for_rules = meaningful_status if emitted else None
 
     if appointment_requested and current not in {"do_not_contact", "closed_won", "closed_lost"}:
-        if current in {"new", "attempting_contact", "contacted", "qualified", "nurture"}:
-            crm_db.set_lead_status(
-                user_id, lead_id, "appointment_scheduled", from_automation=True
-            )
-        else:
-            suggested_status = "appointment_scheduled"
-        crm_db.upsert_needs_attention(
+        # Phase III-4: a voice booking request creates the same pending
+        # appointment request as SMS — it never sets appointment_scheduled
+        # (no appointment exists) and never books. The transcript /
+        # summary is fed through the window parser at low confidence;
+        # when no time parses, the request holds a NULL slot. The
+        # needs-attention item is upserted by create_request.
+        import scheduling
+
+        transcript_text = " ".join(
+            part
+            for part in [
+                summary or "",
+                normalized.get("transcript") or fresh_call.get("transcript") or "",
+            ]
+            if part
+        )[:4000]
+        scheduling.create_appointment_request(
             user_id,
-            lead_id,
-            "appointment_requested",
-            priority="high",
-            source_ref_type="voice_call",
+            lead,
+            {
+                "appointment_requested": True,
+                "appointment_details": {"text": transcript_text},
+            },
+            source_ref_type="voice",
             source_ref_id=call_row.get("id"),
-            reason_text="AI call indicated an appointment should be scheduled.",
+            raw_request_text=transcript_text,
         )
     elif status_for_rules == "completed" and current in {"new", "attempting_contact"}:
         crm_db.set_lead_status(user_id, lead_id, "contacted", from_automation=True)

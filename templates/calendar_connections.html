@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Calendar - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+  <style>
+    .provider-card { border: 1px solid #eef2f7; border-radius: 12px; padding: 18px; margin-bottom: 14px; }
+    .provider-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .provider-card-title { font-size: 16px; font-weight: 700; }
+    .provider-connection { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid #f3f5f9; margin-top: 10px; }
+    .provider-connection:first-of-type { border-top: none; margin-top: 6px; }
+    .provider-connection-name { font-weight: 600; font-size: 13.5px; }
+    .provider-connection-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .provider-reason { color: #778; font-size: 12.5px; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  {% set page_tagline = 'Calendar Connections' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <div class="page-header">
+      <div class="page-header-titles">
+        <h1>Calendar</h1>
+        <p class="muted">Connect the calendar where TopAI writes confirmed appointments. A booking request is never written to a calendar until you confirm it — connecting a calendar is what makes the Confirm button available.</p>
+      </div>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+        <div class="flash {% if category == 'error' %}err{% endif %}" style="display:block;">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="card">
+      {% for p in providers %}
+      <div class="provider-card">
+        <div class="provider-card-head">
+          <div class="provider-card-title">{{ p.display_name }}</div>
+          {% if p.readiness.state == 'live' %}
+            <a class="btn" href="/calendar/connections/{{ p.name }}/connect">+ Connect {{ p.display_name }}</a>
+          {% elif p.readiness.state == 'coming_soon' %}
+            <span class="pill muted">Coming soon</span>
+          {% else %}
+            <span class="pill warn">Setup required</span>
+          {% endif %}
+        </div>
+        {% if p.readiness.reason %}<div class="provider-reason">{{ p.readiness.reason }}</div>{% endif %}
+
+        {% for c in p.connections %}
+        <div class="provider-connection">
+          <div>
+            <div class="provider-connection-name">
+              {% if c.status == 'connected' %}<span class="pill success">&#10003; Connected</span>{% else %}<span class="pill danger">Needs reconnect</span>{% endif %}
+              {{ c.display_name or c.external_account_id }}
+            </div>
+          </div>
+          <div class="provider-connection-actions">
+            {% if c.status != 'connected' %}
+              <a class="btn secondary" href="/calendar/connections/{{ p.name }}/connect">Reconnect</a>
+            {% endif %}
+            <form method="post" action="/calendar/connections/{{ c.id }}/disconnect" style="display:inline;">
+              <button type="submit" class="btn secondary">Disconnect</button>
+            </form>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+  </main>
+  {% include 'subscriber_footer.html' %}
+  {% include 'subscriber_nav_script.html' %}
+</body>
+</html>

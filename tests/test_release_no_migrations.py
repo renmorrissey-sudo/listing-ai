@@ -22,12 +22,15 @@ follow-up sending + scheduling) is also in the release. Migration 046
 fields + stored score cache for Phase III-2 lead qualification) is
 also in the release. Migration 047 (harness_outreach_ledger, the
 durable duplicate-outreach ledger for Phase III-3, plus
-leads.phone_normalized) is also in the release. The runner
-list therefore holds 46 modules and ends at 099 (the staging-only
-sender assignment), with 047 in the list and 033/034 still excluded.
+leads.phone_normalized) is also in the release. Migration 048
+(harness_appointment_requests, the pending appointment-request table
+for Phase III-4, plus calendar_connections and calendar_oauth_states
+for the per-tenant calendar OAuth) is also in the release. The runner
+list therefore holds 47 modules and ends at 099 (the staging-only
+sender assignment), with 047 and 048 in the list and 033/034 still excluded.
 (Note: the staging runner carries 7 staging-only modules — 037-041,
-044, 099 — on top of main's 39, so its count and last entry differ
-from main's test, which asserts 39 modules ending at 047.)
+044, 099 — on top of main's 40, so its count and last entry differ
+from main's test, which asserts 40 modules ending at 048.)
 
 These tests pin what the release DOES still guarantee on the 029
 column set for model/correlation_id, and pin the two known
@@ -58,18 +61,19 @@ from harness.jobs import claim_jobs, enqueue_job
 from migrations.runner import MIGRATION_MODULES
 
 
-def test_runner_list_ends_at_099_with_047_without_033_034():
-    """Migration 047 is listed; 033/034 remain excluded from the release.
+def test_runner_list_ends_at_099_with_048_without_033_034():
+    """Migration 048 is listed; 047 also listed; 033/034 remain excluded.
 
     The staging runner ends at 099 (the staging-only sender
-    assignment), not at 047 — main's test asserts 39 modules ending
-    at 047; staging carries 7 staging-only modules on top.
+    assignment), not at 048 — main's test asserts 40 modules ending
+    at 048; staging carries 7 staging-only modules on top.
     """
     assert any(m.endswith("047_outreach_ledger") for m in MIGRATION_MODULES)
+    assert any(m.endswith("048_appointment_requests") for m in MIGRATION_MODULES)
     assert MIGRATION_MODULES[-1].endswith(
         "099_assign_telnyx_platform_sender_to_ren_tenant"
     )
-    assert len(MIGRATION_MODULES) == 46
+    assert len(MIGRATION_MODULES) == 47
     assert not any("033_" in m or "034_" in m for m in MIGRATION_MODULES)
 
 

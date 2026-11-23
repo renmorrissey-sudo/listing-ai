@@ -623,3 +623,71 @@ def validate_follow_up_sms_draft(user_id, draft):
         return cleaned, None
     except ValidationError as exc:
         return None, exc.code
+
+
+def validate_appointment_request_draft(user_id, draft):
+    """Validate an ``appointment_request`` approval draft for *user_id*.
+
+    Checks, in order: request_id present / integer / names a
+    ``harness_appointment_requests`` row for this tenant (cross-tenant
+    distinguished); lead_id present / integer / matches the request's
+    lead and exists for this tenant; slot_start_at present, parseable
+    ISO, and in the future (a past slot is never booked or rolled
+    forward); slot_end_at, when present, parseable ISO; confirmation_text
+    present and non-empty (<= 2000 chars) — the exact text the agent
+    approved on the confirm screen.
+
+    Returns ``(cleaned_draft, error_code)`` — ``error_code`` is ``None``
+    on success. The returned draft is a copy with ids normalised to
+    ``int``.
+    """
+    draft = dict(draft or {})
+    try:
+        request_id = coerce_id(draft.get("request_id"))
+        if request_id is None:
+            _fail("missing_request_id", "request_id is required")
+        with db.get_db() as conn:
+            row = conn.execute(
+                "SELECT * FROM harness_appointment_requests "
+                "WHERE id = ? AND user_id = ?",
+                (request_id, user_id),
+            ).fetchone()
+        if row is None:
+            _fail(
+                "request_not_found",
+                f"appointment request {request_id} does not exist for this tenant",
+            )
+        request = dict(row)
+        lead = validate_lead_reference(user_id, draft.get("lead_id"), required=True)
+        if lead["id"] != request["lead_id"]:
+            _fail(
+                "lead_mismatch",
+                "lead_id does not match the appointment request's lead",
+            )
+        slot_start = _parse_iso_datetime(
+            draft.get("slot_start_at"), "missing_slot_start_at", "slot start"
+        )
+        if slot_start is None:
+            _fail("missing_slot_start_at", "slot_start_at is required")
+        if slot_start <= datetime.now(slot_start.tzinfo):
+            _fail("slot_in_past", "slot_start_at is in the past")
+        slot_end = None
+        if draft.get("slot_end_at") not in (None, ""):
+            slot_end = _parse_iso_datetime(
+                draft.get("slot_end_at"), "malformed_slot_end_at", "slot end"
+            )
+        text = _require_str_field(
+            draft, "confirmation_text", "confirmation text",
+            code="missing_confirmation_text", label="confirmation text",
+            limit=_MAX_BODY_CHARS,
+        )
+        cleaned = dict(draft)
+        cleaned["request_id"] = request_id
+        cleaned["lead_id"] = lead["id"]
+        cleaned["slot_start_at"] = slot_start.isoformat()
+        if slot_end is not None:
+            cleaned["slot_end_at"] = slot_end.isoformat()
+        cleaned["confirmation_text"] = text
+        return cleaned, None
+    except ValidationError as exc:
+        return None, exc.code
