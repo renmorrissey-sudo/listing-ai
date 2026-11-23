@@ -791,7 +791,7 @@ def find_pending_qualification_suggestion(user_id, lead_id):
             """
             SELECT * FROM lead_insights
             WHERE user_id = ? AND lead_id = ? AND status = 'pending'
-              AND raw_json LIKE '%qualification_suggestion%'
+              AND raw_json LIKE '%%qualification_suggestion%%'
             ORDER BY created_at DESC, id DESC
             """,
             (user_id, lead_id),

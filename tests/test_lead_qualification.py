@@ -15,7 +15,9 @@ Qualification ops must create no harness_jobs, sms_messages, or
 harness_approvals rows (asserted directly).
 """
 
+import inspect
 import json
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -1092,3 +1094,71 @@ def test_pipeline_stages_place_new_statuses():
     assert stage_for_status("unqualified") == "closed"
     assert stage_for_status("qualified") == "qualified"
     assert stage_for_status("nurture") == "engaged"
+
+
+# ---------------------------------------------------------------------------
+# Postgres LIKE escaping regression (live verification round 1, 2026-11-22)
+# ---------------------------------------------------------------------------
+
+def test_suggestion_lookup_like_pattern_is_escaped_for_postgres(two_users):
+    """The suggestion lookup embeds a LIKE pattern in its SQL. On
+    Postgres the query goes through psycopg, which reads a bare '%'
+    as a placeholder start — the unescaped pattern raised
+    ProgrammingError live on staging ('%q') and hid the whole
+    Qualification panel. The pattern must be escaped as '%%...%%':
+    psycopg collapses '%%' to a literal '%', and on SQLite '%%' is
+    two wildcards, so matching is unchanged on both backends. The
+    SQLite suite cannot reproduce the Postgres failure, so pin the
+    escaping itself here, plus a simulation of the production
+    translation + psycopg's placeholder validation."""
+    from db_backend import _PLACEHOLDER
+
+    source = inspect.getsource(q.find_pending_qualification_suggestion)
+    assert "%%qualification_suggestion%%" in source
+    assert "'%qualification_suggestion%'" not in source
+    # Simulate the production Postgres translation ('?' -> '%s')
+    # and psycopg's placeholder validation: '%%' is an escaped
+    # literal percent, '%s'/'%b'/'%t' are placeholders, anything
+    # else (e.g. '%q') raises.
+    blocks = re.findall(r'"""(.*?)"""', source, re.S)
+    sql = next(b for b in blocks if "SELECT" in b)
+    translated = _PLACEHOLDER.sub("%s", sql)
+    without_escapes = translated.replace("%%", "")
+    assert re.search(r"%(?![sbt])", without_escapes) is None
+    # And the escaped pattern still matches on SQLite (the lookup
+    # path the rest of the suite exercises).
+    u1, _ = two_users
+    lead_id = _make_lead(u1)
+    insight_id, error = q.store_qualification_suggestion(
+        u1, lead_id, None, dict(HOT_FIELDS), confidence=0.8,
+    )
+    assert error is None, error
+    found = q.find_pending_qualification_suggestion(u1, lead_id)
+    assert found is not None and found["id"] == insight_id
+
+
+def test_lead_detail_page_keeps_qualification_when_suggestion_lookup_fails(
+    app_client, two_users, monkeypatch
+):
+    """A failing suggestion lookup must drop only the suggestion:
+    the evaluated qualification context (score, band, form) still
+    renders on the lead page. Regression for the round-1 live
+    failure, where one raising lookup nulled the whole context and
+    hid the panel."""
+    u1, _ = two_users
+    lead_id = _make_lead(u1)
+    q.set_qualification_fields(u1, lead_id, HOT_FIELDS, actor="user")
+    q.store_qualification_suggestion(u1, lead_id, None, dict(WARM_FIELDS))
+
+    def _boom(user_id, lead_id):
+        raise RuntimeError("simulated suggestion lookup failure")
+
+    monkeypatch.setattr(q, "find_pending_qualification_suggestion", _boom)
+    with app_client.session_transaction() as sess:
+        sess["user_id"] = u1
+    res = app_client.get(f"/crm/leads/{lead_id}")
+    assert res.status_code == 200
+    html = res.get_data(as_text=True)
+    assert "75 / 110" in html
+    assert "Hot" in html
+    assert "Suggested qualification" not in html
