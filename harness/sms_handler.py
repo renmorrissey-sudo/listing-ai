@@ -512,6 +512,42 @@ def process_sms_auto_reply_job(job):
             "retryable": coach.get("error") == "coach_failed",
         }
 
+    # Phase III-4: a booking request creates a pending appointment
+    # request — the single creation point for both modes (in
+    # drafts_only the process_inbound_ai path never runs, so the
+    # handler must create the request). Idempotent on the inbound id,
+    # so the ALLOW path's call and this one return the same request.
+    if analysis.get("appointment_requested"):
+        import scheduling
+
+        sched = scheduling.create_appointment_request(
+            user_id,
+            lead,
+            analysis,
+            source_ref_type="sms",
+            source_ref_id=inbound_id,
+            raw_request_text=body,
+        )
+        if sched.get("action") == "requested":
+            # The draft is the deterministic confirmation-request
+            # template, never the model's free text and never a
+            # booking claim.
+            if sched.get("message"):
+                analysis["draft_reply"] = sched.get("message")
+            analysis["suggested_reply"] = analysis.get("draft_reply")
+            if analysis.get("suggested_lead_status") == "appointment_scheduled":
+                analysis["suggested_lead_status"] = None
+        elif sched.get("action") == "offer" and sched.get("message"):
+            analysis["draft_reply"] = sched.get("message")
+            analysis["suggested_reply"] = analysis.get("draft_reply")
+    elif body:
+        # A bare confirmation ("yes", "sounds good") to an earlier
+        # confirmation request marks the request lead_confirmed — it
+        # does not create an event.
+        from harness.appointment_requests import maybe_mark_lead_confirmed
+
+        maybe_mark_lead_confirmed(user_id, lead_id, body)
+
     draft = str(analysis.get("draft_reply") or analysis.get("suggested_reply") or "").strip()[:480]
 
     # (7) Token usage is already recorded exactly once by the coach

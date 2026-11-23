@@ -296,6 +296,21 @@ def _expire_if_stale(user_id, row):
     if not is_expired_row(row):
         return False
     _set_status(user_id, row["id"], "expired")
+    # Phase III-4: an expired appointment_request approval expires its
+    # request too — the request is no longer confirmable.
+    if row.get("kind") == "appointment_request":
+        try:
+            from harness.appointment_requests import expire_request
+
+            draft = _draft_dict(row)
+            if draft.get("request_id"):
+                expire_request(user_id, draft["request_id"])
+        except Exception:
+            logger.exception(
+                "appointment request expire failed tenant=%s approval=%s",
+                user_id,
+                row["id"],
+            )
     _audit(
         user_id,
         action="approval_expired",
@@ -356,7 +371,7 @@ def approve_approval(user_id, approval_id):
     # suggested status is invalid cannot be approved. The approval stays
     # pending and the failure is audited; nothing is enqueued.
     draft = _draft_dict(row)
-    if row.get("kind") not in ("sms_reply", "follow_up_sms"):
+    if row.get("kind") not in ("sms_reply", "follow_up_sms", "appointment_request"):
         _audit(
             user_id,
             action="approval_validation_failed",
@@ -371,6 +386,10 @@ def approve_approval(user_id, approval_id):
         from harness.validation import validate_follow_up_sms_draft
 
         _, draft_error = validate_follow_up_sms_draft(user_id, draft)
+    elif row.get("kind") == "appointment_request":
+        from harness.validation import validate_appointment_request_draft
+
+        _, draft_error = validate_appointment_request_draft(user_id, draft)
     else:
         from harness.validation import validate_sms_reply_draft
 
@@ -420,6 +439,21 @@ def reject_approval(user_id, approval_id, reason=None):
     if row.get("status") not in DECIDABLE_STATUSES:
         return serialize_approval(row), "not_pending"
     _set_status(user_id, approval_id, "rejected", decided_by=user_id)
+    # Phase III-4: rejecting an appointment_request approval declines
+    # the request — the lead is not texted automatically.
+    if row.get("kind") == "appointment_request":
+        try:
+            from harness.appointment_requests import decline_request
+
+            draft = _draft_dict(row)
+            if draft.get("request_id"):
+                decline_request(user_id, draft["request_id"], reason=reason)
+        except Exception:
+            logger.exception(
+                "appointment request decline failed tenant=%s approval=%s",
+                user_id,
+                approval_id,
+            )
     _audit(
         user_id,
         action="approval_rejected",
@@ -864,6 +898,105 @@ def _execute_follow_up_sms_approval(user_id, approval_id, row, draft, correlatio
     }
 
 
+def _execute_appointment_request_approval(user_id, approval_id, row, draft, correlation_id=None):
+    """Execute an approved ``appointment_request`` approval.
+
+    Called with the row already claimed (``approved`` -> ``executing``).
+    Delegates to ``harness.appointment_requests.confirm_request`` and
+    maps the outcome onto the approval status: confirmed -> executed
+    (+ ``approval_executed`` audit); conflicted / no_calendar /
+    policy-blocked / no-slot -> blocked with the reason; a transient
+    failure (calendar unreadable) -> approval back to "approved",
+    retryable=True so the worker retries with backoff.
+    """
+    from harness.appointment_requests import confirm_request
+    from harness.validation import validate_appointment_request_draft
+
+    cleaned_draft, draft_error = validate_appointment_request_draft(user_id, draft)
+    if draft_error is not None:
+        reason = f"validation_failed: {draft_error}"
+        _mark_blocked(user_id, approval_id, "BLOCK", reason)
+        return {
+            "ok": True,
+            "sent": False,
+            "decision": "BLOCK",
+            "reason": reason,
+            "approval_id": approval_id,
+            "retryable": False,
+        }
+    try:
+        result = confirm_request(
+            user_id,
+            cleaned_draft["request_id"],
+            correlation_id=correlation_id,
+        )
+    except Exception as exc:
+        logger.exception(
+            "appointment request confirm failed tenant=%s approval=%s",
+            user_id,
+            approval_id,
+        )
+        _set_status(user_id, approval_id, "approved")
+        return {
+            "ok": False,
+            "sent": False,
+            "decision": "ALLOW",
+            "reason": f"confirm_error: {exc}"[:500],
+            "approval_id": approval_id,
+            "retryable": True,
+        }
+    if result.get("ok"):
+        _set_status(user_id, approval_id, "executed")
+        _audit(
+            user_id,
+            action="approval_executed",
+            approval_id=approval_id,
+            correlation_id=correlation_id,
+            mode=_mode(user_id),
+            gate_decision="ALLOW",
+            gate_reason=result.get("reason") or "confirmed",
+            actor="system",
+        )
+        logger.info(
+            "appointment request approval executed tenant=%s approval=%s request=%s appointment=%s",
+            user_id,
+            approval_id,
+            cleaned_draft["request_id"],
+            result.get("appointment_id"),
+        )
+        return {
+            "ok": True,
+            "sent": True,
+            "decision": "ALLOW",
+            "reason": result.get("reason") or "confirmed",
+            "approval_id": approval_id,
+            "retryable": False,
+            "appointment_id": result.get("appointment_id"),
+            "external_event_id": result.get("external_event_id"),
+            "message_id": result.get("message_id"),
+        }
+    if result.get("retryable"):
+        _set_status(user_id, approval_id, "approved")
+        return {
+            "ok": False,
+            "sent": False,
+            "decision": "DEFER",
+            "reason": str(result.get("reason") or "retryable")[:500],
+            "approval_id": approval_id,
+            "retryable": True,
+        }
+    reason = str(result.get("reason") or "confirm_refused")[:500]
+    _mark_blocked(user_id, approval_id, "BLOCK", reason)
+    return {
+        "ok": True,
+        "sent": False,
+        "decision": "BLOCK",
+        "reason": reason,
+        "approval_id": approval_id,
+        "retryable": False,
+    }
+
+
 def execute_approved(user_id, approval_id, correlation_id=None):
     """Execute an approved approval. Returns a worker result dict.
 
@@ -955,6 +1088,10 @@ def execute_approved(user_id, approval_id, correlation_id=None):
     kind = row.get("kind")
     if kind == "follow_up_sms":
         return _execute_follow_up_sms_approval(
+            user_id, approval_id, row, draft, correlation_id=correlation_id
+        )
+    if kind == "appointment_request":
+        return _execute_appointment_request_approval(
             user_id, approval_id, row, draft, correlation_id=correlation_id
         )
     if kind != "sms_reply":

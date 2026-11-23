@@ -243,6 +243,13 @@ APP_BASE_URL = (_env_strip("APP_BASE_URL") or _env_strip("APP_URL") or "http://l
 LINKEDIN_CLIENT_ID = _env_strip("LINKEDIN_CLIENT_ID") or ""
 LINKEDIN_CLIENT_SECRET = _env_strip("LINKEDIN_CLIENT_SECRET") or ""
 
+GOOGLE_CALENDAR_CLIENT_ID = _env_strip("GOOGLE_CALENDAR_CLIENT_ID") or ""
+GOOGLE_CALENDAR_CLIENT_SECRET = _env_strip("GOOGLE_CALENDAR_CLIENT_SECRET") or ""
+# No Google Cloud OAuth client exists for TopAI yet — these stay empty
+# until Ren approves creating one (Phase III-4 tracked follow-up).
+# Until then the Google provider reports setup_required and the mock
+# provider (keyed to the resolved mock transport) serves staging.
+
 # Shared Meta app credentials power both Facebook Page and Instagram professional-account posting.
 FACEBOOK_APP_ID = _env_strip("FACEBOOK_APP_ID") or ""
 FACEBOOK_APP_SECRET = _env_strip("FACEBOOK_APP_SECRET") or ""

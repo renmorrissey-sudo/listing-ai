@@ -1,8 +1,12 @@
 """Account scheduling preferences and CRM-backed calendar intelligence.
 
-There is no Google/Microsoft calendar integration in this app. The source of
-truth is TopAI appointments on the agent account, using the agent's timezone
-and account-level scheduling settings.
+Internal availability here is TopAI appointments on the agent account,
+using the agent's timezone and account-level scheduling settings. The
+connected calendar (Google first, via calendar_providers) is consulted
+at confirm time for collisions and written on confirmation — see
+harness/appointment_requests.py. Inbound booking requests never book
+here: they create a pending appointment request for the agent to
+confirm (Phase III-4).
 """
 
 from __future__ import annotations
@@ -357,12 +361,33 @@ def _next_weekday(local_now: datetime, weekday_name: str) -> datetime:
 
 def parse_requested_window(details, *, timezone_name, now=None):
     """Turn Claude appointment_details / free text into (after, before) UTC ISO."""
+    after, before, exact, _provenance = parse_requested_window_with_provenance(
+        details, timezone_name=timezone_name, now=now
+    )
+    return after, before, exact
+
+
+def parse_requested_window_with_provenance(details, *, timezone_name, now=None):
+    """Turn Claude appointment_details / free text into
+    (after, before, exact, provenance).
+
+    ``provenance`` records how the slot was derived so the agent can see
+    whether it was stated or guessed: {kind: "exact" | "window" | "day" |
+    "missing", raw_text, day, time_text, in_past}. ``kind`` is "exact"
+    when an hour was parsed with no "after"/"afternoon"/"around";
+    "window" when only a window (afternoon/morning/evening/after N) was
+    parsed; "day" when only a day was named; "missing" when nothing was
+    parseable. ``in_past`` flags a parsed slot in the past — the parser
+    never silently rolls it forward to the next day.
+    """
     tz = crm_time.resolve_zone(timezone_name)
     now = crm_time.ensure_utc(now or datetime.now()).astimezone(tz)
     details = details or {}
     if not isinstance(details, dict):
         details = {}
     blob = json.dumps(details).lower()
+    raw_text = str(details.get("text") or "")[:500]
+    time_text = str(details.get("time") or details.get("start") or "")
     day = None
     for name in WEEKDAYS:
         if re.search(rf"\b{name}\b", blob) or str(details.get("day") or "").lower() == name:
@@ -382,7 +407,6 @@ def parse_requested_window(details, *, timezone_name, now=None):
 
     hour = None
     minute = 0
-    time_text = str(details.get("time") or details.get("start") or "")
     match = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", time_text, re.I)
     if not match:
         match = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", blob, re.I)
@@ -410,7 +434,13 @@ def parse_requested_window(details, *, timezone_name, now=None):
                 after_hour += 12
 
     if local_day is None and hour is None and after_hour is None:
-        return None, None, False
+        return None, None, False, {
+            "kind": "missing",
+            "raw_text": raw_text,
+            "day": day,
+            "time_text": time_text,
+            "in_past": False,
+        }
 
     if local_day is None:
         local_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -422,133 +452,177 @@ def parse_requested_window(details, *, timezone_name, now=None):
         start_local = local_day.replace(hour=hour, minute=minute)
         after = _to_utc(start_local)
         before = _to_utc(start_local + timedelta(minutes=30 if exact else 180))
-        return after.isoformat(), before.isoformat(), exact
+        kind = "exact" if exact else "window"
+        return after.isoformat(), before.isoformat(), exact, {
+            "kind": kind,
+            "raw_text": raw_text,
+            "day": day,
+            "time_text": time_text,
+            "in_past": bool(after < crm_time.ensure_utc(now)),
+        }
     if after_hour is not None:
         start_local = local_day.replace(hour=after_hour, minute=0)
         after = _to_utc(start_local)
         before = _to_utc(local_day.replace(hour=18, minute=0))
-        return after.isoformat(), before.isoformat(), False
+        return after.isoformat(), before.isoformat(), False, {
+            "kind": "window",
+            "raw_text": raw_text,
+            "day": day,
+            "time_text": time_text,
+            "in_past": bool(after < crm_time.ensure_utc(now)),
+        }
     after = _to_utc(local_day.replace(hour=8, minute=0))
     before = _to_utc(local_day.replace(hour=18, minute=0))
-    return after.isoformat(), before.isoformat(), False
+    return after.isoformat(), before.isoformat(), False, {
+        "kind": "day",
+        "raw_text": raw_text,
+        "day": day,
+        "time_text": time_text,
+        "in_past": bool(after < crm_time.ensure_utc(now)),
+    }
 
 
 def format_slot_sms(slot: dict) -> str:
     return slot.get("local_label") or slot.get("local_start") or ""
 
 
-def handle_inbound_scheduling(user_id, lead, analysis: dict | None):
-    """Schedule, reschedule, or offer alternatives from inbound SMS intent."""
+def _appointment_type_from_details(details, existing):
+    """Appointment type for a request: the existing appointment's type
+    on a reschedule, else the parsed type when valid, else phone_call."""
+    if existing and existing.get("appointment_type") in APPOINTMENT_TYPES:
+        return existing["appointment_type"]
+    candidate = str((details or {}).get("appointment_type") or (details or {}).get("type") or "")
+    if candidate in APPOINTMENT_TYPES:
+        return candidate
+    return "phone_call"
+
+
+def create_appointment_request(user_id, lead, analysis: dict | None, *,
+                               source_ref_type="sms", source_ref_id=None,
+                               raw_request_text=None):
+    """Create a pending appointment request from inbound intent — never book.
+
+    Phase III-4 replacement for ``handle_inbound_scheduling`` (removed):
+    BOTH auto-book branches are gone — the exact ±900s match and the
+    vague-window ``slots[0]`` book. A booking request creates a pending
+    ``harness_appointment_requests`` row; the calendar event is created
+    and the lead is told it is booked ONLY after the agent confirms.
+    Returns {"action": "requested" | "offer" | "none", "request": row|None,
+    "alternatives": [...], "message": str|None, "provenance": {...}}.
+    The "offer" action is only the slot-offer text — no booking behind it.
+    """
+    from harness.appointment_requests import (
+        build_confirmation_request_text,
+        create_request,
+    )
+
     analysis = analysis or {}
     if not analysis.get("appointment_requested") and not _looks_like_reschedule(analysis):
         return {"action": "none"}
     lead_id = lead["id"]
     settings = get_settings(user_id)
+    timezone_name = settings["timezone_name"]
     details = analysis.get("appointment_details") if isinstance(analysis.get("appointment_details"), dict) else {}
-    after, before, exact = parse_requested_window(details, timezone_name=settings["timezone_name"])
+    if raw_request_text:
+        details = dict(details)
+        details.setdefault("text", raw_request_text)
+    after, before, exact, provenance = parse_requested_window_with_provenance(
+        details, timezone_name=timezone_name
+    )
     existing = get_existing_appointment(user_id, lead_id=lead_id)
     reschedule = bool(existing) and (
         _looks_like_reschedule(analysis) or str(analysis.get("intent") or "").lower().find("reschedul") >= 0
     )
+    appointment_type = _appointment_type_from_details(details, existing if reschedule else None)
+    reschedules_id = (existing or {}).get("id") if reschedule else None
 
-    if not after:
-        slots = find_available_slots(user_id, limit=3)
-        if not slots:
-            return {"action": "none"}
-        labels = " or ".join(format_slot_sms(s) for s in slots[:2])
+    # No time parseable, or day-only: a pending request with a NULL
+    # slot; the agent picks the exact slot at confirm time. Never dropped.
+    if not after or provenance.get("kind") in ("day", "missing"):
+        request, _action = create_request(
+            user_id,
+            lead_id,
+            channel="sms" if source_ref_type == "sms" else "voice",
+            source_ref_type=source_ref_type,
+            source_ref_id=source_ref_id,
+            raw_request_text=raw_request_text,
+            requested_start_at=None,
+            requested_end_at=None,
+            provenance=provenance,
+            appointment_type=appointment_type,
+            reschedules_appointment_id=reschedules_id,
+            timezone_name=timezone_name,
+        )
         return {
-            "action": "offer",
-            "alternatives": slots,
-            "message": f"I have {labels} available. Would either work?",
+            "action": "requested",
+            "request": request,
+            "message": build_confirmation_request_text(
+                None, None, timezone_name, provenance.get("kind")
+            ),
+            "provenance": provenance,
         }
 
+    # A time was parsed: hold the request when the window has open
+    # slots. The request holds the PARSED slot (the agent picks the
+    # exact slot at confirm time for window kinds); it never books.
     slots = find_available_slots(
         user_id,
         after=after,
         before=before,
         limit=6,
-        exclude_appointment_id=(existing or {}).get("id") if reschedule else None,
+        exclude_appointment_id=reschedules_id,
     )
-    requested = _parse_iso(after) if exact else None
-    if not requested and after and before:
-        window_start = _parse_iso(after)
-        window_end = _parse_iso(before)
-        if window_start and window_end and (window_end - window_start) <= timedelta(hours=3):
-            requested = window_start
-
-    if requested:
-        for slot in slots:
-            start = _parse_iso(slot["start_at"])
-            if start and abs((start - requested).total_seconds()) <= 900:
-                return _book_or_reschedule(user_id, lead, existing if reschedule else None, slot)
-        nearby = find_available_slots(
+    if slots:
+        slot_start = _parse_iso(after)
+        slot_end = _parse_iso(before)
+        request, _action = create_request(
             user_id,
-            after=(requested - timedelta(hours=2)).isoformat(),
-            before=(requested + timedelta(hours=4)).isoformat(),
-            limit=4,
-            exclude_appointment_id=(existing or {}).get("id") if reschedule else None,
+            lead_id,
+            channel="sms" if source_ref_type == "sms" else "voice",
+            source_ref_type=source_ref_type,
+            source_ref_id=source_ref_id,
+            raw_request_text=raw_request_text,
+            requested_start_at=slot_start.isoformat() if slot_start else None,
+            requested_end_at=slot_end.isoformat() if slot_end else None,
+            provenance=provenance,
+            appointment_type=appointment_type,
+            reschedules_appointment_id=reschedules_id,
+            timezone_name=timezone_name,
         )
-        nearby = [s for s in nearby if _parse_iso(s["start_at"]) and abs((_parse_iso(s["start_at"]) - requested).total_seconds()) > 900]
-        if nearby:
-            labels = " or ".join(format_slot_sms(s) for s in nearby[:2])
-            return {
-                "action": "offer",
-                "alternatives": nearby,
-                "message": f"That time is booked, but {labels} are available. Would either work?",
-            }
+        return {
+            "action": "requested",
+            "request": request,
+            "message": build_confirmation_request_text(
+                slot_start.isoformat() if slot_start else None,
+                slot_end.isoformat() if slot_end else None,
+                timezone_name,
+                provenance.get("kind"),
+            ),
+            "provenance": provenance,
+        }
 
-    if slots and not exact:
-        return _book_or_reschedule(user_id, lead, existing if reschedule else None, slots[0])
+    # Nothing open in the requested window: offer nearby alternatives.
     nearby = find_available_slots(
         user_id,
         after=after,
         limit=3,
-        exclude_appointment_id=(existing or {}).get("id") if reschedule else None,
+        exclude_appointment_id=reschedules_id,
     )
     if nearby:
         labels = " or ".join(format_slot_sms(s) for s in nearby[:2])
+        if exact:
+            message = f"That time is booked, but {labels} are available. Would either work?"
+        else:
+            message = f"That window is booked, but {labels} are available. Would either work?"
         return {
             "action": "offer",
             "alternatives": nearby,
-            "message": f"That window is booked, but {labels} are available. Would either work?",
+            "message": message,
+            "provenance": provenance,
         }
-    return {"action": "none"}
+    return {"action": "none", "provenance": provenance}
 
 
 def _looks_like_reschedule(analysis: dict) -> bool:
     blob = f"{analysis.get('intent') or ''} {analysis.get('summary') or ''}".lower()
     return "reschedul" in blob or "can't meet" in blob or "cannot meet" in blob or "move" in blob
-
-
-def _book_or_reschedule(user_id, lead, existing, slot):
-    payload = {
-        "lead_id": lead["id"],
-        "start_at": slot["start_at"],
-        "end_at": slot["end_at"],
-        "appointment_type": "phone_call",
-        "notes": "Scheduled by TopAI from inbound SMS",
-    }
-    if existing:
-        appt, err, alternatives = reschedule_calendar_event(user_id, existing["id"], payload)
-        if err:
-            return {"action": "offer", "alternatives": alternatives or [], "message": err}
-        return {
-            "action": "rescheduled",
-            "appointment": appt,
-            "slot": slot,
-            "message": (
-                f"I've moved our appointment to {format_slot_sms(slot)}. "
-                "You're all set."
-            ),
-        }
-    appt, err, alternatives = create_calendar_event(user_id, payload)
-    if err:
-        return {"action": "offer", "alternatives": alternatives or [], "message": err}
-    return {
-        "action": "scheduled",
-        "appointment": appt,
-        "slot": slot,
-        "message": (
-            f"Yes, {format_slot_sms(slot)} works. I've scheduled it and this is your confirmation."
-        ),
-    }

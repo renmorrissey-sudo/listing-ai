@@ -2421,7 +2421,9 @@ def apply_coach_queue_flags(user_id, lead_id, analysis, insight_id=None, *, auto
     if auto_handled:
         resolve_needs_attention_by_reason(user_id, lead_id, "unreviewed_inbound", "Handled automatically by TopAI")
         resolve_needs_attention_by_reason(user_id, lead_id, "draft_awaiting_approval", "Handled automatically by TopAI")
-        resolve_needs_attention_by_reason(user_id, lead_id, "appointment_requested", "Handled automatically by TopAI")
+        # Phase III-4: "appointment_requested" is NOT auto-resolved —
+        # a booking request is not handled until the agent confirms
+        # (or declines) it, so the Needs Attention item stays open.
         return
     if analysis.get("requires_manual_review") or analysis.get("sensitive_topic"):
         upsert_needs_attention(user_id, lead_id, "sensitive_topic", priority="urgent", source_ref_type="insight", source_ref_id=insight_id)
