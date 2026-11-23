@@ -1065,10 +1065,16 @@ def test_same_lead_same_reason_second_send_blocked(two_users, monkeypatch):
     assert len(_audit_rows(u1, action="follow_up_sms_blocked")) == 2
 
     # (c) After 7 days: the same triple may send again. Age the sent
-    # row past the window (the blocked rows do not count).
+    # row past the window (the blocked rows do not count) — the send
+    # row AND its ledger row, which is now the guard's source of
+    # truth (Phase III-3).
     with db.get_db() as conn:
         conn.execute(
             "UPDATE harness_follow_up_sends SET sent_at = ? WHERE job_id = ?",
+            ((_now() - timedelta(days=8)).isoformat(), sched_a["job_id"]),
+        )
+        conn.execute(
+            "UPDATE harness_outreach_ledger SET sent_at = ? WHERE job_id = ?",
             ((_now() - timedelta(days=8)).isoformat(), sched_a["job_id"]),
         )
     follow_up_d = _make_follow_up(

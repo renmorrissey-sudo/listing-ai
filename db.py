@@ -699,6 +699,14 @@ def upsert_lead(user_id, phone_number, data=None, source="sms"):
     return lead_id
 
 
+def _normalize_phone_e164(phone_number):
+    """Canonical E.164 routine, via lead_service (lazy import: db is
+    the lowest layer and lead_service imports db at module level)."""
+    from lead_service import normalize_phone_e164
+
+    return normalize_phone_e164(phone_number)
+
+
 def create_lead_record(
     user_id,
     phone_number,
@@ -713,21 +721,28 @@ def create_lead_record(
     assigned_user_id=None,
     touch_call=False,
     touch_sms=False,
+    phone_normalized=None,
 ):
     now = datetime.now(timezone.utc).isoformat()
+    normalized = (
+        phone_normalized
+        if phone_normalized is not None
+        else _normalize_phone_e164(phone_number)
+    )
     with get_db() as conn:
         cur = conn.execute(
             """
             INSERT INTO leads
-                (user_id, name, phone_number, email, lead_type, property_interest, status, source,
+                (user_id, name, phone_number, phone_normalized, email, lead_type, property_interest, status, source,
                  notes, assigned_user_id, created_at, updated_at,
                  last_contacted_at, latest_call_at, last_outbound_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
                 name or "Lead",
                 phone_number,
+                normalized,
                 (email or "").strip()[:200] or None,
                 lead_type,
                 property_interest,
@@ -970,26 +985,23 @@ def find_lead_by_phone_normalized(user_id, phone_number):
     """
     Tenant-scoped lead lookup tolerant of phone formatting differences.
     "+13035551212", "(303) 555-1212", and "3035551212" all match the same lead.
-    Exact match wins; otherwise compares the last 10 digits (US national number).
+    Exact match wins; otherwise an indexed match on the normalized
+    (E.164) phone — no full-table scan (Phase III-3 retired the
+    unbounded last-10 scan). An un-normalizable number falls back to
+    exact-string match on the raw value only, never a new lead.
     """
     exact = get_lead_by_phone(user_id, phone_number)
     if exact:
         return exact
-    target = _phone_digits(phone_number)
-    if len(target) < 10:
+    normalized = _normalize_phone_e164(phone_number)
+    if not normalized:
         return None
-    target10 = target[-10:]
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM leads WHERE user_id = ? AND phone_number IS NOT NULL "
-            "ORDER BY updated_at DESC",
-            (user_id,),
-        ).fetchall()
-    for row in rows:
-        digits = _phone_digits(row["phone_number"])
-        if len(digits) >= 10 and digits[-10:] == target10:
-            return dict(row)
-    return None
+        row = conn.execute(
+            "SELECT * FROM leads WHERE user_id = ? AND phone_normalized = ?",
+            (user_id, normalized),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def list_lead_owners_by_phone(phone_number):
@@ -1000,37 +1012,39 @@ def list_lead_owners_by_phone(phone_number):
     SMS on a shared sender number -- the number alone cannot identify
     the tenant, so the caller must resolve among these owners
     deterministically and never silently pick an unrelated tenant.
+    An un-normalizable number falls back to exact-string match on the
+    raw value only.
     """
-    target = _phone_digits(phone_number)
-    if len(target) < 10:
-        return []
-    target10 = target[-10:]
+    normalized = _normalize_phone_e164(phone_number)
     with get_db() as conn:
-        # Trailing digits are contiguous in every common format; prefilter with them.
-        # Keep the % wildcard inside the bound value: a literal % in the SQL text
-        # breaks psycopg's placeholder parsing on Postgres.
-        rows = conn.execute(
-            "SELECT id, user_id, phone_number, updated_at FROM leads "
-            "WHERE phone_number IS NOT NULL AND phone_number LIKE ? "
-            "ORDER BY updated_at DESC",
-            (f"%{target10[-4:]}",),
-        ).fetchall()
+        if normalized:
+            rows = conn.execute(
+                "SELECT id, user_id, phone_number, updated_at FROM leads "
+                "WHERE phone_normalized = ? "
+                "ORDER BY updated_at DESC",
+                (normalized,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, user_id, phone_number, updated_at FROM leads "
+                "WHERE phone_number = ? "
+                "ORDER BY updated_at DESC",
+                (str(phone_number or ""),),
+            ).fetchall()
     owners = []
     seen = set()
     for row in rows:
-        digits = _phone_digits(row["phone_number"])
-        if len(digits) >= 10 and digits[-10:] == target10:
-            user_id = row["user_id"]
-            if user_id in seen:
-                continue
-            seen.add(user_id)
-            owners.append(
-                {
-                    "user_id": user_id,
-                    "lead_id": row["id"],
-                    "updated_at": row["updated_at"],
-                }
-            )
+        user_id = row["user_id"]
+        if user_id in seen:
+            continue
+        seen.add(user_id)
+        owners.append(
+            {
+                "user_id": user_id,
+                "lead_id": row["id"],
+                "updated_at": row["updated_at"],
+            }
+        )
     return owners
 
 

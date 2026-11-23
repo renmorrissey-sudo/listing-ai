@@ -55,11 +55,12 @@ MAX_PENDING_PER_LEAD = 5
 # deferrals the send dead-letters instead of looping forever.
 QUIET_HOURS_DEFERRAL_CAP = 14
 
-# Lead+reason duplicate guard (PM ruling 3): a second send for the same
-# (tenant, lead, reason_norm) BLOCKs while an earlier send for that
-# triple is scheduled/claimed, and within this many days after a sent
-# row for that triple. After the window a repeat may send.
-DUPLICATE_WINDOW_DAYS = 7
+# Lead+reason duplicate guard (PM ruling 3), ledger-backed since
+# Phase III-3: see harness/outreach_ledger.py. A second send for the
+# same (tenant, lead, reason_norm) BLOCKs while an earlier send for
+# that triple is in flight, and within DUPLICATE_WINDOW_DAYS after a
+# sent row for that triple. After the window a repeat may send.
+# (DUPLICATE_WINDOW_DAYS lives in harness.outreach_ledger.)
 
 # sms_messages statuses that mean the provider already accepted the
 # message (mock provider records "mock_sent").
@@ -406,6 +407,25 @@ def schedule_follow_up_sms(user_id, lead_id, follow_up_id, body, scheduled_at, r
             ),
         )
         send_id = cur.lastrowid
+        # Phase III-3: the durable outreach ledger row for this send,
+        # created in the same transaction as the send row so the two
+        # can never diverge at schedule time.
+        from harness.outreach_ledger import record_outreach
+        from lead_service import normalize_phone_e164
+
+        record_outreach(
+            user_id,
+            lead_id=lead_id,
+            channel="sms",
+            reason=reason,
+            reason_norm=reason_norm,
+            phone_normalized=normalize_phone_e164(phone),
+            status="scheduled",
+            sms_message_id=message_id,
+            job_id=job_id,
+            scheduled_at=effective_iso,
+            conn=conn,
+        )
     return {
         "job_id": job_id,
         "follow_up_send_id": send_id,
@@ -563,48 +583,35 @@ def _claim_outbound_row(message_id):
     return "unclaimable", row
 
 
-def _find_duplicate_send(user_id, lead_id, reason_norm, exclude_job_id):
-    """Lead+reason guard (PM ruling 3).
+def _set_ledger_status(user_id, lookup_job_id, status, **fields):
+    """Mirror a lifecycle transition onto the outreach ledger row for
+    this job (Phase III-3). No-op with a warning when the row is
+    missing (a pre-047 job the backfill did not cover) — the send
+    itself must never fail for a missing ledger row."""
+    try:
+        from harness.outreach_ledger import (
+            get_ledger_row_by_job,
+            update_outreach_status,
+        )
 
-    Returns (row, scope) for the earliest conflicting send row, else
-    (None, None). ``scope`` is "in_flight" (an earlier send for the
-    triple is still scheduled/claimed) or "within_window" (an earlier
-    send for the triple was sent within DUPLICATE_WINDOW_DAYS). A sent
-    row older than the window does not block.
-    """
-    with db.get_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, job_id, status, sent_at
-            FROM harness_follow_up_sends
-            WHERE user_id = ? AND lead_id = ? AND reason_norm = ?
-              AND status IN ('scheduled', 'claimed', 'sent')
-            ORDER BY id ASC
-            """,
-            (user_id, lead_id, reason_norm),
-        ).fetchall()
-    window_start = _now() - timedelta(days=DUPLICATE_WINDOW_DAYS)
-    for raw in rows:
-        row = _row(raw)
-        if row.get("job_id") == exclude_job_id:
-            continue
-        if row.get("status") in ("scheduled", "claimed"):
-            return row, "in_flight"
-        if row.get("status") == "sent":
-            sent_at = None
-            if row.get("sent_at"):
-                try:
-                    sent_at = datetime.fromisoformat(
-                        str(row["sent_at"]).replace("Z", "+00:00")
-                    )
-                    if sent_at.tzinfo is None:
-                        sent_at = sent_at.replace(tzinfo=timezone.utc)
-                except (TypeError, ValueError):
-                    sent_at = None
-            # Unparseable sent_at fails safe: treat as within window.
-            if sent_at is None or sent_at >= window_start:
-                return row, "within_window"
-    return None, None
+        row = get_ledger_row_by_job(user_id, lookup_job_id)
+        if row is None:
+            logger.warning(
+                "outreach ledger row missing job=%s tenant=%s status=%s",
+                lookup_job_id,
+                user_id,
+                status,
+            )
+            return
+        update_outreach_status(row["id"], status=status, **fields)
+    except Exception:
+        logger.warning(
+            "outreach ledger status update failed job=%s tenant=%s status=%s",
+            lookup_job_id,
+            user_id,
+            status,
+            exc_info=True,
+        )
 
 
 def _decide_follow_up_policy(user_id, lead, mode, paused, correlation_id=None):
@@ -718,7 +725,8 @@ def _complete_send_side_effects(user_id, lead_id, follow_up_id, send_row, sms_ro
     Marks the send row sent, completes the CRM follow-up via the
     existing crm_db path (never a raw UPDATE), touches the lead's
     outbound stamp, and writes the lead-activity row. Idempotent: safe
-    to call on the already_sent path too.
+    to call on the already_sent path too. Mirrors the transition onto
+    the outreach ledger row (Phase III-3) so the guard sees the send.
     """
     now_iso = _now_iso()
     _update_send_row(
@@ -727,6 +735,12 @@ def _complete_send_side_effects(user_id, lead_id, follow_up_id, send_row, sms_ro
         sent_at=sms_row.get("sent_at") or now_iso,
         provider_message_id=sms_row.get("provider_message_id"),
         last_gate_reason="sent",
+    )
+    _set_ledger_status(
+        user_id,
+        send_row.get("job_id"),
+        "sent",
+        sent_at=sms_row.get("sent_at") or now_iso,
     )
     if follow_up_id:
         try:
@@ -766,6 +780,9 @@ def _handle_draft(user_id, lead_id, job_id, send_row, sms_row, body, mode,
         send_row["id"], status="drafted", approval_id=approval_id,
         last_gate_reason=gate_reason,
     )
+    _set_ledger_status(
+        user_id, job_id, "drafted", approval_id=approval_id,
+    )
     _audit(
         user_id,
         action="follow_up_sms_drafted",
@@ -794,28 +811,49 @@ def _handle_draft(user_id, lead_id, job_id, send_row, sms_row, body, mode,
 
 
 def _handle_block(user_id, lead_id, job_id, send_row, sms_row, mode,
-                  gate_reason, correlation_id, *, reset_sms_row=False):
+                  gate_reason, correlation_id, *, reset_sms_row=False,
+                  conflicting_row=None):
     """BLOCK outcome: audit + needs-attention, no send, no approval.
 
     The CRM follow-up row stays pending (a human may still do the
     follow-up manually). The draft sms row stays a draft so the text
     remains usable by a human.
+
+    When ``conflicting_row`` is given (the duplicate guard fired), the
+    audit row + a lead-timeline entry name the prior outreach
+    (Phase III-3, criterion 2) instead of the bare gate reason, and
+    the ledger row for the blocked attempt is recorded 'blocked'.
+    The result reason stays the short gate_reason so existing callers
+    (and the III-1 test) keep seeing "duplicate_follow_up_send".
     """
     _update_send_row(
         send_row["id"], status="blocked", last_gate_reason=gate_reason,
     )
+    _set_ledger_status(user_id, job_id, "blocked")
     if reset_sms_row and sms_row is not None:
         _set_sms_row_draft(sms_row["id"], error_message=gate_reason)
-    _audit(
-        user_id,
-        action="follow_up_sms_blocked",
-        gate_decision="BLOCK",
-        gate_reason=gate_reason,
-        mode=mode,
-        target_id=lead_id,
-        job_id=job_id,
-        correlation_id=correlation_id,
-    )
+    if conflicting_row is not None:
+        from harness.outreach_ledger import write_duplicate_refusal_evidence
+
+        write_duplicate_refusal_evidence(
+            user_id,
+            lead_id,
+            conflicting_row,
+            job_id=job_id,
+            correlation_id=correlation_id,
+            mode=mode,
+        )
+    else:
+        _audit(
+            user_id,
+            action="follow_up_sms_blocked",
+            gate_decision="BLOCK",
+            gate_reason=gate_reason,
+            mode=mode,
+            target_id=lead_id,
+            job_id=job_id,
+            correlation_id=correlation_id,
+        )
     _needs_attention(user_id, lead_id, sms_row["id"] if sms_row else None,
                      "follow_up_sms_blocked")
     logger.info(
@@ -878,6 +916,7 @@ def _handle_quiet_hours_defer(user_id, lead, job_id, send_row, sms_row, mode,
             send_row["id"], status="dead_letter",
             last_gate_reason="quiet_hours_deferral_cap_reached",
         )
+        _set_ledger_status(user_id, job_id, "dead_letter")
         _audit(
             user_id,
             action="follow_up_sms_deferred",
@@ -931,6 +970,15 @@ def _handle_quiet_hours_defer(user_id, lead, job_id, send_row, sms_row, mode,
         scheduled_at=send_at_iso,
         deferred_count=new_count,
         last_gate_reason=f"quiet_hours; rescheduled_for={send_at_iso}",
+    )
+    # The ledger row stays 'scheduled' with the new fire time and is
+    # re-pointed at the continuation job (Phase III-3).
+    _set_ledger_status(
+        user_id,
+        job_id,
+        "scheduled",
+        job_id=continuation_job_id,
+        scheduled_at=send_at_iso,
     )
     # Keep the sms-row view consistent with the new fire time without
     # changing its draft status (db.schedule_sms_message would flip it
@@ -1046,6 +1094,7 @@ def process_follow_up_sms_send_job(job):
         )
         _update_send_row(send_row["id"], status="dead_letter",
                          last_gate_reason="message_not_found")
+        _set_ledger_status(user_id, job_id, "dead_letter")
         _audit(
             user_id, action="follow_up_sms_failed", gate_decision=None,
             gate_reason="message_not_found", mode=None, target_id=lead_id,
@@ -1082,18 +1131,37 @@ def process_follow_up_sms_send_job(job):
             "provider_message_id": sms_row.get("provider_message_id"),
         }
 
-    # Lead+reason guard (ruling 3): in-flight or within 7 days of a sent
-    # row for the same (tenant, lead, reason_norm) BLOCKs.
+    # Phase III-3: the ledger row for this job. The handler claims it
+    # ('scheduled' -> 'claimed') so a concurrent firing for the same
+    # triple sees it in flight; the guard below excludes this row.
+    from harness.outreach_ledger import (
+        check_outreach_allowed,
+        get_ledger_row_by_job,
+    )
+
+    ledger_row = get_ledger_row_by_job(user_id, job_id)
+    if ledger_row is not None and ledger_row.get("status") == "scheduled":
+        _set_ledger_status(user_id, job_id, "claimed")
+        ledger_row = dict(ledger_row, status="claimed")
+
+    # Lead+reason guard (ruling 3, ledger-backed): in-flight or within
+    # 7 days of a sent row for the same (tenant, lead, reason_norm)
+    # BLOCKs. The refusal names the prior outreach in the audit row
+    # and on the lead timeline (criterion 2).
     reason_norm = crm_db.normalize_follow_up_reason(
         send_row.get("reason") or reason_label
     )
-    duplicate_row, duplicate_scope = _find_duplicate_send(
-        user_id, lead_id, reason_norm, job_id
+    allowed, duplicate_row, duplicate_scope = check_outreach_allowed(
+        user_id,
+        lead_id,
+        reason_norm,
+        exclude_ledger_id=ledger_row["id"] if ledger_row else None,
     )
-    if duplicate_row is not None:
+    if not allowed:
         return _handle_block(
             user_id, lead_id, job_id, send_row, sms_row, mode,
             "duplicate_follow_up_send", correlation_id,
+            conflicting_row=duplicate_row,
         )
 
     # C2 (early): never burn a provider call on a job that cannot send
@@ -1203,6 +1271,7 @@ def process_follow_up_sms_send_job(job):
     if not body:
         _update_send_row(send_row["id"], status="dead_letter",
                          last_gate_reason="empty_body")
+        _set_ledger_status(user_id, job_id, "dead_letter")
         return {
             "ok": False, "sent": False, "decision": "ALLOW",
             "reason": "empty_body", "approval_id": None, "retryable": False,
@@ -1259,6 +1328,7 @@ def process_follow_up_sms_send_job(job):
         release_reservation(user_id, reservation_corr)
         _update_send_row(send_row["id"], status="dead_letter",
                          last_gate_reason="message_row_unclaimable")
+        _set_ledger_status(user_id, job_id, "dead_letter")
         return {
             "ok": False, "sent": False, "decision": "ALLOW",
             "reason": "message_row_unclaimable", "approval_id": None,

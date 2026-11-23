@@ -105,7 +105,14 @@ def test_second_call_same_number_reuses_lead(app_client, two_users, monkeypatch)
         "desired_outcome": "Book consult",
     }
     r1 = app_client.post("/voice/calls", json=payload)
-    r2 = app_client.post("/voice/calls", json={**payload, "lead_name": "Benjamin Miller"})
+    # Second call uses a different purpose (Phase III-3: the same
+    # purpose for the same lead within 7 days now 409s — that refusal
+    # is covered by test_sms_ledger_row_blocks_voice_call in
+    # test_outreach_ledger.py).
+    r2 = app_client.post(
+        "/voice/calls",
+        json={**payload, "lead_name": "Benjamin Miller", "call_purpose": "Price update"},
+    )
     assert r1.status_code == 201 and r2.status_code == 201
     assert r1.get_json()["lead_id"] == r2.get_json()["lead_id"]
     assert len(db.list_leads(u1)) == 1

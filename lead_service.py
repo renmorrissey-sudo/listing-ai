@@ -14,19 +14,41 @@ VOICE_SOURCE = "AI Call Assistant"
 SMS_SOURCE = "sms"
 
 
+_E164_RE = re.compile(r"\+[1-9]\d{9,14}\Z")
+
+
 def normalize_phone_e164(phone_number: str) -> str:
-    """Normalize a phone number to E.164 (+country…digits)."""
+    """Normalize a phone number to E.164 (+country…digits).
+
+    The single canonical routine (Phase III-3): the two webhook copies
+    were deleted in favor of this one. Only digits and common
+    formatting (+ - ( ) space .) are allowed; anything else (letters,
+    extension markers like "x123") is un-normalizable and returns "".
+    A leading "+" keeps its digits; a 10-digit US number gains "+1";
+    an 11-digit number starting with "1" gains "+". The result must
+    match E.164 shape (``\\+[1-9]\\d{9,14}``) or "" is returned —
+    "+123" and other too-short digit strings are un-normalizable.
+    Callers treat "" as "cannot normalize" and fall back to exact-
+    string match on the raw value only, never a new lead, never a
+    silent drop.
+    """
     raw = str(phone_number or "").strip()
     if not raw:
         return ""
+    if re.search(r"[^0-9+\-().\s]", raw):
+        return ""
+    if raw.count("+") > 1 or ("+" in raw[1:]):
+        return ""
+    digits = re.sub(r"\D", "", raw)
     if raw.startswith("+"):
-        return "+" + re.sub(r"\D", "", raw[1:])
-    digits_only = re.sub(r"\D", "", raw)
-    if len(digits_only) == 10:
-        return "+1" + digits_only
-    if len(digits_only) == 11 and digits_only.startswith("1"):
-        return "+" + digits_only
-    return "+" + digits_only if digits_only else ""
+        candidate = "+" + digits
+    elif len(digits) == 10:
+        candidate = "+1" + digits
+    elif len(digits) == 11 and digits.startswith("1"):
+        candidate = "+" + digits
+    else:
+        return ""
+    return candidate if _E164_RE.fullmatch(candidate) else ""
 
 
 def format_phone_display(phone_number: str) -> str:
@@ -80,9 +102,15 @@ def upsert_crm_lead(
     Returns (lead_id, created: bool, lead: dict).
     """
     data = data or {}
-    phone = normalize_phone_e164(phone_number)
+    normalized = normalize_phone_e164(phone_number)
+    phone = normalized or str(phone_number or "").strip()
     if not phone:
         raise ValueError("A valid phone number is required to upsert a lead.")
+    # Un-normalizable numbers (vanity numbers, fixtures with
+    # non-digit characters) fall back to the exact raw string (Q4):
+    # never a new lead for a formatting variant, never a silent drop.
+    # phone_normalized stays "" for them, matching the migration 047
+    # backfill; the lookup below matches them by exact string.
 
     now = _now()
     name = (data.get("lead_name") or data.get("name") or "").strip() or "Lead"
@@ -127,6 +155,7 @@ def upsert_crm_lead(
     lead_id = db.create_lead_record(
         user_id=user_id,
         phone_number=phone,
+        phone_normalized=normalized or "",
         name=name,
         email=email,
         lead_type=lead_type,
