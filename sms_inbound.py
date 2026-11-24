@@ -12,6 +12,7 @@ import crm_db
 import crm_time
 import db
 import sms_coach
+from crm_constants import normalize_lead_status
 from lead_service import SMS_SOURCE, upsert_crm_lead
 from sms_prompts import build_inbound_reply_analysis_prompt
 from sms_validation import validate_e164_phone
@@ -326,9 +327,15 @@ def process_inbound_sms(payload: dict, *, defer_coach: bool = True, app=None) ->
     else:
         db.update_lead_from_analysis(lead_id, owner_id, last_inbound_at=now)
         if (lead or {}).get("opt_out_status") != "opted_out":
-            crm_db.set_lead_status(
-                owner_id, lead_id, "contacted", from_automation=True
-            )
+            # Phase III-4 status guard: an inbound receipt only ever
+            # promotes a fresh lead to "contacted". It must never move
+            # a lead backward — a lead already past first contact
+            # (qualified, appointment_scheduled, ...) keeps its state.
+            current = normalize_lead_status((lead or {}).get("status"))
+            if current in {"new", "attempting_contact"}:
+                crm_db.set_lead_status(
+                    owner_id, lead_id, "contacted", from_automation=True
+                )
         crm_db.add_lead_activity(
             lead_id,
             owner_id,

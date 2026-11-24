@@ -21,6 +21,7 @@ import crm_db
 import db
 import external_leads_db as xdb
 import tenant_sms_db as tdb
+from crm_constants import normalize_lead_status
 from lead_service import normalize_phone_e164 as _normalize_phone
 from sms_providers.telnyx import TelnyxSMSProvider
 
@@ -393,7 +394,12 @@ def _touch_inbound_lead_state(user_id, lead_id, lead, keyword):
             lead_id, user_id, last_inbound_at=datetime.now(timezone.utc).isoformat()
         )
         if keyword != "opt_out" and (lead or {}).get("opt_out_status") != "opted_out":
-            crm_db.set_lead_status(user_id, lead_id, "contacted", from_automation=True)
+            # Phase III-4 status guard (parity with the Twilio receipt
+            # path): an inbound receipt only ever promotes a fresh lead
+            # to "contacted" — it must never move a lead backward.
+            current = normalize_lead_status((lead or {}).get("status"))
+            if current in {"new", "attempting_contact"}:
+                crm_db.set_lead_status(user_id, lead_id, "contacted", from_automation=True)
     except Exception:
         logger.exception(
             "Failed to update lead activity state lead_id=%s tenant=%s", lead_id, user_id
