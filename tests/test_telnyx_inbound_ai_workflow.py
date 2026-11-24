@@ -11,6 +11,7 @@ import uuid
 from unittest.mock import patch
 
 import config
+import crm_db
 import db
 import sms_ai_agent
 import sms_coach
@@ -492,3 +493,42 @@ def test_auto_reply_respects_toll_free_gate(two_users, monkeypatch):
     assert outcome["replied"] is False
     assert outcome["reason"] == "toll_free_not_verified"
     assert not send.called
+
+
+def test_inbound_does_not_demote_qualified(two_users, monkeypatch):
+    """Phase III-4 status guard (regression): an ordinary Telnyx inbound
+    must never move a lead backward. Pre-fix, the Telnyx receipt path
+    (_touch_inbound_lead_state) wrote "contacted" unconditionally,
+    demoting a qualified lead (staging lead 12, 2026-11-23 19:50 UTC)
+    even though its qualification stood."""
+    u1, _ = two_users
+    account = _setup_tenant(u1, monkeypatch)
+    contact = _unique_e164("702")
+    lead_id, _ = _lead(u1, contact)
+    updated, error = crm_db.set_lead_status(
+        u1, lead_id, "qualified", via_qualification=True
+    )
+    assert error is None and updated["status"] == "qualified"
+
+    result, status = txwh.handle_messaging_webhook(_inbound_payload(contact, account))
+    assert status == 200 and result["ok"] is True
+
+    lead = db.get_lead(lead_id, u1)
+    assert lead["status"] == "qualified"
+
+
+def test_inbound_promotes_attempting_contact_to_contacted(two_users, monkeypatch):
+    """Guard: the forward move still works — an attempting_contact lead
+    becomes contacted on its next inbound."""
+    u1, _ = two_users
+    account = _setup_tenant(u1, monkeypatch)
+    contact = _unique_e164("703")
+    lead_id, _ = _lead(u1, contact)
+    updated, error = crm_db.set_lead_status(u1, lead_id, "attempting_contact")
+    assert error is None and updated["status"] == "attempting_contact"
+
+    result, status = txwh.handle_messaging_webhook(_inbound_payload(contact, account))
+    assert status == 200 and result["ok"] is True
+
+    lead = db.get_lead(lead_id, u1)
+    assert lead["status"] == "contacted"

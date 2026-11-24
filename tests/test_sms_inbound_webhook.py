@@ -373,3 +373,44 @@ def test_start_restores_opt_out_without_sending(app_client, two_users):
     assert lead["opt_out_status"] == "active"
     activities = crm_db.list_lead_activities(u1, lead_id)
     assert any(a["event_type"] == "sms_opt_in" for a in activities)
+
+
+def test_inbound_does_not_demote_appointment_scheduled(app_client, two_users):
+    """Phase III-4 status guard (regression): an ordinary inbound SMS must
+    never move a lead backward. Pre-fix, the Twilio receipt path wrote
+    "contacted" unconditionally, demoting an appointment_scheduled lead
+    (staging lead 19, 2026-11-23 19:45 UTC) even though its appointment
+    still existed."""
+    u1, _ = two_users
+    lead_id = _seed_lead(u1)
+    updated, error = crm_db.set_lead_status(u1, lead_id, "appointment_scheduled")
+    assert error is None and updated["status"] == "appointment_scheduled"
+
+    res = _post_inbound(
+        app_client,
+        body="Can we meet Thursday at 10am?",
+        message_sid="SMguard001",
+    )
+    assert res.status_code == 200
+
+    lead = db.get_lead(lead_id, u1)
+    assert lead["status"] == "appointment_scheduled"
+
+
+def test_inbound_promotes_new_lead_to_contacted(app_client, two_users):
+    """Guard: the forward move still works — a fresh (new) lead becomes
+    contacted on its first inbound."""
+    u1, _ = two_users
+    lead_id = _seed_lead(u1)
+    updated, error = crm_db.set_lead_status(u1, lead_id, "new")
+    assert error is None and updated["status"] == "new"
+
+    res = _post_inbound(
+        app_client,
+        body="Hi, is this still available?",
+        message_sid="SMguard002",
+    )
+    assert res.status_code == 200
+
+    lead = db.get_lead(lead_id, u1)
+    assert lead["status"] == "contacted"
