@@ -518,7 +518,28 @@ def _is_rate_limited(user_id, phone):
         return True
 
 
-def _execution_gate_context(user_id, lead):
+def _template_approved_for_draft(user_id, cleaned_draft):
+    """Re-resolve a stored draft's template_id at execution time.
+
+    Returns True only when the id still resolves to an approved SMS
+    template for this tenant (an archived template -> False). The
+    draft's exact stored text still executes either way — the flag is
+    evidence for the gate, and a human approved the text itself.
+    """
+    template_id = (cleaned_draft or {}).get("template_id")
+    if template_id is None:
+        return False
+    try:
+        from harness.templates_db import resolve_template_for_compose
+
+        return resolve_template_for_compose(
+            user_id, template_id, channel="sms"
+        ) is not None
+    except Exception:
+        return False
+
+
+def _execution_gate_context(user_id, lead, template_approved=False):
     """Fresh policy-gate context for an approved send.
 
     Mirrors ``harness.sms_handler._decide_policy``: consent, opt-out,
@@ -566,7 +587,12 @@ def _execution_gate_context(user_id, lead):
         "quiet_hours": quiet_hours,
         "rate_limited": _is_rate_limited(user_id, phone),
         "escalation_topics": [],
-        "template_approved": False,
+        # Phase III-5: True only when the stored draft's template_id
+        # still resolves to an approved template for this tenant.
+        # The mode is passed as "authorized" here, so the flag is a
+        # no-op for the decision — it is carried for truthfulness and
+        # evidence.
+        "template_approved": bool(template_approved),
     }
 
 
@@ -589,7 +615,7 @@ def _mark_blocked(user_id, approval_id, decision, reason):
     )
 
 
-def _follow_up_execution_gate_context(user_id, lead):
+def _follow_up_execution_gate_context(user_id, lead, template_approved=False):
     """Fresh policy-gate context for an approved follow-up send.
 
     The shared :func:`_execution_gate_context` plus the two fields the
@@ -599,7 +625,9 @@ def _follow_up_execution_gate_context(user_id, lead):
     block). Built separately from the shared context so the sms_reply
     execution path keeps its established behaviour.
     """
-    context = _execution_gate_context(user_id, lead)
+    context = _execution_gate_context(
+        user_id, lead, template_approved=template_approved
+    )
     context["do_not_contact"] = (lead or {}).get("status") == "do_not_contact"
     try:
         from harness.followup_sends import has_messaging_consent_evidence
@@ -704,7 +732,12 @@ def _execute_follow_up_sms_approval(user_id, approval_id, row, draft, correlatio
 
         decision, gate_reason = decide(
             user_id, "send_sms", "send_sms",
-            _follow_up_execution_gate_context(user_id, lead),
+            _follow_up_execution_gate_context(
+                user_id, lead,
+                template_approved=_template_approved_for_draft(
+                    user_id, cleaned_draft
+                ),
+            ),
         )
     except Exception:
         logger.exception(
@@ -1142,7 +1175,13 @@ def execute_approved(user_id, approval_id, correlation_id=None):
         from harness.policy import decide
 
         decision, gate_reason = decide(
-            user_id, "send_sms", "send_sms", _execution_gate_context(user_id, lead)
+            user_id, "send_sms", "send_sms",
+            _execution_gate_context(
+                user_id, lead,
+                template_approved=_template_approved_for_draft(
+                    user_id, cleaned_draft
+                ),
+            ),
         )
     except Exception:
         logger.exception(

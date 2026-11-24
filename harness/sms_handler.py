@@ -263,7 +263,8 @@ def _load_inbound_body(user_id, inbound_id):
     return str(row.get("message_body") or "")
 
 
-def _decide_policy(user_id, lead, analysis, draft, mode, paused, correlation_id=None):
+def _decide_policy(user_id, lead, analysis, draft, mode, paused,
+                   correlation_id=None, template_approved=False):
     """Ask harness.policy for the send decision.
 
     Mode/paused are decided here first (deterministic, no model input):
@@ -271,6 +272,8 @@ def _decide_policy(user_id, lead, analysis, draft, mode, paused, correlation_id=
     ``harness.policy.decide(user_id, action, tool, context)`` is consulted
     lazily; it returns ``(decision, reason)``. Any missing module or error
     defaults to DRAFT -- never to ALLOW.
+    ``template_approved`` is True only when the draft used an approved
+    template (Phase III-5) — a manual send passes False.
     Returns (decision, reason, rate_limited) with decision in
     {ALLOW, DRAFT, BLOCK, DEFER}; rate_limited is the structured flag the
     caller uses to re-queue a rate-limit DEFER retryably (never keyed on
@@ -329,7 +332,9 @@ def _decide_policy(user_id, lead, analysis, draft, mode, paused, correlation_id=
         "rate_limited": rate_limited,
         "escalation_topics": analysis.get("escalation_topics") or [],
         "analysis": analysis,
-        "template_approved": False,
+        # Phase III-5: True only when the draft used an approved
+        # template (the caller resolves the claim server-side).
+        "template_approved": bool(template_approved),
         # L4: the same correlation id the job, audit rows, and provider
         # execution log carry, so one inbound event traces end to end.
         "correlation_id": correlation_id,
@@ -548,6 +553,35 @@ def process_sms_auto_reply_job(job):
 
         maybe_mark_lead_confirmed(user_id, lead_id, body)
 
+    # Phase III-5: template resolution. The coach's template_id claim
+    # is validated server-side (exists, this tenant, channel sms,
+    # status approved); any failure -> free compose, template_id null.
+    # III-4 deterministic texts skip resolution (template_id stays
+    # null). Slot filling is deterministic; a missing slot value or a
+    # leftover placeholder -> the template is not used.
+    template_id = None
+    template_name = None
+    template_approved = False
+    if not analysis.get("appointment_requested"):
+        claimed_id = analysis.get("template_id")
+        if claimed_id is not None:
+            from harness.memory import load_profile
+            from harness.templates_db import resolve_and_fill
+
+            resolved, filled = resolve_and_fill(
+                user_id,
+                claimed_id,
+                lead=lead,
+                profile=load_profile(user_id),
+                channel="sms",
+            )
+            if resolved is not None and filled:
+                template_id = resolved["id"]
+                template_name = resolved["name"]
+                template_approved = True
+                analysis["draft_reply"] = filled
+                analysis["suggested_reply"] = filled
+
     draft = str(analysis.get("draft_reply") or analysis.get("suggested_reply") or "").strip()[:480]
 
     # (7) Token usage is already recorded exactly once by the coach
@@ -561,6 +595,7 @@ def process_sms_auto_reply_job(job):
     decision, gate_reason, rate_limited = _decide_policy(
         user_id, lead, analysis, draft, mode, paused,
         correlation_id=correlation_id,
+        template_approved=template_approved,
     )
 
     # Defense in depth: escalation topics can never auto-send, even if the
@@ -572,6 +607,12 @@ def process_sms_auto_reply_job(job):
     # paused can never reach the provider, whatever the policy said.
     if decision == "ALLOW" and (mode == "drafts_only" or paused):
         decision, gate_reason = "DRAFT", "allow_overridden_drafts_only_or_paused"
+
+    # Phase III-5: the gate reason carries the template evidence (id +
+    # name only) when a template was used, for the approval draft and
+    # the audit row.
+    if template_id is not None:
+        gate_reason = f'{gate_reason}; template #{template_id} "{template_name}"'
 
     if decision == "DRAFT":
         if not draft:
@@ -628,6 +669,10 @@ def process_sms_auto_reply_job(job):
                 "summary": analysis.get("summary"),
                 "suggested_lead_status": suggested_status,
                 "insight_id": coach.get("insight_id"),
+                # Phase III-5: which approved template the draft used
+                # (or None when no template was used).
+                "template_id": template_id,
+                "template_name": template_name,
                 # Surfaced to the human BEFORE the approval decision:
                 # which escalation topics the coach flagged, and why
                 # this was drafted rather than sent.

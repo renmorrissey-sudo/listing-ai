@@ -27,6 +27,7 @@
         <li>AI enabled: <strong>{{ 'yes' if ai_enabled else 'no' }}</strong></li>
         <li>Pending approvals: <strong>{{ pending_approvals }}</strong></li>
         <li>Pending jobs: <strong>{{ pending_jobs }}</strong></li>
+        <li>Message templates: <a href="/harness/templates">manage approved templates</a> <span class="muted">(only approved templates are ever used; the AI cannot create or approve them)</span></li>
         {% if worker is defined %}
         <li>Harness worker: <strong>{{ 'running' if worker.running else 'not running' }}</strong>{% if worker.last_seen_at %} <span class="muted">(last heartbeat {{ worker.last_seen_at }}{% if worker.worker_id %}, {{ worker.worker_id }}{% endif %})</span>{% else %} <span class="muted">(no heartbeat recorded — the harness-worker service may not exist, so jobs will sit pending)</span>{% endif %}</li>
         {% endif %}
@@ -130,6 +131,9 @@
         <p><strong>{{ approval.kind }}</strong> &middot; lead {{ approval.lead_id }} &middot; created {{ approval.created_at }}{% if approval.expires_at %} &middot; expires {{ approval.expires_at }}{% endif %}</p>
         {% if approval.draft_reply %}
         <blockquote>{{ approval.draft_reply }}</blockquote>
+        {% endif %}
+        {% if approval.draft and approval.draft.template_name %}
+        <p class="muted">Template: {{ approval.draft.template_name }}</p>
         {% endif %}
         <p>
           <button type="button" class="approval-approve" data-approval-id="{{ approval.id }}">Approve &amp; send</button>

@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Message Templates - {{ product_name }}</title>
+  <meta name="robots" content="noindex" />
+  {% include 'crm_base_styles.html' %}
+  <style>
+    .template-card { border: 1px solid #eef2f7; border-radius: 12px; padding: 18px; margin-bottom: 14px; }
+    .template-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .template-card-title { font-size: 16px; font-weight: 700; }
+    .template-body { background: #f8fafc; border: 1px solid #eef2f7; border-radius: 8px; padding: 10px 12px; margin-top: 10px; white-space: pre-wrap; }
+    .template-meta { color: #778; font-size: 12.5px; margin-top: 6px; }
+    .template-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+    .template-actions form { display: inline; }
+    .field { margin-bottom: 12px; }
+    .field label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+    .field input, .field select, .field textarea { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #dfe5ee; border-radius: 8px; font: inherit; }
+    .field textarea { min-height: 72px; }
+    details.edit-form { margin-top: 12px; }
+    details.edit-form summary { cursor: pointer; color: #2563eb; font-size: 13.5px; }
+  </style>
+</head>
+<body>
+  {% set page_tagline = 'Message Templates' %}
+  {% include 'subscriber_header.html' %}
+  {% include 'subscriber_tool_nav.html' %}
+  <main>
+    <div class="page-header">
+      <div class="page-header-titles">
+        <h1>Message Templates</h1>
+        <p class="muted">Agent-approved outbound messages. The AI may use an approved template verbatim or with its slots filled — it can never invent a template or present invented text as approved. Only <strong>approved</strong> templates are ever used. Editing an approved template resets it to draft, so approve it again before the AI can use the new text.</p>
+      </div>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+        <div class="flash {% if category == 'error' %}err{% endif %}" style="display:block;">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="card">
+      <h2 style="margin-top:0;">New template</h2>
+      <form method="post" action="/harness/templates">
+        <div class="field">
+          <label for="name">Name</label>
+          <input id="name" name="name" type="text" required maxlength="200" placeholder="e.g. Follow-up nudge" />
+        </div>
+        <div class="field">
+          <label for="channel">Channel</label>
+          <select id="channel" name="channel">
+            <option value="sms" selected>SMS</option>
+            <option value="voice">Voice (post-call follow-up SMS only)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="purpose">Purpose</label>
+          <input id="purpose" name="purpose" type="text" maxlength="500" placeholder="e.g. follow_up_no_reply" />
+        </div>
+        <div class="field">
+          <label for="body">Body (max {{ max_body_chars }} characters)</label>
+          <textarea id="body" name="body" required maxlength="{{ max_body_chars }}" placeholder="Hi {lead_name}, just checking in!"></textarea>
+        </div>
+        <p class="muted" style="font-size:12.5px;">Slots you may use: {% for slot in slot_allowlist %}<code>{{ '{' }}{{ slot }}{{ '}' }}</code>{% if not loop.last %}, {% endif %}{% endfor %}. A slot with no value for a lead is never filled — the template is simply not used for that lead.</p>
+        <button class="btn" type="submit">Create draft template</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0;">Your templates ({{ templates|length }})</h2>
+      {% if not templates %}
+        <p class="muted">No templates yet. Create one above — it starts as a draft, and only an approved template is ever used.</p>
+      {% endif %}
+      {% for t in templates %}
+      <div class="template-card">
+        <div class="template-card-head">
+          <div class="template-card-title">{{ t.name }}</div>
+          {% if t.status == 'approved' %}<span class="pill success">&#10003; Approved</span>
+          {% elif t.status == 'archived' %}<span class="pill muted">Archived</span>
+          {% else %}<span class="pill warn">Draft</span>{% endif %}
+        </div>
+        <div class="template-meta">Channel: {{ t.channel }} &middot; Purpose: {{ t.purpose or 'general' }}{% if t.approved_at %} &middot; Approved {{ t.approved_at }}{% endif %}</div>
+        <div class="template-body">{{ t.body }}</div>
+        <div class="template-actions">
+          {% if t.status == 'draft' %}
+          <form method="post" action="/harness/templates/{{ t.id }}/approve"><button class="btn" type="submit">Approve</button></form>
+          {% endif %}
+          {% if t.status in ('draft', 'approved') %}
+          <form method="post" action="/harness/templates/{{ t.id }}/archive"><button class="btn" type="submit">Archive</button></form>
+          {% endif %}
+          {% if t.status == 'archived' %}
+          <form method="post" action="/harness/templates/{{ t.id }}/unarchive"><button class="btn" type="submit">Move back to draft</button></form>
+          {% endif %}
+        </div>
+        <details class="edit-form">
+          <summary>Edit (resets an approved template to draft)</summary>
+          <form method="post" action="/harness/templates/{{ t.id }}/edit" style="margin-top:10px;">
+            <div class="field">
+              <label>Name</label>
+              <input name="name" type="text" required maxlength="200" value="{{ t.name }}" />
+            </div>
+            <div class="field">
+              <label>Channel</label>
+              <select name="channel">
+                <option value="sms" {% if t.channel == 'sms' %}selected{% endif %}>SMS</option>
+                <option value="voice" {% if t.channel == 'voice' %}selected{% endif %}>Voice (post-call follow-up SMS only)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Purpose</label>
+              <input name="purpose" type="text" maxlength="500" value="{{ t.purpose }}" />
+            </div>
+            <div class="field">
+              <label>Body (max {{ max_body_chars }} characters)</label>
+              <textarea name="body" required maxlength="{{ max_body_chars }}">{{ t.body }}</textarea>
+            </div>
+            <button class="btn" type="submit">Save (reset to draft)</button>
+          </form>
+        </details>
+      </div>
+      {% endfor %}
+    </div>
+  </main>
+  {% include 'subscriber_footer.html' %}
+</body>
+</html>

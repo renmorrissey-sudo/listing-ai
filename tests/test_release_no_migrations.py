@@ -57,10 +57,10 @@ from harness.jobs import claim_jobs, enqueue_job
 from migrations.runner import MIGRATION_MODULES
 
 
-def test_runner_list_ends_at_048_without_033_034():
-    """Migration 048 is listed; 033/034 remain excluded from the release."""
-    assert MIGRATION_MODULES[-1].endswith("048_appointment_requests")
-    assert len(MIGRATION_MODULES) == 40
+def test_runner_list_ends_at_049_without_033_034():
+    """Migration 049 is listed; 033/034 remain excluded from the release."""
+    assert MIGRATION_MODULES[-1].endswith("049_message_templates")
+    assert len(MIGRATION_MODULES) == 41
     assert not any("033_" in m or "034_" in m for m in MIGRATION_MODULES)
 
 

@@ -38,11 +38,13 @@ they are never auto-executable in any mode.
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 
 import db
 
+logger = logging.getLogger(__name__)
 try:
     from crm_constants import (
         LEAD_STATUS_SET,
@@ -168,6 +170,39 @@ def _require_str_field(arguments, *keys, code, label, limit=None):
         if text:
             return text
     _fail(code, f"{label} is required and must be a non-empty string")
+
+
+def _clean_template_id(user_id, draft):
+    """Phase III-5: normalise a draft's ``template_id`` claim.
+
+    An integer id that still resolves to an approved SMS template for
+    this tenant is kept (with its current name); anything else is
+    STRIPPED to None — never an error, so a human-approved exact text
+    is never blocked because the template was archived after drafting.
+    """
+    raw = draft.get("template_id")
+    if raw in (None, ""):
+        return None, None
+    template_id = coerce_id(raw)
+    if template_id is None:
+        return None, None
+    try:
+        from harness.templates_db import resolve_template_for_compose
+
+        resolved = resolve_template_for_compose(
+            user_id, template_id, channel="sms"
+        )
+    except Exception:
+        resolved = None
+    if resolved is None:
+        logger.warning(
+            "template_id %s stripped from draft: not an approved SMS "
+            "template for tenant %s",
+            template_id,
+            user_id,
+        )
+        return None, None
+    return template_id, resolved.get("name")
 
 
 def _parse_iso_datetime(value, code, label):
@@ -564,6 +599,12 @@ def validate_sms_reply_draft(user_id, draft):
         cleaned["lead_id"] = lead["id"]
         cleaned["inbound_id"] = coerce_id(draft.get("inbound_id"))
         cleaned["draft_reply"] = reply
+        # Phase III-5: a template claim that no longer resolves is
+        # stripped, never an error (the exact approved text still
+        # executes).
+        cleaned["template_id"], cleaned["template_name"] = _clean_template_id(
+            user_id, draft
+        )
         suggested = draft.get("suggested_lead_status")
         if suggested not in (None, ""):
             cleaned["suggested_lead_status"] = validate_status(suggested)
@@ -597,6 +638,12 @@ def validate_follow_up_sms_draft(user_id, draft):
         cleaned = dict(draft)
         cleaned["lead_id"] = lead["id"]
         cleaned["draft_reply"] = reply
+        # Phase III-5: a template claim that no longer resolves is
+        # stripped, never an error (the exact approved text still
+        # executes).
+        cleaned["template_id"], cleaned["template_name"] = _clean_template_id(
+            user_id, draft
+        )
         for field in ("follow_up_id", "job_id", "message_id", "follow_up_send_id"):
             raw = draft.get(field)
             if raw in (None, ""):

@@ -283,6 +283,11 @@ def execute_schedule_follow_up_sms(user_id, arguments: dict, context: dict | Non
     scheduled time through the harness gate. Returns the job id and
     the effective fire time, or a clear error (consent missing, caps
     hit, bad input) with nothing enqueued.
+
+    Phase III-5: the caller may instead pass ``template_id`` — the
+    body then comes from the approved template (resolved + slot-filled
+    server-side). The returned payload carries the read-only
+    ``customer_context`` recall block for the lead.
     """
     lead, err, choices = resolve_lead(user_id, arguments, context)
     if err:
@@ -298,6 +303,7 @@ def execute_schedule_follow_up_sms(user_id, arguments: dict, context: dict | Non
         return None, "I need a time to send the follow-up SMS.", None
     reason = arguments.get("reason") or "Follow up"
     follow_up_id = arguments.get("follow_up_id")
+    template_id = arguments.get("template_id")
     try:
         from harness.followup_sends import (
             FollowUpScheduleError,
@@ -312,6 +318,7 @@ def execute_schedule_follow_up_sms(user_id, arguments: dict, context: dict | Non
             body,
             scheduled_at,
             reason,
+            template_id=template_id,
         )
     except FollowUpScheduleError as exc:
         return None, str(exc.message), None
@@ -332,6 +339,17 @@ def execute_schedule_follow_up_sms(user_id, arguments: dict, context: dict | Non
     payload = dict(result)
     payload["name"] = lead.get("name")
     payload["reason"] = reason
+    # Phase III-5: the read-only recall block for this lead, so the
+    # agent sees the customer context in the tool result. Recall never
+    # writes to the lead record.
+    try:
+        from harness.memory import build_recall_context
+
+        recall = build_recall_context(user_id, lead["id"])
+    except Exception:
+        recall = ""
+    if recall:
+        payload["customer_context"] = recall
     return payload, None, None
 
 
