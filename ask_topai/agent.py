@@ -26,6 +26,7 @@ Rules:
 - You may queue several write tools in one turn when the request clearly needs multiple CRM actions.
 - If a required field is missing (especially a lead phone for create_lead), call ask_clarification and do not queue incomplete writes.
 - For scheduling: inspect get_calendar_availability / find_available_slots, then create_calendar_event or reschedule_calendar_event. Do not book over an existing event. If the requested time is busy, offer nearby real slots as a clarification.
+- Approved message templates: when the agent references an approved message template by id or name, pass its template_id (or template_name) to schedule_follow_up_sms and do not ask for the message body — the template body is filled in server-side. Never invent template content, and never use a template that is not listed as approved for this account in the request context.
 - If the agent asks to send email, SMS, listings, place a call, delete data, change consent, or run SQL, call inform_user with kind=unsupported. Explain the intent was understood but that permission is not enabled yet.
 - Do not call tools that are not provided to you.
 - Do not output JSON to the user. Use tools.
@@ -110,6 +111,35 @@ def _assistant_content(content) -> list:
     return serialized
 
 
+def _approved_templates_text(user_id):
+    """Approved SMS templates for this tenant, prompt-carried so the
+    model can schedule by template reference (id or name) without
+    asking the user to paste the body. Best-effort: any failure
+    returns "" so a template-store read can never break the agent
+    loop. Capped at TEMPLATE_LIST_CAP (20), most recently approved
+    first — the same list the inbound coach prompt carries."""
+    try:
+        from harness.templates_db import list_approved_templates
+
+        templates = list_approved_templates(user_id, channel="sms")
+    except Exception:
+        return ""
+    if not templates:
+        return ""
+    lines = [
+        "APPROVED MESSAGE TEMPLATES (SMS) — when the agent asks to use "
+        "one of these templates, pass its template_id (or template_name) "
+        "to schedule_follow_up_sms and do not ask for the message body:"
+    ]
+    for row in templates:
+        body = (row.get("body") or "").replace("\n", " ").strip()
+        lines.append(
+            f'- id={row.get("id")} name="{row.get("name")}" '
+            f'purpose="{row.get("purpose") or ""}" body="{body}"'
+        )
+    return "\n".join(lines)
+
+
 def _user_context_text(transcript: str, context: dict) -> str:
     bits = []
     if context.get("lead_id"):
@@ -149,7 +179,11 @@ def complete(user_id, transcript, context, *, session_id=None, source="text"):
         }
 
     messages = list(history)
-    messages.append({"role": "user", "content": _user_context_text(text, context)})
+    user_text = _user_context_text(text, context)
+    templates_text = _approved_templates_text(user_id)
+    if templates_text:
+        user_text = f"{user_text}\n\n{templates_text}"
+    messages.append({"role": "user", "content": user_text})
 
     # Universal spend cap (launch blocker 5): never burn a model round
     # on a capped tenant. The cap is re-checked before every round
