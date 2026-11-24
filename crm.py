@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, flash, get_flashed_messages, jsonify, redirect, render_template, request, url_for
 
 import auth
+import config
 import crm_db
 import db
 import lead_contact_service
@@ -134,6 +135,9 @@ def _parse_leads_list_filters(args):
 
     search = (args.get("q") or args.get("search") or "").strip()[:200] or None
 
+    # Phase III-6: stale filter (?stale=1).
+    stale = _truthy_arg(args.get("stale"))
+
     return {
         "status": status,
         "source": source,
@@ -148,6 +152,7 @@ def _parse_leads_list_filters(args):
         "batch": batch if import_batch_id is not None else "",
         "import_batch_id": import_batch_id,
         "search": search,
+        "stale": stale,
     }
 
 
@@ -471,6 +476,7 @@ def crm_leads_page():
     review = filters["review"]
     batch = filters["batch"]
     search = filters["search"]
+    stale = filters["stale"]
     leads = crm_db.filter_leads(
         user["id"],
         status=status,
@@ -484,6 +490,7 @@ def crm_leads_page():
         import_batch_id=filters["import_batch_id"],
         consent_review_required=review,
         search=search,
+        stale=stale,
     )
     active_filter = None
     if scope == "active":
@@ -520,6 +527,8 @@ def crm_leads_page():
         active_filter = (
             (active_filter + f' · Search: "{search}"') if active_filter else f'Search: "{search}"'
         )
+    if stale:
+        active_filter = (active_filter + " · Stale") if active_filter else "Stale"
     import external_leads_db as xdb
 
     lead_sources = xdb.list_external_lead_sources(user["id"], active_only=True)
@@ -540,6 +549,7 @@ def crm_leads_page():
         consent_review_filter=review or "",
         batch_filter=batch or "",
         search_filter=search or "",
+        stale_filter="1" if stale else "",
         active_filter=active_filter,
         result_count=len(leads),
         status_label=status_label,
@@ -618,6 +628,12 @@ def crm_needs_attention_page():
     local_date = (request.args.get("local_date") or "").strip()[:10] or None
     status = (request.args.get("status") or "open").strip().lower() or "open"
     item_type = (request.args.get("type") or "").strip().lower() or None
+    # Phase III-6: reason filter (?reason=stale_no_contact,stale_no_reply).
+    reason_codes = {
+        code.strip().lower()
+        for code in (request.args.get("reason") or "").split(",")
+        if code.strip()
+    } & set(NEEDS_ATTENTION_REASONS)
     drafts = []
     items = []
     if item_type in {"draft_reply", "draft", "drafts"}:
@@ -629,6 +645,20 @@ def crm_needs_attention_page():
         if status and status != "open":
             items = [i for i in items if i.get("status") == status]
         active_filter = "Open Needs Attention" if status == "open" else f"Status: {status}"
+        if reason_codes:
+            items = [i for i in items if i.get("reason_code") in reason_codes]
+            if reason_codes == {"stale_no_contact", "stale_no_reply"}:
+                reason_label = "Stale"
+            else:
+                reason_label = "Reason: " + ", ".join(
+                    NEEDS_ATTENTION_REASONS.get(code, code)
+                    for code in sorted(reason_codes)
+                )
+            active_filter = (
+                f"{active_filter} · {reason_label}"
+                if active_filter
+                else reason_label
+            )
         result_count = len(items)
     return render_template(
         "crm_needs_attention.html",
@@ -638,6 +668,7 @@ def crm_needs_attention_page():
         local_date=local_date or "",
         status_filter=status,
         type_filter=item_type or "",
+        reason_filter=",".join(sorted(reason_codes)),
         active_filter=active_filter,
         result_count=result_count,
         **_nav_context(user, "needs"),
@@ -1639,6 +1670,71 @@ def api_resolve_needs_attention(item_id):
     if error:
         return jsonify({"error": error}), 400
     return jsonify({"ok": True})
+
+
+@crm_bp.route("/api/crm/leads/<int:lead_id>/test-backdate-contact", methods=["POST"])
+@auth.subscription_required
+def api_test_backdate_contact(lead_id):
+    """Phase III-6 live-aging helper (PM ruling (e), mechanism (a)).
+
+    Staging-only, admin-gated: sets a lead's four last-contact fields
+    plus created_at to a supplied ISO timestamp, so a test lead can be
+    aged past the 7-day stale threshold with the shipped threshold.
+    Audit-logged via harness_audit. The staging gate is in code
+    (APP_ENV == "staging", not a flag), and the caller must be on the
+    HARNESS_ADMIN_EMAILS allowlist.
+    """
+    user = auth.get_current_user()
+    if not config.IS_STAGING:
+        return jsonify({"error": "Not found."}), 404
+    from harness.policy import is_harness_admin
+
+    if not is_harness_admin(user):
+        return jsonify({"error": "Admin only."}), 403
+    data = request.get_json(silent=True) or {}
+    from crm_time import parse_iso_dt
+
+    contact_at = parse_iso_dt(data.get("contact_at"))
+    if contact_at is None:
+        return jsonify({"error": "contact_at must be an ISO timestamp."}), 400
+    contact_iso = contact_at.isoformat()
+    with db.get_db() as conn:
+        lead = conn.execute(
+            "SELECT id FROM leads WHERE id = ? AND user_id = ?",
+            (lead_id, user["id"]),
+        ).fetchone()
+        if not lead:
+            return jsonify({"error": "Lead not found."}), 404
+        conn.execute(
+            """
+            UPDATE leads
+            SET last_inbound_at = ?, last_outbound_at = ?,
+                last_contacted_at = ?, latest_call_at = ?, created_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                contact_iso,
+                contact_iso,
+                contact_iso,
+                contact_iso,
+                contact_iso,
+                lead_id,
+                user["id"],
+            ),
+        )
+        conn.commit()
+    from harness.audit import record_audit
+
+    record_audit(
+        user["id"],
+        actor="admin",
+        action="test_backdate_contact",
+        tool="crm",
+        target_type="lead",
+        target_id=lead_id,
+        gate_reason=f"contact_at={contact_iso}",
+    )
+    return jsonify({"ok": True, "lead_id": lead_id, "contact_at": contact_iso})
 
 
 @crm_bp.route("/api/crm/notifications")
