@@ -1,10 +1,52 @@
-def build_inbound_reply_analysis_prompt(lead, conversation, inbound_text):
+def build_inbound_reply_analysis_prompt(lead, conversation, inbound_text,
+                                         approved_templates=None,
+                                         recall_context=None):
+    """Inbound coach prompt (Phase III-5 adds the approved-templates
+    list and the customer-context recall block).
+
+    ``approved_templates`` is the tenant's approved SMS templates
+    (already capped at 20, most recently approved first) as row
+    dicts. ``recall_context`` is the read-only per-lead recall block
+    from ``harness.memory.build_recall_context``.
+    """
     history_lines = []
     for msg in conversation[-12:]:
         direction = msg.get("direction") or ("inbound" if msg.get("status") == "received" else "outbound")
         who = "Lead" if direction == "inbound" else "Agent"
         history_lines.append(f"{who}: {msg.get('message_body') or ''}")
     history = "\n".join(history_lines) if history_lines else "(no prior messages)"
+
+    templates_section = ""
+    templates = list(approved_templates or [])[:20]
+    if templates:
+        template_lines = []
+        for tpl in templates:
+            template_lines.append(
+                f"- #{tpl.get('id')} \"{tpl.get('name')}\" "
+                f"(purpose: {tpl.get('purpose') or 'general'}): "
+                f"{tpl.get('body')}"
+            )
+        templates_section = (
+            "\nAPPROVED TEMPLATES (agent-approved only — use one of these "
+            "verbatim or with its slots filled when one fits; never invent "
+            "a template or present invented text as approved):\n"
+            + "\n".join(template_lines)
+            + "\nFill a template's {slots} from the lead record "
+            "(lead_name, property_interest, qualification_budget, "
+            "qualification_timeline), the agent profile (agent_name, "
+            "brokerage_name, company_name), or the conversation context "
+            "(appointment_time, follow_up_reason). If a slot has no "
+            "value, do not use that template.\n"
+        )
+
+    recall_section = ""
+    if recall_context and str(recall_context).strip():
+        recall_section = (
+            "\nCUSTOMER CONTEXT (read-only recall from the lead's CRM "
+            "record — summaries only, never raw message bodies; use it to "
+            "personalise the reply, never to change the lead):\n"
+            f"{recall_context}\n"
+        )
 
     return f"""Analyze this real estate lead SMS reply and produce the next autonomous action.
 
@@ -13,6 +55,7 @@ Return ONLY JSON with these keys:
 - intent: inferred intent in a short phrase
 - recommended_next_action: concrete next action TopAI should take or already took
 - draft_reply: one SMS reply TopAI will send automatically (under 420 chars). If escalation is required, draft a brief acknowledgment that the agent will follow up personally.
+- template_id: integer id of the approved template draft_reply uses, or null when no approved template was used (free compose). Only ever an id from the APPROVED TEMPLATES list below.
 - confidence: number from 0 to 1
 - sensitive_topic: true if legal/financing/negotiation/fair housing/complaint/uncertain facts apply
 - suggested_lead_status: one of new, attempting_contact, contacted, qualified, appointment_scheduled, nurture (never closed_won, closed_lost, or do_not_contact unless the lead opted out)
@@ -20,7 +63,7 @@ Return ONLY JSON with these keys:
 - suggested_follow_up_reason: short reason for the follow-up
 - suggested_tasks: array of up to 5 objects {{title, task_type, due_at}}
 - appointment_requested: true if the lead asked to meet/call/show or accepted a time
-- appointment_details: object with day/time/window/type hints (example: {{"day":"wednesday","time":"15:00","window":"afternoon"}}) or null
+- appointment_details: object with day/time/window/type (type: one of phone_call, in_person, video_call) or null
 - captured_note: useful CRM context from the lead to save, or empty string
 - property_criteria_updates: object of fields the lead clearly changed (price_min, price_max, bedrooms, bathrooms, city, neighborhood, property_type) or empty object
 - needs_attention_reasons: array of reason codes only if a human must handle an exception
@@ -39,6 +82,7 @@ RULES:
 - uncertain_property_fact applies ONLY when the draft states a property fact (price, availability, features, terms) that cannot be verified from the lead record and conversation. A reply that only acknowledges the question and promises the agent will verify and follow up — without stating any property fact — is NOT an escalation; leave escalation_topics empty for it. Flagging the topic must reflect what the draft asserts, not merely what the lead asked about.
 - If they ask to stop/unsubscribe, suggest do_not_contact and leave draft_reply empty.
 - Be compliant and professional.
+- When an approved template fits the reply, use it verbatim or with its slots filled and set template_id to its id. When no approved template fits, compose freely and set template_id to null. Never claim a template id that is not in the APPROVED TEMPLATES list.
 
 LEAD:
 - Name: {lead.get("name") or "Lead"}
@@ -48,7 +92,7 @@ LEAD:
 - Current status: {lead.get("status") or "N/A"}
 - Opt-out status: {lead.get("opt_out_status") or "active"}
 - Notes: {lead.get("notes") or "N/A"}
-
+{templates_section}{recall_section}
 CONVERSATION HISTORY:
 {history}
 

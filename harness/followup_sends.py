@@ -218,7 +218,8 @@ def _pending_counts(user_id, lead_id):
     return int(tenant_row["n"]), int(lead_row["n"])
 
 
-def schedule_follow_up_sms(user_id, lead_id, follow_up_id, body, scheduled_at, reason):
+def schedule_follow_up_sms(user_id, lead_id, follow_up_id, body, scheduled_at, reason,
+                           template_id=None):
     """Schedule a follow-up SMS send. Returns a result dict.
 
     Validates the lead, the body (non-empty, <= 2000 chars), and the
@@ -229,6 +230,15 @@ def schedule_follow_up_sms(user_id, lead_id, follow_up_id, body, scheduled_at, r
     fire time, so the caller always sees that the send is due
     immediately rather than silently firing later.
 
+    Phase III-5: when ``template_id`` is given, the body comes from
+    the template (resolved + slot-filled server-side, stored verbatim;
+    the caller-supplied body is ignored). A template id that does not
+    resolve to an approved SMS template for this tenant, or a template
+    that cannot be filled (missing slot value), is REFUSED
+    (``invalid_template_id`` / ``template_fill_failed``) — nothing is
+    enqueued. The job payload carries the template_id so the fire-time
+    gate can re-check it.
+
     Idempotent per (tenant, lead, reason, scheduled minute): a second
     call with the same triple returns the original job id and creates
     no new rows.
@@ -238,16 +248,47 @@ def schedule_follow_up_sms(user_id, lead_id, follow_up_id, body, scheduled_at, r
     lead = validate_lead_reference(user_id, lead_id, required=True)
     lead_id = lead["id"]
 
-    text = (body or "").strip() if isinstance(body, str) else ""
+    reason = (reason or "Follow up").strip()[:500] or "Follow up"
+    reason_norm = crm_db.normalize_follow_up_reason(reason)
+
+    # Phase III-5: template resolution at schedule time. The filled
+    # template text IS the body; the caller-supplied body is ignored
+    # when a template is given.
+    template_name = None
+    if template_id is not None:
+        from harness.memory import load_profile
+        from harness.templates_db import fill_template, resolve_template_for_compose
+
+        resolved = resolve_template_for_compose(
+            user_id, template_id, channel="sms"
+        )
+        if resolved is None:
+            raise FollowUpScheduleError(
+                "invalid_template_id",
+                f"template {template_id} is not an approved SMS template "
+                "for this tenant",
+            )
+        filled, fill_error = fill_template(
+            resolved,
+            lead=lead,
+            profile=load_profile(user_id),
+            context={"follow_up_reason": reason},
+        )
+        if filled is None:
+            raise FollowUpScheduleError(
+                "template_fill_failed",
+                f"template {template_id} could not be filled: {fill_error}",
+            )
+        text = filled
+        template_name = resolved["name"]
+    else:
+        text = (body or "").strip() if isinstance(body, str) else ""
     if not text:
         raise FollowUpScheduleError("invalid_body", "message body is required")
     if len(text) > 2000:
         raise FollowUpScheduleError(
             "invalid_body", "message body must be 2000 characters or fewer"
         )
-
-    reason = (reason or "Follow up").strip()[:500] or "Follow up"
-    reason_norm = crm_db.normalize_follow_up_reason(reason)
 
     requested_at = _parse_iso_datetime(
         scheduled_at, "invalid_scheduled_at", "scheduled_at"
@@ -318,12 +359,15 @@ def schedule_follow_up_sms(user_id, lead_id, follow_up_id, body, scheduled_at, r
     existing = _existing_job_for_key(user_id, idempotency_key)
     if existing is not None:
         send_row = _get_send_row_by_job(user_id, existing["id"])
+        existing_payload = _payload_dict(existing)
         return {
             "job_id": existing["id"],
             "follow_up_send_id": send_row["id"] if send_row else None,
             "message_id": send_row["sms_message_id"] if send_row else None,
             "scheduled_at": send_row["scheduled_at"] if send_row else effective_iso,
             "follow_up_id": follow_up_id_int,
+            "template_id": existing_payload.get("template_id"),
+            "template_name": existing_payload.get("template_name"),
             "duplicate": True,
         }
 
@@ -360,6 +404,11 @@ def schedule_follow_up_sms(user_id, lead_id, follow_up_id, body, scheduled_at, r
             "reason": reason,
             "scheduled_at": effective_iso,
             "message_id": message_id,
+            # Phase III-5: the template used at schedule time, so the
+            # fire-time gate can re-check it (archived -> supervised
+            # DRAFTs, Authorized still ALLOWs).
+            "template_id": template_id,
+            "template_name": template_name,
         },
         idempotency_key=idempotency_key,
         next_attempt_at=effective_iso,
@@ -381,6 +430,8 @@ def schedule_follow_up_sms(user_id, lead_id, follow_up_id, body, scheduled_at, r
             "message_id": prior_send_row["sms_message_id"],
             "scheduled_at": prior_send_row["scheduled_at"],
             "follow_up_id": follow_up_id_int,
+            "template_id": template_id,
+            "template_name": template_name,
             "duplicate": True,
         }
 
@@ -434,6 +485,8 @@ def schedule_follow_up_sms(user_id, lead_id, follow_up_id, body, scheduled_at, r
         "requested_scheduled_at": requested_at.isoformat(),
         "clamped_to_now": clamped,
         "follow_up_id": follow_up_id_int,
+        "template_id": template_id,
+        "template_name": template_name,
         "duplicate": False,
     }
 
@@ -614,7 +667,8 @@ def _set_ledger_status(user_id, lookup_job_id, status, **fields):
         )
 
 
-def _decide_follow_up_policy(user_id, lead, mode, paused, correlation_id=None):
+def _decide_follow_up_policy(user_id, lead, mode, paused, correlation_id=None,
+                             template_approved=False):
     """Ask harness.policy for the follow-up send decision.
 
     Mirrors ``harness.sms_handler._decide_policy`` / ``_decide_manual_policy``,
@@ -625,6 +679,10 @@ def _decide_follow_up_policy(user_id, lead, mode, paused, correlation_id=None):
       was dead for SMS jobs; this is the regression fix).
     * ``consent_missing`` — no messaging-consent evidence for the lead
       (see :func:`has_messaging_consent_evidence`).
+
+    ``template_approved`` (Phase III-5) is True only when the job's
+    template_id still resolves to an approved SMS template for this
+    tenant at fire time.
 
     Returns (decision, reason, rate_limited, quiet_hours).
     """
@@ -674,7 +732,9 @@ def _decide_follow_up_policy(user_id, lead, mode, paused, correlation_id=None):
         "quiet_hours": quiet_hours,
         "rate_limited": rate_limited,
         "escalation_topics": [],
-        "template_approved": False,
+        # Phase III-5: True only when the job's template_id still
+        # resolves to an approved template at fire time.
+        "template_approved": bool(template_approved),
         "correlation_id": correlation_id,
     }
     try:
@@ -759,7 +819,8 @@ def _complete_send_side_effects(user_id, lead_id, follow_up_id, send_row, sms_ro
 
 
 def _handle_draft(user_id, lead_id, job_id, send_row, sms_row, body, mode,
-                  gate_reason, follow_up_id, scheduled_at, correlation_id):
+                  gate_reason, follow_up_id, scheduled_at, correlation_id,
+                  template_id=None, template_name=None):
     """DRAFT outcome: pending approval, no send, job settled."""
     approval_id = _create_approval(
         user_id,
@@ -772,6 +833,10 @@ def _handle_draft(user_id, lead_id, job_id, send_row, sms_row, body, mode,
             "job_id": job_id,
             "follow_up_send_id": send_row["id"],
             "message_id": sms_row["id"],
+            # Phase III-5: which approved template the send used
+            # (or None when no template was used).
+            "template_id": template_id,
+            "template_name": template_name,
             "gate_reason": gate_reason,
             "scheduled_at": scheduled_at,
         },
@@ -1114,6 +1179,27 @@ def process_follow_up_sms_send_job(job):
     except Exception:
         mode, paused = "drafts_only", False
 
+    # Phase III-5: fire-time template re-check. The body was stored
+    # verbatim at schedule time and is NOT re-filled; the re-check
+    # only decides the flag (archived -> template_approved False, so
+    # supervised DRAFTs while Authorized still ALLOWs — the fire-time
+    # asymmetry).
+    template_id = payload.get("template_id")
+    template_name = payload.get("template_name")
+    template_approved = False
+    if template_id is not None:
+        try:
+            from harness.templates_db import resolve_template_for_compose
+
+            resolved = resolve_template_for_compose(
+                user_id, template_id, channel="sms"
+            )
+        except Exception:
+            resolved = None
+        if resolved is not None:
+            template_approved = True
+            template_name = resolved.get("name")
+
     # Layer 4 (exactly-once): the send already happened if the outbound
     # row is sent/delivered/queued or carries a provider id — e.g. the
     # job crashed after provider-accept but before complete_job and was
@@ -1193,8 +1279,14 @@ def process_follow_up_sms_send_job(job):
 
     # Policy gate (fresh reads at fire time).
     decision, gate_reason, rate_limited, quiet_hours = _decide_follow_up_policy(
-        user_id, lead, mode, paused, correlation_id=correlation_id
+        user_id, lead, mode, paused, correlation_id=correlation_id,
+        template_approved=template_approved,
     )
+
+    # Phase III-5: the gate reason carries the template evidence (id +
+    # name only) when a template was used.
+    if template_id is not None:
+        gate_reason = f'{gate_reason}; template #{template_id} "{template_name}"'
 
     if decision == "DRAFT":
         if not body:
@@ -1215,6 +1307,7 @@ def process_follow_up_sms_send_job(job):
         return _handle_draft(
             user_id, lead_id, job_id, send_row, sms_row, body, mode,
             gate_reason, follow_up_id, scheduled_at, correlation_id,
+            template_id=template_id, template_name=template_name,
         )
 
     if decision == "BLOCK":
@@ -1285,6 +1378,7 @@ def process_follow_up_sms_send_job(job):
             user_id, lead_id, job_id, send_row, sms_row, body, mode,
             "allow_overridden_drafts_only_or_paused", follow_up_id,
             scheduled_at, correlation_id,
+            template_id=template_id, template_name=template_name,
         )
 
     # Atomic spend reservation (defence in depth beyond the gate's

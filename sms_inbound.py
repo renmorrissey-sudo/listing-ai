@@ -506,7 +506,24 @@ def analyze_inbound_and_coach(user_id, lead_id, inbound_id, inbound_body, opted_
     # This gate covers BOTH the direct path (sms_ai_agent / inbound
     # webhook) and the harness SMS handler, which both funnel through
     # this function.
-    prompt = build_inbound_reply_analysis_prompt(lead, conversation, inbound_body)
+    # Phase III-5: approved SMS templates (cap 20, most recently
+    # approved first) + read-only per-lead recall context. Both are
+    # best-effort — a failure here must not block the coach call.
+    approved_templates = []
+    recall_context = ""
+    try:
+        from harness.memory import build_recall_context
+        from harness.templates_db import list_approved_templates
+
+        approved_templates = list_approved_templates(user_id, channel="sms")
+        recall_context = build_recall_context(user_id, lead_id)
+    except Exception as exc:
+        logger.warning("harness III-5 context unavailable: %s", exc)
+    prompt = build_inbound_reply_analysis_prompt(
+        lead, conversation, inbound_body,
+        approved_templates=approved_templates,
+        recall_context=recall_context,
+    )
     _reservation_made = False
     _reservation_corr = correlation_id or f"coach-{inbound_id}"
     try:

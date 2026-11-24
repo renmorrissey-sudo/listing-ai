@@ -203,6 +203,14 @@ def validate_coach_response(content):
     if appointment_details is not None and not isinstance(appointment_details, dict):
         appointment_details = None
 
+    # Phase III-5: the coach may claim an approved template id. Keep
+    # an int only (bools are not ints here); anything else is dropped
+    # to None. Server-side resolution decides whether the claim is
+    # used — this field alone never authorises a template.
+    template_id = data.get("template_id")
+    if isinstance(template_id, bool) or not isinstance(template_id, int):
+        template_id = None
+
     reasons = data.get("needs_attention_reasons") or []
     if not isinstance(reasons, list):
         reasons = []
@@ -230,6 +238,7 @@ def validate_coach_response(content):
         "suggested_tasks": clean_tasks,
         "appointment_requested": bool(data.get("appointment_requested")),
         "appointment_details": appointment_details,
+        "template_id": template_id,
         "needs_attention_reasons": reasons,
         "captured_note": captured_note or None,
         "property_criteria_updates": incoming_criteria,
@@ -257,6 +266,7 @@ def validate_coach_response(content):
             "suggested_tasks": clean_tasks,
             "appointment_requested": bool(data.get("appointment_requested")),
             "appointment_details": appointment_details,
+            "template_id": template_id,
             "needs_attention_reasons": reasons,
             "qualification_suggestion": qualification_suggestion,
             "home_value_pitch": str(data.get("home_value_pitch") or "").strip()[:480] or None,
