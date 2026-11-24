@@ -190,3 +190,95 @@ def lead_summary(user_id, lead_id):
         "upcoming_follow_ups": follow_ups,
         "recent_activity": activities,
     }
+
+
+def build_recall_context(user_id, lead_id):
+    """Per-lead recall block for the coach prompt (Phase III-5).
+
+    Combines the business profile, the lead summary (identity/status,
+    property interest, open tasks, upcoming follow-ups, recent activity
+    *summaries*) and any KV preferences (tenant-level ``preferences``
+    plus ``lead_preferences:<lead_id>``).
+
+    READ-ONLY by construction: pure reads, no lead write, no status
+    or score change. Summaries only — raw message bodies never
+    appear (``lead_summary`` never includes them).
+
+    Returns a plain-text block ("" when the lead does not belong to
+    *user_id*).
+    """
+    summary = lead_summary(user_id, lead_id)
+    if not summary:
+        return ""
+
+    profile = load_profile(user_id) or {}
+    tenant_prefs = get_memory(user_id, "preferences")
+    lead_prefs = get_memory(user_id, f"lead_preferences:{lead_id}")
+
+    lines = [f"Lead: {summary.get('name') or 'unknown'}"]
+    status = summary.get("status")
+    if status:
+        lines[-1] += f" (status: {status})"
+    if summary.get("lead_type"):
+        lines[-1] += f", type: {summary['lead_type']}"
+    if summary.get("property_interest"):
+        lines.append(f"Property interest: {summary['property_interest']}")
+    if summary.get("next_action"):
+        lines.append(f"Next action: {summary['next_action']}")
+    if summary.get("next_follow_up_at"):
+        lines.append(f"Next follow-up: {summary['next_follow_up_at']}")
+
+    tasks = summary.get("open_tasks") or []
+    if tasks:
+        titles = "; ".join(
+            str(t.get("title") or "").strip() for t in tasks
+            if str(t.get("title") or "").strip()
+        )
+        if titles:
+            lines.append(f"Open tasks ({len(tasks)}): {titles}")
+
+    follow_ups = summary.get("upcoming_follow_ups") or []
+    if follow_ups:
+        reasons = "; ".join(
+            str(f.get("reason") or "").strip() for f in follow_ups
+            if str(f.get("reason") or "").strip()
+        )
+        if reasons:
+            lines.append(f"Upcoming follow-ups: {reasons}")
+
+    activities = summary.get("recent_activity") or []
+    if activities:
+        entries = "; ".join(
+            f"{a.get('event_type')}: {a.get('summary')}"
+            for a in activities
+            if str(a.get("summary") or "").strip()
+        )
+        if entries:
+            lines.append(f"Recent activity: {entries}")
+
+    agent_name = (profile.get("agent_name") or "").strip()
+    brokerage = (profile.get("brokerage_name") or "").strip()
+    if agent_name or brokerage:
+        who = " / ".join(part for part in (agent_name, brokerage) if part)
+        lines.append(f"Agent: {who}")
+
+    def _prefs_text(value):
+        if isinstance(value, dict):
+            parts = [
+                f"{key}: {val}"
+                for key, val in value.items()
+                if str(val or "").strip()
+            ]
+            return "; ".join(parts)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return ""
+
+    prefs = _prefs_text(tenant_prefs)
+    if prefs:
+        lines.append(f"Preferences: {prefs}")
+    lead_prefs_text = _prefs_text(lead_prefs)
+    if lead_prefs_text:
+        lines.append(f"Lead preferences: {lead_prefs_text}")
+
+    return "\n".join(lines)

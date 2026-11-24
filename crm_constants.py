@@ -93,6 +93,8 @@ TASK_TYPES = [
 
 APPOINTMENT_TYPES = [
     "phone_call",
+    "in_person",
+    "video_call",
     "video_meeting",
     "buyer_consultation",
     "listing_consultation",
@@ -100,6 +102,11 @@ APPOINTMENT_TYPES = [
     "open_house_follow_up",
     "other",
 ]
+# Meeting modes (the coach's vocabulary, Phase III-5): the three values
+# the coach may return as an appointment type. The remaining
+# APPOINTMENT_TYPES values are appointment KINDS the agent picks for
+# their own bookings.
+APPOINTMENT_MODES = ["phone_call", "in_person", "video_call"]
 APPOINTMENT_STATUSES = [
     "proposed",
     "scheduled",

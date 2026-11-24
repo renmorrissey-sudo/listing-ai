@@ -428,6 +428,9 @@ def sanitize_schedule_follow_up_sms(arguments: dict) -> tuple[dict, str | None]:
     verbatim — the scheduler parses and clamps it. Missing time or
     body is a clear error, matching the handler's wording, so nothing
     is ever scheduled with no time or no text.
+
+    Phase III-5: ``template_id`` (int) passes through; when present
+    the body may be omitted — the template provides it.
     """
     lead_id = _clean_int(arguments.get("lead_id"))
     lead_name = _clean_str(arguments.get("lead_name") or arguments.get("name"), 200)
@@ -440,6 +443,7 @@ def sanitize_schedule_follow_up_sms(arguments: dict) -> tuple[dict, str | None]:
     )
     reason = _clean_str(arguments.get("reason"), 200) or "Follow up"
     follow_up_id = _clean_int(arguments.get("follow_up_id"))
+    template_id = _clean_int(arguments.get("template_id"))
     cleaned = {
         "lead_id": lead_id,
         "lead_name": lead_name,
@@ -447,10 +451,11 @@ def sanitize_schedule_follow_up_sms(arguments: dict) -> tuple[dict, str | None]:
         "scheduled_at": scheduled_at,
         "reason": reason,
         "follow_up_id": follow_up_id,
+        "template_id": template_id,
     }
     if not scheduled_at:
         return cleaned, "I need a time to send the follow-up SMS."
-    if not body:
+    if not body and template_id is None:
         return cleaned, "Message body is required."
     return cleaned, None
 

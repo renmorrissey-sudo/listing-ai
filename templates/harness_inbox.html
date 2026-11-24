@@ -127,6 +127,9 @@
         {% elif approval.draft_reply %}
         <blockquote>{{ approval.draft_reply }}</blockquote>
         {% endif %}
+        {% if approval.draft and approval.draft.template_name %}
+        <p class="muted">Template: {{ approval.draft.template_name }}</p>
+        {% endif %}
         <p>
           {% if approval.kind == 'appointment_request' %}
           <button type="button" class="approval-approve" data-approval-id="{{ approval.id }}">Confirm &amp; book</button>

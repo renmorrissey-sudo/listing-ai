@@ -65,6 +65,7 @@ MIGRATION_MODULES = [
     "migrations.versions.046_lead_qualification",
     "migrations.versions.047_outreach_ledger",
     "migrations.versions.048_appointment_requests",
+    "migrations.versions.049_message_templates",
 ]
 
 # RELEASE NOTE (topai-launch-readiness-release, 2026-11-09): the release

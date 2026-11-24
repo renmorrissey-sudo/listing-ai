@@ -504,13 +504,67 @@ def format_slot_sms(slot: dict) -> str:
 
 def _appointment_type_from_details(details, existing):
     """Appointment type for a request: the existing appointment's type
-    on a reschedule, else the parsed type when valid, else phone_call."""
+    on a reschedule, else the parsed type when valid, else phone_call.
+
+    The coach's type hint is free-form ("meet", "in-person", "video
+    call") — it is mapped to the three-value meeting-mode vocabulary
+    (phone_call / in_person / video_call) BEFORE the APPOINTMENT_TYPES
+    check, so a mode synonym never falls through to the phone_call
+    default. Appointment kinds already in APPOINTMENT_TYPES
+    (buyer_consultation, property_showing, ...) are preserved.
+    """
     if existing and existing.get("appointment_type") in APPOINTMENT_TYPES:
         return existing["appointment_type"]
     candidate = str((details or {}).get("appointment_type") or (details or {}).get("type") or "")
+    mode = _appointment_mode_from_candidate(candidate)
+    if mode:
+        return mode
     if candidate in APPOINTMENT_TYPES:
         return candidate
     return "phone_call"
+
+
+# Free-form type-hint synonyms -> meeting mode (Phase III-5 vocabulary
+# fix). Normalization is case-insensitive and strips punctuation, so
+# "in-person", "in person" and "inperson" all resolve the same way.
+_APPOINTMENT_MODE_SYNONYMS = {
+    "meet": "in_person",
+    "meeting": "in_person",
+    "inperson": "in_person",
+    "in person": "in_person",
+    "meet in person": "in_person",
+    "phone": "phone_call",
+    "call": "phone_call",
+    "phone call": "phone_call",
+    "video": "video_call",
+    "video call": "video_call",
+    "zoom": "video_call",
+    "virtual": "video_call",
+}
+
+
+def _appointment_mode_from_candidate(candidate):
+    """Map a free-form appointment-type hint to a meeting mode, or None.
+
+    Exact synonym first, then word-based fallback for phrases the
+    table does not list ("in person meeting", "video chat"). Returns
+    None when the hint names no mode — the caller then falls through
+    to the APPOINTMENT_TYPES check and the phone_call default.
+    """
+    raw = str(candidate or "").strip().lower()
+    if not raw:
+        return None
+    key = " ".join(re.sub(r"[^a-z0-9 ]", " ", raw).split())
+    if key in _APPOINTMENT_MODE_SYNONYMS:
+        return _APPOINTMENT_MODE_SYNONYMS[key]
+    words = set(key.split())
+    if "inperson" in words or ("in" in words and "person" in words):
+        return "in_person"
+    if words & {"video", "zoom", "virtual"}:
+        return "video_call"
+    if "phone" in words or "call" in words:
+        return "phone_call"
+    return None
 
 
 def create_appointment_request(user_id, lead, analysis: dict | None, *,

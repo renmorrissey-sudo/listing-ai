@@ -27,6 +27,7 @@ from sms_campaigns import sms_campaigns_bp
 from harness.routes import harness_bp
 from social_routes import social_bp
 from calendar_routes import calendar_bp
+from harness.templates_routes import templates_bp
 from sms_prompts import build_sms_prompt
 from social_content import build_social_content_snapshot
 from sms_provider import (
@@ -86,6 +87,7 @@ app.register_blueprint(sms_campaigns_bp)
 app.register_blueprint(harness_bp)
 app.register_blueprint(social_bp)
 app.register_blueprint(calendar_bp)
+app.register_blueprint(templates_bp)
 client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 if config.STRIPE_SECRET_KEY:
