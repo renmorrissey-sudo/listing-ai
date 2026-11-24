@@ -286,8 +286,12 @@ def execute_schedule_follow_up_sms(user_id, arguments: dict, context: dict | Non
 
     Phase III-5: the caller may instead pass ``template_id`` — the
     body then comes from the approved template (resolved + slot-filled
-    server-side). The returned payload carries the read-only
-    ``customer_context`` recall block for the lead.
+    server-side). Phase III-5 fix: the caller may instead pass
+    ``template_name`` — resolved here (tenant-scoped, exact name) to
+    the template id; the scheduler re-validates it (approved SMS
+    template for this tenant) as the enforcement point. The returned
+    payload carries the read-only ``customer_context`` recall block
+    for the lead.
     """
     lead, err, choices = resolve_lead(user_id, arguments, context)
     if err:
@@ -304,6 +308,24 @@ def execute_schedule_follow_up_sms(user_id, arguments: dict, context: dict | Non
     reason = arguments.get("reason") or "Follow up"
     follow_up_id = arguments.get("follow_up_id")
     template_id = arguments.get("template_id")
+    template_name = arguments.get("template_name")
+    if template_id is None and template_name:
+        # Phase III-5 fix: resolve a template NAME to its id
+        # (tenant-scoped, exact name). A name that matches no row for
+        # this tenant is refused fail-closed here; a name that resolves
+        # to a non-approved template is refused by the scheduler's
+        # resolve_template_for_compose (invalid_template_id).
+        from harness.templates_db import get_template_by_name
+
+        row = get_template_by_name(user_id, template_name)
+        if row is None:
+            return (
+                None,
+                f"Template '{template_name}' is not an approved SMS "
+                "template for this account.",
+                None,
+            )
+        template_id = row["id"]
     try:
         from harness.followup_sends import (
             FollowUpScheduleError,
@@ -334,6 +356,8 @@ def execute_schedule_follow_up_sms(user_id, arguments: dict, context: dict | Non
             "scheduled_at": result.get("scheduled_at"),
             "job_id": result.get("job_id"),
             "reason": reason,
+            "template_id": result.get("template_id"),
+            "template_name": result.get("template_name"),
         },
     )
     payload = dict(result)
