@@ -260,17 +260,30 @@ def anthropic_tools() -> list[dict]:
             "description": (
                 "Schedule a follow-up SMS to a lead for a specific time. "
                 "Use when the agent asks to text a lead later (not now). "
-                "The exact message body must be supplied; it is stored "
-                "verbatim and sent verbatim at the scheduled time through "
-                "the harness gate (consent, quiet hours, spend cap). Does "
-                "NOT send immediately and does NOT auto-schedule from a "
-                "coach suggestion — only an explicit schedule request."
+                "Either the exact message body must be supplied, or an "
+                "approved message template referenced by template_id or "
+                "template_name — the template body is filled in "
+                "server-side and stored verbatim; never invent template "
+                "content and never ask the user to paste a template body "
+                "that is listed in the approved templates. The text is "
+                "sent verbatim at the scheduled time through the harness "
+                "gate (consent, quiet hours, spend cap). Does NOT send "
+                "immediately and does NOT auto-schedule from a coach "
+                "suggestion — only an explicit schedule request."
             ),
             "input_schema": _obj(
                 {
                     "lead_id": {"type": "integer"},
                     "lead_name": {"type": "string"},
                     "body": {"type": "string", "description": "Exact SMS text to send."},
+                    "template_id": {
+                        "type": "integer",
+                        "description": "Approved message template id to use instead of a body.",
+                    },
+                    "template_name": {
+                        "type": "string",
+                        "description": "Approved message template name to use instead of a body.",
+                    },
                     "scheduled_at": {
                         "type": "string",
                         "description": "ISO-8601 datetime when the SMS should send.",
@@ -281,7 +294,7 @@ def anthropic_tools() -> list[dict]:
                         "description": "Optional CRM follow-up this send fulfills.",
                     },
                 },
-                required=["body", "scheduled_at"],
+                required=["scheduled_at"],
             ),
         },
         {

@@ -477,6 +477,17 @@ def schedule_follow_up_sms(user_id, lead_id, follow_up_id, body, scheduled_at, r
             scheduled_at=effective_iso,
             conn=conn,
         )
+    # Phase III-5 fix: the schedule-time log line carries the template
+    # so a live verification can confirm it from the logs alone (the
+    # schedule call's arguments were not logged before).
+    logger.info(
+        "follow_up_sms scheduled job=%s tenant=%s lead=%s template_id=%s template_name=%s",
+        job_id,
+        user_id,
+        lead_id,
+        template_id,
+        template_name,
+    )
     return {
         "job_id": job_id,
         "follow_up_send_id": send_id,
@@ -859,11 +870,13 @@ def _handle_draft(user_id, lead_id, job_id, send_row, sms_row, body, mode,
         correlation_id=correlation_id,
     )
     logger.info(
-        "follow_up_sms drafted (no send) job=%s tenant=%s lead=%s approval=%s",
+        "follow_up_sms drafted (no send) job=%s tenant=%s lead=%s approval=%s template_id=%s template_name=%s",
         job_id,
         user_id,
         lead_id,
         approval_id,
+        template_id,
+        template_name,
     )
     return {
         "ok": True,
@@ -1525,8 +1538,9 @@ def process_follow_up_sms_send_job(job):
         correlation_id=correlation_id,
     )
     logger.info(
-        "follow_up_sms sent job=%s tenant=%s lead=%s message=%s provider=%s",
+        "follow_up_sms sent job=%s tenant=%s lead=%s message=%s provider=%s template_id=%s template_name=%s",
         job_id, user_id, lead_id, message_id, provider_message_id,
+        template_id, template_name,
     )
     return {
         "ok": True,

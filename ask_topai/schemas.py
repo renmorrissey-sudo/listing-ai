@@ -430,7 +430,10 @@ def sanitize_schedule_follow_up_sms(arguments: dict) -> tuple[dict, str | None]:
     is ever scheduled with no time or no text.
 
     Phase III-5: ``template_id`` (int) passes through; when present
-    the body may be omitted — the template provides it.
+    the body may be omitted — the template provides it. Phase III-5
+    fix: ``template_name`` (str) passes through too (resolved
+    server-side to the template id); the body is required only when
+    NEITHER a template id nor a template name is given.
     """
     lead_id = _clean_int(arguments.get("lead_id"))
     lead_name = _clean_str(arguments.get("lead_name") or arguments.get("name"), 200)
@@ -444,6 +447,7 @@ def sanitize_schedule_follow_up_sms(arguments: dict) -> tuple[dict, str | None]:
     reason = _clean_str(arguments.get("reason"), 200) or "Follow up"
     follow_up_id = _clean_int(arguments.get("follow_up_id"))
     template_id = _clean_int(arguments.get("template_id"))
+    template_name = _clean_str(arguments.get("template_name"), 200)
     cleaned = {
         "lead_id": lead_id,
         "lead_name": lead_name,
@@ -452,10 +456,11 @@ def sanitize_schedule_follow_up_sms(arguments: dict) -> tuple[dict, str | None]:
         "reason": reason,
         "follow_up_id": follow_up_id,
         "template_id": template_id,
+        "template_name": template_name,
     }
     if not scheduled_at:
         return cleaned, "I need a time to send the follow-up SMS."
-    if not body and template_id is None:
+    if not body and template_id is None and not template_name:
         return cleaned, "Message body is required."
     return cleaned, None
 
