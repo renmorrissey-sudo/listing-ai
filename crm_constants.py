@@ -275,6 +275,8 @@ NEEDS_ATTENTION_REASONS = {
     "review_call_outcome": "Review AI call outcome",
     "calendar_connection_expired": "Calendar connection expired — reconnect",
     "appointment_sync_failed": "Calendar sync failed — retry from the appointment",
+    "stale_no_contact": "No contact for 7+ days",
+    "stale_no_reply": "No reply to last outbound for 7+ days",
 }
 
 PROTECTED_RESOLVE_REASONS = {"opt_out", "delivery_failed", "sensitive_topic", "consent_review_required"}
@@ -374,6 +376,24 @@ VERBAL_CONSENT_SCRIPT = (
 
 CONFIDENCE_THRESHOLD = 0.55
 FIRST_RESPONSE_HOURS = 24
+
+# Phase III-6: stale-opportunity detection thresholds (days, 7x24h each).
+# Two named constants (not one shared STALE_DAYS) so the limbs can
+# diverge later without touching call sites.
+STALE_NO_CONTACT_DAYS = 7
+STALE_NO_REPLY_DAYS = 7
+# Open-lane states: leads still being worked. Excluded: closed_won,
+# closed_lost, do_not_contact, unqualified, under_contract.
+STALE_OPEN_STATUSES = frozenset({
+    "new",
+    "attempting_contact",
+    "contacted",
+    "qualifying",
+    "qualified",
+    "appointment_scheduled",
+    "appointment_completed",
+    "nurture",
+})
 
 
 def normalize_lead_status(status):

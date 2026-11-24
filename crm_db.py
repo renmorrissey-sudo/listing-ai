@@ -17,6 +17,9 @@ from crm_constants import (
     PIPELINE_STAGES,
     PRIORITIES,
     PROTECTED_RESOLVE_REASONS,
+    STALE_NO_CONTACT_DAYS,
+    STALE_NO_REPLY_DAYS,
+    STALE_OPEN_STATUSES,
     TASK_STATUSES,
     TASK_TYPES,
     build_appointment_outcome_suggestion,
@@ -2306,6 +2309,174 @@ def list_needs_attention(user_id, limit=100, local_date=None):
         return [dict(r) for r in rows]
 
 
+# Phase III-6: the leads-list stale filter reuses the
+# consent_review_required EXISTS pattern. Equality only — no LIKE.
+STALE_LEADS_EXISTS_SQL = """
+    AND EXISTS (
+        SELECT 1 FROM needs_attention na
+        WHERE na.lead_id = l.id AND na.user_id = l.user_id
+          AND na.reason_code IN ('stale_no_contact', 'stale_no_reply')
+          AND na.status = 'open'
+    )
+"""
+
+
+def _stale_flag_updates(user_id, now_dt):
+    """Phase III-6: fifth bucket of refresh_needs_attention.
+
+    Flags leads in an open lane state that are stale — (a) no contact in
+    either direction for STALE_NO_CONTACT_DAYS, or (b) no reply within
+    STALE_NO_REPLY_DAYS of the last agent outbound — and reconciles
+    (resolves) open stale items whose lead is no longer stale.
+
+    Detection only: the only writes are one needs_attention row (via the
+    existing upsert), one stale_flagged timeline entry on first flagging,
+    and the standard needs_attention_resolved entry on clear. No send,
+    no status/score write, no follow-up, no approval, no ledger touch.
+
+    The anchor is computed in Python: SQLite's multi-arg max() ignores
+    NULLs while Postgres GREATEST propagates them, so a cross-column MAX
+    is not portable in SQL. All comparisons use UTC ISO datetimes.
+    """
+    no_contact_cutoff = now_dt - timedelta(days=STALE_NO_CONTACT_DAYS)
+    no_reply_cutoff = now_dt - timedelta(days=STALE_NO_REPLY_DAYS)
+    placeholders = ", ".join("?" for _ in STALE_OPEN_STATUSES)
+    with get_db() as conn:
+        candidates = [
+            dict(r)
+            for r in conn.execute(
+                f"""
+                SELECT id, status, last_inbound_at, last_outbound_at,
+                       last_contacted_at, latest_call_at, created_at
+                FROM leads
+                WHERE user_id = ? AND status IN ({placeholders})
+                  AND opt_out_status != 'opted_out'
+                  AND sms_consent_status NOT IN ('opted_out', 'revoked')
+                """,
+                (user_id, *sorted(STALE_OPEN_STATUSES)),
+            ).fetchall()
+        ]
+        future_appt_lead_ids = {
+            r["lead_id"]
+            for r in conn.execute(
+                """
+                SELECT DISTINCT lead_id FROM appointments
+                WHERE user_id = ? AND status IN ('scheduled', 'confirmed')
+                  AND start_at > ?
+                """,
+                (user_id, now_dt.isoformat()),
+            ).fetchall()
+        }
+        open_stale = [
+            dict(r)
+            for r in conn.execute(
+                """
+                SELECT id, lead_id, reason_code FROM needs_attention
+                WHERE user_id = ? AND status = 'open'
+                  AND reason_code IN ('stale_no_contact', 'stale_no_reply')
+                """,
+                (user_id,),
+            ).fetchall()
+        ]
+
+    current = {}
+    for lead in candidates:
+        last_inbound = parse_iso_dt(lead.get("last_inbound_at"))
+        last_outbound = parse_iso_dt(lead.get("last_outbound_at"))
+        last_contacted = parse_iso_dt(lead.get("last_contacted_at"))
+        latest_call = parse_iso_dt(lead.get("latest_call_at"))
+        contacts = [
+            d
+            for d in (last_inbound, last_outbound, last_contacted, latest_call)
+            if d is not None
+        ]
+        anchor = max(contacts) if contacts else None
+        # Limb (a): no contact either direction. The anchor must be
+        # non-null — a never-contacted `new` lead is owned by
+        # no_first_contact, not by this limb. A future appointment is
+        # the next contact, so it suppresses (a) only.
+        limb_a = (
+            anchor is not None
+            and anchor < no_contact_cutoff
+            and lead["id"] not in future_appt_lead_ids
+        )
+        # Limb (b): no reply to the last outbound. last_contacted_at is
+        # deliberately not used here — the outbound itself sets it, so it
+        # cannot discriminate. A call after the outbound suppresses (b):
+        # the outbound's purpose was achieved by another channel.
+        limb_b = (
+            last_outbound is not None
+            and last_outbound < no_reply_cutoff
+            and (last_inbound is None or last_inbound < last_outbound)
+            and (latest_call is None or latest_call < last_outbound)
+        )
+        if limb_b:
+            # (b) takes precedence: the more specific reason.
+            current[lead["id"]] = (
+                "stale_no_reply",
+                last_outbound,
+                (now_dt - last_outbound).days,
+            )
+        elif limb_a:
+            current[lead["id"]] = (
+                "stale_no_contact",
+                anchor,
+                (now_dt - anchor).days,
+            )
+
+    resolved = set()
+    for lead_id, (reason_code, last_contact, days_stale) in current.items():
+        existing = [item for item in open_stale if item["lead_id"] == lead_id]
+        if any(item["reason_code"] == reason_code for item in existing):
+            continue  # Already flagged under this limb: no re-write, no spam.
+        for item in existing:
+            # Reason changed (e.g. (b) -> (a)): resolve the old item(s) first.
+            resolve_needs_attention_by_reason(
+                user_id, lead_id, item["reason_code"]
+            )
+            resolved.add((lead_id, item["reason_code"]))
+        date_label = last_contact.date().isoformat()
+        if reason_code == "stale_no_reply":
+            reason_text = f"No reply for 7+ days — last outbound {date_label}"
+            summary = (
+                f"Lead went stale: no reply for {days_stale} days"
+                f" — last outbound {date_label}"
+            )
+        else:
+            reason_text = f"No contact for 7+ days — last contact {date_label}"
+            summary = (
+                f"Lead went stale: no contact for {days_stale} days"
+                f" — last contact {date_label}"
+            )
+        upsert_needs_attention(
+            user_id, lead_id, reason_code, priority="high", reason_text=reason_text
+        )
+        add_lead_activity(
+            lead_id,
+            user_id,
+            "stale_flagged",
+            summary,
+            {
+                "reason_code": reason_code,
+                "last_contact_at": last_contact.isoformat(),
+                "days_stale": days_stale,
+            },
+        )
+
+    # Reconcile: any open stale item whose lead is no longer stale under
+    # either limb (contact resumed, or the lead left the open lane) is
+    # resolved. The flag is only visible via reads, so clearing on read
+    # means the agent never sees a stale flag for a lead that had contact.
+    for item in open_stale:
+        if (item["lead_id"], item["reason_code"]) in resolved:
+            continue
+        current_reason = current.get(item["lead_id"])
+        if current_reason is None or current_reason[0] != item["reason_code"]:
+            resolve_needs_attention_by_reason(
+                user_id, item["lead_id"], item["reason_code"]
+            )
+
+
 def refresh_needs_attention(user_id, local_date=None):
     """Compute overdue/system queue items for this user."""
     now_dt = datetime.now(timezone.utc)
@@ -2338,7 +2509,7 @@ def refresh_needs_attention(user_id, local_date=None):
             """,
             (user_id, now),
         ).fetchall()]
-        stale = [dict(r) for r in conn.execute(
+        no_first_contact = [dict(r) for r in conn.execute(
             """
             SELECT id FROM leads
             WHERE user_id = ? AND status = 'new'
@@ -2366,8 +2537,10 @@ def refresh_needs_attention(user_id, local_date=None):
             user_id, appt["lead_id"], "appointment_outcome_missing", priority="high",
             source_ref_type="appointment", source_ref_id=appt["id"],
         )
-    for lead in stale:
+    for lead in no_first_contact:
         upsert_needs_attention(user_id, lead["id"], "no_first_contact", priority="normal")
+    # Phase III-6: fifth bucket — 7-day stale-opportunity detection.
+    _stale_flag_updates(user_id, now_dt)
 
 
 def create_notification(user_id, ntype, title, body="", link=None, lead_id=None):
@@ -2482,6 +2655,10 @@ def get_pipeline_metrics(
             "SELECT COUNT(*) AS count FROM needs_attention WHERE user_id = ? AND status='open' AND reason_code='unreviewed_inbound'",
             (user_id,),
         )
+        stale_leads = count(
+            "SELECT COUNT(*) AS count FROM needs_attention WHERE user_id = ? AND status='open' AND reason_code IN ('stale_no_contact', 'stale_no_reply')",
+            (user_id,),
+        )
         appts_week = count(
             "SELECT COUNT(*) AS count FROM appointments WHERE user_id = ? AND start_at >= ? AND start_at <= ?",
             (user_id, now_iso, week_end),
@@ -2547,6 +2724,7 @@ def get_pipeline_metrics(
         "active_leads": count_filtered_leads(user_id, scope="active"),
         "new_leads": new_leads,
         "needs_attention": count_open_needs_attention(user_id, local_date=day),
+        "stale": stale_leads,
         "overdue_follow_ups": fu_counts["follow_ups_overdue"],
         "follow_ups_due_today": fu_counts["follow_ups_due_today"],
         "follow_ups_due_this_week": fu_counts["follow_ups_due_this_week"],
@@ -2918,6 +3096,7 @@ def filter_leads(
     import_batch_id=None,
     consent_review_required=None,
     search=None,
+    stale=None,
 ):
     """List leads for this tenant. scope=active / stage=* match dashboard Pipeline cards."""
     from crm_constants import normalize_lead_status as norm
@@ -2992,6 +3171,11 @@ def filter_leads(
                       AND na.status = 'open'
                 )
             """
+        if stale in (True, 1, "1", "true", "yes"):
+            # Phase III-6: refresh first so the filter is self-consistent
+            # — a stale flag exists only after a refresh computed it.
+            refresh_needs_attention(user_id)
+            sql += STALE_LEADS_EXISTS_SQL
         sql += " ORDER BY l.updated_at DESC LIMIT ?"
         params.append(limit)
         return [dict(r) for r in conn.execute(sql, params).fetchall()]

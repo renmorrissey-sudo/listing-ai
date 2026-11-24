@@ -124,6 +124,13 @@
               <label for="batch-input">Batch ID</label>
               <input name="batch" id="batch-input" placeholder="Import batch id" value="{{ batch_filter }}" />
             </div>
+            <div class="field">
+              <label for="stale-select">Stale</label>
+              <select name="stale" id="stale-select">
+                <option value="">All leads</option>
+                <option value="1" {% if stale_filter == '1' %}selected{% endif %}>Stale only</option>
+              </select>
+            </div>
             <div class="filters-popover-actions">
               {% if has_active_filters %}<a class="btn secondary" href="/crm/leads">Clear all</a>{% endif %}
               <button class="btn" type="submit">Apply filters</button>

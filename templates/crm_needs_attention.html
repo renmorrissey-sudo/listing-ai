@@ -24,6 +24,10 @@
     </div>
     {% endif %}
     <div id="flash" class="flash"></div>
+    <div class="row" style="margin-bottom:12px;">
+      <a class="btn secondary" href="/crm/needs-attention">All</a>
+      <a class="btn secondary" href="/crm/needs-attention?reason=stale_no_contact,stale_no_reply">Stale</a>
+    </div>
     {% if type_filter in ['draft_reply', 'draft', 'drafts'] %}
     <div class="card">
       {% if drafts %}

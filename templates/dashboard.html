@@ -122,6 +122,7 @@
       <div class="metrics-row" style="margin-top:10px;">
         {{ pipeline_metric('Tasks today', pipeline.tasks_due_today, '/crm/tasks?due=today' ~ (date_qs|default('')), 'View ' ~ pipeline.tasks_due_today ~ ' tasks due today') }}
         {{ pipeline_metric('Appts today', pipeline.appointments_today, '/crm/calendar?date=today&event_type=appointment' ~ (date_qs|default('')), 'View ' ~ pipeline.appointments_today ~ ' appointments today') }}
+        {{ pipeline_metric('Stale leads', pipeline.stale|default(0), '/crm/leads?stale=1', 'View ' ~ (pipeline.stale|default(0)) ~ ' stale leads') }}
       </div>
       <div class="metrics-row" style="margin-top:10px;">
         {{ pipeline_metric('External leads', pipeline.external_leads|default(0), '/crm/leads?origin=external', 'View ' ~ (pipeline.external_leads|default(0)) ~ ' external leads') }}
