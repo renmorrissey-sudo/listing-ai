@@ -414,13 +414,23 @@ def edit_template(user_id, template_id, name=None, channel=None,
 
 
 def resolve_template_for_compose(user_id, template_id, channel="sms"):
-    """Resolve a claimed template id for composing. Returns the row
-    dict only when the template exists for this tenant, is for this
-    channel, and is status 'approved'. Any failure returns None and
-    logs (fail closed) — the caller falls back to free compose."""
+    """Resolve a claimed template id (or name) for composing. Returns
+    the row dict only when the template exists for this tenant, is for
+    this channel, and is status 'approved'. Any failure returns None
+    and logs (fail closed) — the caller falls back to free compose.
+
+    A claim may be an integer id or an exact template name. The Ask
+    TopAI path already resolves names to ids before composing; the
+    inbound path accepts name claims directly so a name claim does
+    not silently fail to resolve when the template exists. A name
+    lookup is tenant-scoped and exact, and the resolved row passes
+    the same channel/status checks as an id lookup."""
     if template_id is None:
         return None
     row = get_template(user_id, template_id)
+    if row is None and isinstance(template_id, str) and template_id.strip():
+        # Name claim: exact-name, tenant-scoped lookup.
+        row = get_template_by_name(user_id, template_id)
     if row is None:
         logger.warning(
             "template claim rejected: template %s not found for tenant %s",
