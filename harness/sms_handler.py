@@ -710,9 +710,32 @@ def process_sms_auto_reply_job(job):
     if decision == "ALLOW":
         from sms_ai_agent import process_inbound_ai
 
-        send_result = process_inbound_ai(
-            user_id, lead_id, inbound_id, body, receiving_number
-        ) or {}
+        if template_id is not None:
+            # Phase III-5 follow-up: the handler resolved an approved
+            # template and filled its slots into the draft. Send that
+            # draft as-is — re-running the coach inside
+            # process_inbound_ai would discard it and free-compose
+            # instead. The handler's analysis + coach ids are passed
+            # through; the send path still applies the auto-path gate,
+            # truncation, scheduling, and ledger reason.
+            send_result = process_inbound_ai(
+                user_id, lead_id, inbound_id, body, receiving_number,
+                handler_draft={
+                    "draft_reply": draft,
+                    "escalation_topics": analysis.get("escalation_topics") or [],
+                    "sensitive_topic": analysis.get("sensitive_topic"),
+                    "intent": analysis.get("intent"),
+                    "summary": analysis.get("summary"),
+                    "suggested_lead_status": analysis.get("suggested_lead_status"),
+                    "appointment_details": analysis.get("appointment_details") or {},
+                    "insight_id": coach.get("insight_id"),
+                    "suggested_id": coach.get("suggested_id"),
+                },
+            ) or {}
+        else:
+            send_result = process_inbound_ai(
+                user_id, lead_id, inbound_id, body, receiving_number
+            ) or {}
         sent = bool(send_result.get("replied"))
         # L4: provider execution carries the same correlation id as the
         # job, policy decision, and audit rows.
