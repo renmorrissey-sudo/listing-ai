@@ -136,7 +136,7 @@ def schedule_inbound_ai(app, user_id, lead_id, inbound_id, body, receiving_numbe
 
 def process_inbound_ai(
     user_id, lead_id, inbound_id, inbound_body, receiving_number, *, approved=False,
-    approved_draft=None,
+    approved_draft=None, handler_draft=None,
 ):
     """
     Analyze the inbound SMS and send at most ONE automated reply.
@@ -164,6 +164,18 @@ def process_inbound_ai(
     If any check requires the text to change, the send is blocked
     (never silently modified) and the approval is returned to the
     approval workflow via the caller's blocked handling.
+
+    ``handler_draft`` is the harness handler's already-resolved draft
+    (the ``sms_auto_reply`` job handler's analysis + coach ids, as
+    built in ``harness.sms_handler``). When it is provided, the coach
+    is NOT re-run and the handler's text is sent — this is the
+    Phase III-5 ALLOW-path fix: the handler resolved an approved
+    template and filled its slots, and re-running the coach would
+    discard that resolved draft and free-compose instead. Unlike the
+    approved path, this is NOT a human approval: the auto-path gate,
+    the 480-char truncation, the scheduling side effect, and the
+    ``auto_reply`` ledger reason all apply exactly as for a fresh
+    coach draft. Only the coach call itself is skipped.
     """
     from sms_inbound import analyze_inbound_and_coach
 
@@ -191,6 +203,34 @@ def process_inbound_ai(
             "analysis": analysis,
             "insight_id": approved_draft.get("insight_id"),
             "suggested_id": None,
+            "auto_execute": False,
+            "error": None,
+        }
+    elif handler_draft is not None:
+        # Handler-resolved draft (Phase III-5 ALLOW-path fix): the
+        # harness handler already ran the coach once and resolved an
+        # approved template into this draft. Do NOT re-run the coach —
+        # a fresh model call would discard the resolved template and
+        # free-compose instead. The analysis is built from the
+        # handler's fields only; everything downstream (gate,
+        # truncation, scheduling, ledger reason) runs on the auto
+        # path, exactly as for a fresh coach draft.
+        stored_topics = list(handler_draft.get("escalation_topics") or [])
+        analysis = {
+            "draft_reply": handler_draft.get("draft_reply"),
+            "suggested_reply": handler_draft.get("draft_reply"),
+            "escalation_topics": stored_topics,
+            "sensitive_topic": bool(handler_draft.get("sensitive_topic")),
+            "requires_manual_review": False,
+            "intent": handler_draft.get("intent"),
+            "summary": handler_draft.get("summary"),
+            "suggested_lead_status": handler_draft.get("suggested_lead_status"),
+            "appointment_details": handler_draft.get("appointment_details") or {},
+        }
+        coach = {
+            "analysis": analysis,
+            "insight_id": handler_draft.get("insight_id"),
+            "suggested_id": handler_draft.get("suggested_id"),
             "auto_execute": False,
             "error": None,
         }
