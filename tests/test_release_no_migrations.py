@@ -25,8 +25,13 @@ durable duplicate-outreach ledger for Phase III-3, plus
 leads.phone_normalized) is also in the release. Migration 048
 (harness_appointment_requests, the pending appointment-request table
 for Phase III-4, plus calendar_connections and calendar_oauth_states
-for the per-tenant calendar OAuth) is also in the release. The runner
-list therefore ends at 048 (40 modules), with 033/034 still excluded.
+for the per-tenant calendar OAuth) is also in the release. Migration
+049 (harness_message_templates, the approved message templates store
+for Phase III-5) is also in the release. Migration 050
+(leads.phone_normalized backfill, the follow-up to the PR #56
+phone_normalized fix: fills NULL phone_normalized from phone_number
+for pre-existing rows) is also in the release. The runner list
+therefore ends at 050 (42 modules), with 033/034 still excluded.
 
 These tests pin what the release DOES still guarantee on the 029
 column set for model/correlation_id, and pin the two known
@@ -57,10 +62,10 @@ from harness.jobs import claim_jobs, enqueue_job
 from migrations.runner import MIGRATION_MODULES
 
 
-def test_runner_list_ends_at_049_without_033_034():
-    """Migration 049 is listed; 033/034 remain excluded from the release."""
-    assert MIGRATION_MODULES[-1].endswith("049_message_templates")
-    assert len(MIGRATION_MODULES) == 41
+def test_runner_list_ends_at_050_without_033_034():
+    """Migration 050 is listed; 033/034 remain excluded from the release."""
+    assert MIGRATION_MODULES[-1].endswith("050_phone_normalized_backfill")
+    assert len(MIGRATION_MODULES) == 42
     assert not any("033_" in m or "034_" in m for m in MIGRATION_MODULES)
 
 
