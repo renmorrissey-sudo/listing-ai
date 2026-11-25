@@ -220,15 +220,21 @@ def create_external_lead(
         cur = conn.execute(
             """
             INSERT INTO leads
-                (user_id, name, phone_number, email, lead_type, property_interest, status, source,
+                (user_id, name, phone_number, phone_normalized, email, lead_type, property_interest, status, source,
                  notes, assigned_user_id, created_at, updated_at,
                  sms_consent_status, sms_sending_blocked, external_source_id, external_record_id,
                  external_payload_meta, pond_status, import_batch_id, consent_status, opt_out_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not_certified', ?, ?, ?, ?, ?, ?, 'unknown', 'active')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not_certified', ?, ?, ?, ?, ?, ?, 'unknown', 'active')
             """,
             (
                 user_id,
                 name or "Lead",
+                phone_number,
+                # phone_number arrives validated to E.164 (validate_e164_phone
+                # in external_leads/ingest.py), so it IS the normalized value.
+                # Without this the row's phone_normalized stays NULL and the
+                # inbound routing lookup (list_lead_owners_by_phone, which
+                # matches only on phone_normalized) cannot find the lead.
                 phone_number,
                 email,
                 lead_type,
