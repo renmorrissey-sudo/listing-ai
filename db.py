@@ -845,12 +845,22 @@ def update_lead_contact_info(
     next_action=_UNSET,
 ):
     now = datetime.now(timezone.utc).isoformat()
+    # When the phone changes, the normalized value changes with it — the
+    # inbound routing lookup (list_lead_owners_by_phone) matches only on
+    # phone_normalized, so leaving the old value here strands the lead.
+    # Un-normalizable input normalizes to "" (the migration 047
+    # convention: phone_normalized stays "" for those, and lookups fall
+    # back to exact-string match on phone_number).
+    normalized_phone = (
+        _normalize_phone_e164(phone_number) if phone_number is not _UNSET else None
+    )
     with get_db() as conn:
         conn.execute(
             """
             UPDATE leads
             SET name = CASE WHEN ? THEN ? ELSE name END,
                 phone_number = CASE WHEN ? THEN ? ELSE phone_number END,
+                phone_normalized = CASE WHEN ? THEN ? ELSE phone_normalized END,
                 email = CASE WHEN ? THEN ? ELSE email END,
                 lead_type = CASE WHEN ? THEN ? ELSE lead_type END,
                 property_interest = CASE WHEN ? THEN ? ELSE property_interest END,
@@ -864,6 +874,8 @@ def update_lead_contact_info(
                 (name or "").strip()[:200] or "Lead" if name is not _UNSET else None,
                 bind_bool(phone_number is not _UNSET),
                 (phone_number or "").strip()[:40] if phone_number is not _UNSET else None,
+                bind_bool(phone_number is not _UNSET),
+                normalized_phone,
                 bind_bool(email is not _UNSET),
                 (email or "").strip()[:200] or None if email is not _UNSET else None,
                 bind_bool(lead_type is not _UNSET),
