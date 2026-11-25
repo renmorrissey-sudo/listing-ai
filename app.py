@@ -1839,6 +1839,189 @@ def generate_sms():
         return jsonify({"error": "Could not generate SMS. Please try again."}), 500
 
 
+def _draft_verified_facts(user_id, lead):
+    """VERIFIED FACTS block for a custom-reply draft (criterion 6).
+
+    Only facts the app actually holds. There is no live
+    listing-availability source, so home availability is always unknown.
+    Best-effort: appointment reads never block the draft.
+    """
+    from sms_prompts import build_verified_facts_block
+
+    open_requests = []
+    confirmed_requests = []
+    try:
+        from harness.appointment_requests import (
+            list_pending_requests,
+            list_requests_for_lead,
+        )
+
+        open_requests = list_pending_requests(user_id, lead["id"])
+        confirmed_requests = [
+            r
+            for r in list_requests_for_lead(user_id, lead["id"])
+            if (r or {}).get("status") == "confirmed"
+        ]
+    except Exception as exc:
+        logger.warning("custom reply draft appointment facts unavailable: %s", exc)
+    try:
+        timezone_name = db.get_user_timezone(user_id)
+    except Exception:
+        timezone_name = None
+    return build_verified_facts_block(
+        open_requests,
+        confirmed_requests,
+        lead.get("property_interest"),
+        timezone_name=timezone_name or "America/Denver",
+    )
+
+
+@app.route("/sms/draft-reply", methods=["POST"])
+@auth.subscription_required
+@limiter.limit("20 per minute", key_func=_user_rate_limit_key)
+def draft_sms_reply():
+    """Draft a reply to a lead's incoming SMS with Claude (drafting only).
+
+    Custom SMS reply drafts (Ren's spec): the agent reviews, edits, and
+    sends the draft through the existing composer Send path. This endpoint
+    writes NOTHING to the database — no message, approval, template,
+    ledger, or lead row — so generating a draft can never send, save, or
+    approve anything. The only persistence is the Anthropic cost recording
+    inside ``sms_coach.analyze_inbound_reply`` (the single recording
+    point for a coach call). Drafting is allowed for an opted-out lead
+    (it sends nothing); the response flags ``opted_out`` so the UI can
+    warn that the reply cannot be sent, and the existing send path
+    refuses the send server-side.
+    """
+    user = auth.get_current_user()
+    data = request.get_json(silent=True) or {}
+    try:
+        lead_id = int(data.get("lead_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Select a lead to draft a reply for."}), 400
+    lead = db.get_lead(lead_id, user["id"])
+    if not lead:
+        return jsonify({"error": "Lead not found."}), 404
+    messages = db.list_lead_messages(user["id"], lead_id)
+    inbound = None
+    inbound_message_id = data.get("inbound_message_id")
+    if inbound_message_id is not None:
+        try:
+            inbound_message_id = int(inbound_message_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid message."}), 400
+        for msg in messages:
+            if msg["id"] == inbound_message_id:
+                inbound = msg
+                break
+        if inbound is None or (inbound.get("direction") or "").lower() != "inbound":
+            return jsonify(
+                {"error": "Selected message is not an incoming SMS for this lead."}
+            ), 400
+    else:
+        for msg in reversed(messages):
+            if (msg.get("direction") or "").lower() == "inbound":
+                inbound = msg
+                break
+    if inbound is None:
+        return jsonify({"error": "No incoming message to reply to."}), 400
+    inbound_text = inbound.get("message_body") or ""
+
+    # Best-effort context (Phase III-5 pattern): approved templates +
+    # read-only recall. A failure here must not block the draft.
+    approved_templates = []
+    recall_context = ""
+    try:
+        from harness.memory import build_recall_context
+        from harness.templates_db import list_approved_templates
+
+        approved_templates = list_approved_templates(user["id"], channel="sms")
+        recall_context = build_recall_context(user["id"], lead_id)
+    except Exception as exc:
+        logger.warning("custom reply draft context unavailable: %s", exc)
+
+    from sms_prompts import build_inbound_reply_analysis_prompt
+
+    prompt = build_inbound_reply_analysis_prompt(
+        lead,
+        messages,
+        inbound_text,
+        approved_templates=approved_templates,
+        recall_context=recall_context,
+        draft_only=True,
+        verified_facts=_draft_verified_facts(user["id"], lead),
+    )
+
+    # Spend-cap reservation (sms_inbound.py pattern): reserve an
+    # upper-bound estimate before the model call; a refused reservation
+    # is a 402 with no model call. The reservation is released after the
+    # coach call (and its cost recording) in the finally below.
+    correlation_id = f"draft-reply-{secrets.token_hex(8)}"
+    reservation_made = False
+    try:
+        from harness.costs import (
+            SPEND_CAP_REACHED_MESSAGE,
+            estimate_anthropic_call_micros,
+            reserve_spend,
+        )
+
+        if not reserve_spend(
+            user["id"],
+            estimate_anthropic_call_micros(config.CLAUDE_MODEL, len(prompt)),
+            correlation_id,
+        ):
+            return jsonify({"error": SPEND_CAP_REACHED_MESSAGE}), 402
+        reservation_made = True
+    except Exception:
+        reservation_made = False  # fail open on reservation errors
+    try:
+        analysis = sms_coach.analyze_inbound_reply(
+            prompt,
+            user_id=user["id"],
+            correlation_id=correlation_id,
+        )
+    except sms_coach.SmsCoachError:
+        logger.warning("custom reply draft failed lead_id=%s", lead_id)
+        return jsonify({"error": "Could not draft a reply. Please try again."}), 500
+    finally:
+        if reservation_made:
+            try:
+                from harness.costs import release_reservation
+
+                release_reservation(user["id"], correlation_id)
+            except Exception:
+                pass
+
+    # template_id/template_name are informational only (which approved
+    # template the draft used, if any) — they never authorise anything.
+    template_id = analysis.get("template_id")
+    template_name = None
+    if template_id is not None:
+        try:
+            from harness.templates_db import get_template
+
+            tpl = get_template(user["id"], template_id)
+            if tpl and tpl.get("status") == "approved":
+                template_name = tpl.get("name")
+            else:
+                template_id = None
+        except Exception:
+            template_id = None
+    return jsonify(
+        {
+            "lead_id": lead_id,
+            "inbound_message_id": inbound["id"],
+            "draft_reply": analysis.get("draft_reply") or "",
+            "template_id": template_id,
+            "template_name": template_name,
+            "escalation_topics": analysis.get("escalation_topics") or [],
+            "sensitive_topic": bool(analysis.get("sensitive_topic")),
+            "requires_manual_review": bool(analysis.get("requires_manual_review")),
+            "opted_out": (lead.get("opt_out_status") or "active") == "opted_out",
+        }
+    )
+
+
 @app.route("/sms/messages", methods=["POST"])
 @auth.subscription_required
 @limiter.limit(lambda: f"{config.SMS_DAILY_LIMIT} per day", key_func=_user_rate_limit_key)
