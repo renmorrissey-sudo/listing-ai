@@ -145,7 +145,15 @@ def is_sms_sending_enabled():
     """
     Whether the AI SMS Assistant may enable outbound Send for the active provider.
     For Telnyx: credentials complete AND toll-free verification status == verified.
+
+    Waived when the resolved transport is the mock provider: no real provider
+    send happens, so the Telnyx prerequisites are vacuous — the same waiver
+    pattern as check_telnyx_toll_free_send_allowed and
+    check_telnyx_trial_destination. On production the resolved transport is
+    real Telnyx, so this branch cannot fire there.
     """
+    if _resolved_transport_is_mock():
+        return True
     provider = (config.SMS_PROVIDER or "").lower().strip()
     if provider == "telnyx":
         return telnyx_configuration_complete() and is_telnyx_toll_free_verified()
