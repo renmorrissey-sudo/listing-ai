@@ -26,18 +26,12 @@ leads.phone_normalized) is also in the release. Migration 048
 (harness_appointment_requests, the pending appointment-request table
 for Phase III-4, plus calendar_connections and calendar_oauth_states
 for the per-tenant calendar OAuth) is also in the release. Migration
-049 (harness_message_templates, the per-tenant approved message
-templates store for Phase III-5 customer context / approved
-templates) is also in the release. Migration
-100 (the staging-only mock calendar connection for Ren's staging
-tenant, created by calling ensure_mock_connection(2) — no in-app path
-can create a mock calendar connection on staging) is also in the
-release, inserted immediately before 099 so 099 stays last. The runner
-list therefore holds 49 modules and ends at 099 (the staging-only
-sender assignment), with 047, 048 and 049 in the list and 033/034 still excluded.
-(Note: the staging runner carries 8 staging-only modules — 037-041,
-044, 099, 100 — on top of main's 41, so its count and last entry differ
-from main's test, which asserts 41 modules ending at 049.)
+049 (harness_message_templates, the approved message templates store
+for Phase III-5) is also in the release. Migration 050
+(leads.phone_normalized backfill, the follow-up to the PR #56
+phone_normalized fix: fills NULL phone_normalized from phone_number
+for pre-existing rows) is also in the release. The runner list
+therefore ends at 050 (42 modules), with 033/034 still excluded.
 
 These tests pin what the release DOES still guarantee on the 029
 column set for model/correlation_id, and pin the two known
@@ -68,29 +62,10 @@ from harness.jobs import claim_jobs, enqueue_job
 from migrations.runner import MIGRATION_MODULES
 
 
-def test_runner_list_ends_at_099_with_049_without_033_034():
-    """Migration 049 is listed; 048 also listed; 033/034 remain excluded.
-
-    The staging runner ends at 099 (the staging-only sender
-    assignment), not at 049 — main's test asserts 41 modules ending
-    at 049; staging carries 8 staging-only modules on top.
-    Migration 100 (staging-only mock calendar connection) is listed
-    immediately before 099, so 099 stays last.
-    """
-    assert any(m.endswith("047_outreach_ledger") for m in MIGRATION_MODULES)
-    assert any(m.endswith("048_appointment_requests") for m in MIGRATION_MODULES)
-    assert any(m.endswith("049_message_templates") for m in MIGRATION_MODULES)
-    assert any(
-        m.endswith("100_ensure_mock_calendar_connection_for_ren_tenant")
-        for m in MIGRATION_MODULES
-    )
-    assert MIGRATION_MODULES[-2].endswith(
-        "100_ensure_mock_calendar_connection_for_ren_tenant"
-    )
-    assert MIGRATION_MODULES[-1].endswith(
-        "099_assign_telnyx_platform_sender_to_ren_tenant"
-    )
-    assert len(MIGRATION_MODULES) == 49
+def test_runner_list_ends_at_050_without_033_034():
+    """Migration 050 is listed; 033/034 remain excluded from the release."""
+    assert MIGRATION_MODULES[-1].endswith("050_phone_normalized_backfill")
+    assert len(MIGRATION_MODULES) == 42
     assert not any("033_" in m or "034_" in m for m in MIGRATION_MODULES)
 
 

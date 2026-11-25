@@ -72,6 +72,7 @@ MIGRATION_MODULES = [
     "migrations.versions.047_outreach_ledger",
     "migrations.versions.048_appointment_requests",
     "migrations.versions.049_message_templates",
+    "migrations.versions.050_phone_normalized_backfill",
     "migrations.versions.100_ensure_mock_calendar_connection_for_ren_tenant",
     "migrations.versions.099_assign_telnyx_platform_sender_to_ren_tenant",
 ]
