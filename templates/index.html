@@ -426,7 +426,9 @@
 
         <div class="field-section-label">Message</div>
         <div class="form-group">
-          <label>SMS Message</label>
+          <label>SMS Message <span id="sms-ai-draft-label" style="display:none;color:#7a5a00;font-weight:600;">· AI draft</span></label>
+          <div id="sms-draft-flag-banner" class="notice" style="display:none;margin-bottom:8px;border-color:#c45c26;color:#7a3410;" aria-live="polite"></div>
+          <div id="sms-opted-out-warning" class="notice" style="display:none;margin-bottom:8px;border-color:#c45c26;color:#7a3410;" aria-live="polite">This lead opted out — this reply cannot be sent by SMS.</div>
           <textarea name="message_body" id="sms-message-body" maxlength="480" placeholder="Click Generate SMS to draft a message, then edit before sending."></textarea>
           <div class="muted" id="sms-char-count" style="font-size:12px;margin-top:6px;">0 / 480 characters</div>
         </div>
@@ -466,6 +468,7 @@
         <label>Select lead to view conversation</label>
         <select id="sms-lead-select"><option value="">Loading leads...</option></select>
       </div>
+      <button type="button" class="btn-generate" id="sms-draft-reply-btn" style="display:none;margin-bottom:10px;"><div class="spinner" id="sms-draft-reply-spinner"></div><span id="sms-draft-reply-label">Draft reply with Claude</span></button>
       <div class="call-history" id="sms-thread" style="display:none;"></div>
       <div class="placeholder" id="sms-thread-placeholder">
         <p>Select a lead to view<br/>conversation history.</p>
@@ -766,6 +769,92 @@
   let smsTollFreeVerified = false;
   let smsVerificationBlockMessage = "SMS sending isn't available yet while your number completes toll-free verification. Contact support if this is taking longer than expected.";
   let selectedSmsLeadId = '';
+  let lastAiDraft = '';
+  const SMS_DRAFT_FLAG_LABELS = {
+    legal: 'Legal',
+    financing: 'Financing advice',
+    negotiation: 'Negotiation',
+    fair_housing: 'Fair housing (neighbourhood demographics)',
+    complaint: 'Complaint',
+    uncertain_property_fact: 'Unverifiable property fact',
+  };
+
+  function hideSmsDraftIndicators() {
+    const label = document.getElementById('sms-ai-draft-label');
+    if (label) label.style.display = 'none';
+    const banner = document.getElementById('sms-draft-flag-banner');
+    if (banner) banner.style.display = 'none';
+    const warning = document.getElementById('sms-opted-out-warning');
+    if (warning) warning.style.display = 'none';
+    lastAiDraft = '';
+  }
+
+  function showSmsDraftFlag(topics) {
+    const banner = document.getElementById('sms-draft-flag-banner');
+    if (!banner) return;
+    const list = (topics || []).filter(t => SMS_DRAFT_FLAG_LABELS[t]);
+    if (!list.length) {
+      banner.style.display = 'none';
+      return;
+    }
+    banner.textContent = 'Flagged for agent review — check before sending: ' + list.map(t => SMS_DRAFT_FLAG_LABELS[t]).join(', ') + '.';
+    banner.style.display = 'block';
+  }
+
+  async function draftSmsReply() {
+    const leadId = selectedSmsLeadQuery();
+    if (!leadId) return;
+    const btn = document.getElementById('sms-draft-reply-btn');
+    const spinner = document.getElementById('sms-draft-reply-spinner');
+    const label = document.getElementById('sms-draft-reply-label');
+    const errEl = document.getElementById('sms-error');
+    const bodyEl = document.getElementById('sms-message-body');
+    if (!btn || !bodyEl) return;
+    // Confirm before overwriting an edited draft — the agent's edits are
+    // their work. Silent replace only when the composer is empty or still
+    // holds the last generated draft verbatim.
+    if (bodyEl.value && bodyEl.value !== lastAiDraft) {
+      const ok = confirm('This will replace your edited draft with a fresh one. Continue?');
+      if (!ok) return;
+    }
+    if (errEl) errEl.style.display = 'none';
+    btn.disabled = true;
+    if (spinner) spinner.style.display = 'block';
+    if (label) label.textContent = 'Drafting…';
+    try {
+      const result = await fetchJson('/sms/draft-reply', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({lead_id: Number(leadId)}),
+      });
+      if (!result) return;
+      // Fill the compose lead select so Send goes to the right lead.
+      const composeSelect = document.getElementById('sms-compose-lead-select');
+      if (composeSelect) {
+        composeSelect.value = String(leadId);
+        composeSelect.dispatchEvent(new Event('change'));
+      }
+      bodyEl.value = result.draft_reply || '';
+      updateSmsCharCount();
+      lastAiDraft = bodyEl.value;
+      const draftLabel = document.getElementById('sms-ai-draft-label');
+      if (draftLabel) draftLabel.style.display = 'inline';
+      showSmsDraftFlag(result.escalation_topics || []);
+      const warning = document.getElementById('sms-opted-out-warning');
+      if (warning) warning.style.display = result.opted_out ? 'block' : 'none';
+      const composer = document.getElementById('sms-form');
+      if (composer) composer.scrollIntoView({behavior: 'smooth', block: 'start'});
+    } catch (err) {
+      if (errEl) {
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+      }
+    }
+    btn.disabled = false;
+    if (spinner) spinner.style.display = 'none';
+    if (label) label.textContent = 'Draft reply with Claude';
+  }
+
   let smsRecentLoadGen = 0;
 
   function selectedSmsLeadQuery() {
@@ -979,6 +1068,16 @@
     });
   }
 
+  function syncSmsDraftReplyBtn(messages) {
+    const btn = document.getElementById('sms-draft-reply-btn');
+    if (!btn) return;
+    const list = Array.isArray(messages) ? messages : [];
+    const latest = list.length ? list[list.length - 1] : null;
+    // Shown only when the open thread's latest message is inbound
+    // (criterion 1: lead conversations with an incoming SMS).
+    btn.style.display = latest && (latest.direction || '').toLowerCase() === 'inbound' ? 'block' : 'none';
+  }
+
   async function openSmsLead(leadId) {
     const select = document.getElementById('sms-lead-select');
     const thread = document.getElementById('sms-thread');
@@ -987,12 +1086,14 @@
     if (select && selectedSmsLeadId) select.value = selectedSmsLeadId;
     const recentPromise = loadSmsMessages();
     if (!thread || !placeholder) {
+      syncSmsDraftReplyBtn(null);
       await recentPromise;
       return;
     }
     try {
       const data = await fetchJson(`/sms/leads/${leadId}/messages`, {cache: 'no-store'});
       if (!data) {
+        syncSmsDraftReplyBtn(null);
         await recentPromise;
         return;
       }
@@ -1004,6 +1105,7 @@
         thread.style.display = 'none';
         placeholder.style.display = 'flex';
         placeholder.innerHTML = '<p>No messages for this lead yet.</p>';
+        syncSmsDraftReplyBtn(null);
         await recentPromise;
         return;
       }
@@ -1017,10 +1119,12 @@
       }).join('');
       placeholder.style.display = 'none';
       thread.style.display = 'flex';
+      syncSmsDraftReplyBtn(messages);
     } catch (err) {
       thread.style.display = 'none';
       placeholder.style.display = 'flex';
       placeholder.innerHTML = `<p>${err.message}</p>`;
+      syncSmsDraftReplyBtn(null);
     }
     await recentPromise;
   }
@@ -1644,7 +1748,11 @@
 
   const smsBody = document.getElementById('sms-message-body');
   if (smsBody) {
-    smsBody.addEventListener('input', updateSmsCharCount);
+    smsBody.addEventListener('input', () => {
+      updateSmsCharCount();
+      // Clearing the composer clears the AI-draft state with it.
+      if (!smsBody.value) hideSmsDraftIndicators();
+    });
     updateSmsCharCount();
   }
 
@@ -1676,6 +1784,9 @@
     }
     btn.disabled = false; spinner.style.display = 'none'; label.textContent = 'Generate SMS';
   });
+
+  const smsDraftReplyBtn = document.getElementById('sms-draft-reply-btn');
+  if (smsDraftReplyBtn) smsDraftReplyBtn.addEventListener('click', draftSmsReply);
 
   const smsCompliance = document.getElementById('sms-compliance-confirmed');
   const smsSendBtn = document.getElementById('sms-send-btn');
@@ -1752,6 +1863,7 @@
         }
         e.target.reset();
         updateSmsCharCount();
+        hideSmsDraftIndicators();
       }
       await loadSmsData();
     } catch (err) {
