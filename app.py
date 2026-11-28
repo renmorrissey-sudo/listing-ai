@@ -1459,6 +1459,7 @@ def sms_messages():
     status["provider"] = status.get("provider") or status["sms_provider"]
     from sms_authorization import (
         TOLL_FREE_VERIFICATION_UI_MSG,
+        _resolved_transport_is_mock,
         get_telnyx_toll_free_verification_status,
         is_sms_sending_enabled,
         is_telnyx_toll_free_verified,
@@ -1466,14 +1467,27 @@ def sms_messages():
 
     sending_enabled = bool(status.get("sms_sending_enabled", is_sms_sending_enabled()))
     status["sms_sending_enabled"] = sending_enabled
-    verification_status = status.get("toll_free_verification_status")
-    if verification_status is None and (config.SMS_PROVIDER or "").lower() == "telnyx":
-        verification_status = get_telnyx_toll_free_verification_status() or "unknown"
-        status["toll_free_verification_status"] = verification_status
-    verification_blocked = (
-        (config.SMS_PROVIDER or "").lower() == "telnyx"
-        and not is_telnyx_toll_free_verified()
-    )
+    if _resolved_transport_is_mock():
+        # Mock transport: no real Telnyx send happens, so toll-free
+        # verification is vacuous — the same waiver pattern as
+        # check_telnyx_toll_free_send_allowed and is_sms_sending_enabled.
+        # The composer JS needs BOTH parts to enable Send: blocked False
+        # AND a 'verified' signal (templates/index.html, loadSmsMessages).
+        # On production the resolved transport is real Telnyx, so this
+        # branch cannot fire there.
+        verification_status = "verified"
+        status["toll_free_verification_status"] = "verified"
+        status["toll_free_verified"] = True
+        verification_blocked = False
+    else:
+        verification_status = status.get("toll_free_verification_status")
+        if verification_status is None and (config.SMS_PROVIDER or "").lower() == "telnyx":
+            verification_status = get_telnyx_toll_free_verification_status() or "unknown"
+            status["toll_free_verification_status"] = verification_status
+        verification_blocked = (
+            (config.SMS_PROVIDER or "").lower() == "telnyx"
+            and not is_telnyx_toll_free_verified()
+        )
     return jsonify({
         "send_configured": bool(status.get("send_configured", provider.is_configured())),
         "sms_sending_enabled": sending_enabled,
